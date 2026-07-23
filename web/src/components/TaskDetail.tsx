@@ -177,7 +177,11 @@ function ActorAvatar({
   return (
     <div className={`comment-avatar actor-avatar-${type}`} aria-hidden="true">
       {type === "agent" ? (
-        <img className="actor-avatar-image" src="/codex-app-icon.png" alt="" />
+        <img
+          className="actor-avatar-image actor-avatar-agent-image"
+          src="/codex-agent-logo.png"
+          alt=""
+        />
       ) : avatarUrl ? (
         <img className="actor-avatar-image" src={avatarUrl} alt="" referrerPolicy="no-referrer" />
       ) : name.slice(0, 1)}

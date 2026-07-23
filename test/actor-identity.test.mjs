@@ -27,7 +27,8 @@ test("issue activity renders distinct avatars, IDs, and styles for users and age
   assert.match(detailSource, /function ActorAvatar/);
   assert.match(detailSource, /actor-avatar-\$\{type\}/);
   assert.match(detailSource, /type === "agent"/);
-  assert.match(detailSource, /src="\/codex-app-icon\.png"/);
+  assert.match(detailSource, /className="actor-avatar-image actor-avatar-agent-image"/);
+  assert.match(detailSource, /src="\/codex-agent-logo\.png"/);
   assert.match(detailSource, /avatarUrl/);
   assert.match(detailSource, /currentTask\.creatorType/);
   assert.match(detailSource, /currentTask\.creatorId/);
@@ -41,8 +42,19 @@ test("issue activity renders distinct avatars, IDs, and styles for users and age
   assert.match(styles, /\.actor-avatar-agent/);
   assert.match(styles, /\.actor-avatar-user/);
   assert.match(styles, /\.actor-avatar-image/);
+  assert.match(
+    styles,
+    /\.actor-avatar-agent\s*\{[^}]*overflow:\s*visible;[^}]*border:\s*0;[^}]*border-radius:\s*0;[^}]*background:\s*transparent;/s,
+  );
+  assert.match(styles, /\.actor-avatar-agent-image\s*\{[^}]*object-fit:\s*contain;/s);
   assert.doesNotMatch(styles, /\.comment-entry\.is-agent \.comment-card/);
   assert.match(styles, /\.actor-id/);
+});
+
+test("agent avatar asset is a transparent PNG logo", async () => {
+  const logo = await readFile(new URL("../web/public/codex-agent-logo.png", import.meta.url));
+  assert.deepEqual([...logo.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(logo[25], 6);
 });
 
 test("Codex host identity is forwarded to user-authored taskboard mutations", () => {

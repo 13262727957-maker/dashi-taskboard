@@ -2763,7 +2763,9 @@ kbd {
 }
 
 .actor-avatar-agent {
-  border-radius: 7px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
   background: transparent;
 }
 
@@ -2772,6 +2774,11 @@ kbd {
   height: 100%;
   border-radius: inherit;
   object-fit: cover;
+}
+
+.actor-avatar-agent-image {
+  border-radius: 0;
+  object-fit: contain;
 }
 
 .comment-card {
