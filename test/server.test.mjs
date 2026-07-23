@@ -1,0 +1,822 @@
+import assert from "node:assert/strict";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, test } from "node:test";
+
+import { createTaskboardServer } from "../server/index.mjs";
+
+const runningApps = [];
+
+afterEach(async () => {
+  while (runningApps.length > 0) {
+    const { app, directory } = runningApps.pop();
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function startServer(configure) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "codex-taskboard-test-"));
+  const options = configure ? await configure(directory) : {};
+  const app = createTaskboardServer({ dataDirectory: directory, ...options });
+  const address = await app.listen({ port: 0 });
+  runningApps.push({ app, directory });
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function request(baseUrl, pathname, options = {}) {
+  const headers = new Headers(options.headers);
+  if (options.body !== undefined && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  const response = await fetch(`${baseUrl}${pathname}`, {
+    ...options,
+    headers,
+    body: options.body === undefined || typeof options.body === "string"
+      ? options.body
+      : JSON.stringify(options.body),
+  });
+  const text = await response.text();
+  return {
+    response,
+    body: text ? JSON.parse(text) : undefined,
+  };
+}
+
+async function requestWithHost(baseUrl, host) {
+  const target = new URL("/health", baseUrl);
+  return new Promise((resolve, reject) => {
+    const outgoing = httpRequest(target, { headers: { host } }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve({
+        status: response.statusCode,
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+      }));
+    });
+    outgoing.on("error", reject);
+    outgoing.end();
+  });
+}
+
+test("health and the default local project are available", async () => {
+  let skillPath;
+  const baseUrl = await startServer(async (directory) => {
+    skillPath = path.join(directory, "skills", "manage-taskboard", "SKILL.md");
+    return { skillPath };
+  });
+
+  const health = await request(baseUrl, "/health");
+  assert.equal(health.response.status, 200);
+  assert.deepEqual(health.body, { status: "ok" });
+
+  const metadata = await request(baseUrl, "/api/meta");
+  assert.equal(metadata.response.status, 200);
+  assert.deepEqual(metadata.body, { manageTaskboardSkillPath: skillPath });
+
+  const result = await request(baseUrl, "/api/projects");
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.projects.length, 1);
+  assert.equal(result.body.projects[0].id, "local");
+  assert.equal(result.body.projects[0].name, "Local");
+  assert.equal(result.body.projects[0].workspacePath, null);
+  assert.equal(result.body.projects[0].issueCount, 0);
+});
+
+test("existing task and comment thread attribution remains content-specific", async () => {
+  const baseUrl = await startServer(async (directory) => {
+    const databasePath = path.join(directory, "taskboard.sqlite");
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        workspace_path TEXT,
+        next_task_number INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL CHECK (status IN ('backlog', 'todo', 'in_progress', 'done')),
+        priority TEXT NOT NULL,
+        labels TEXT NOT NULL DEFAULT '[]',
+        sort_order REAL NOT NULL,
+        thread_id TEXT,
+        git_branch TEXT,
+        worktree_path TEXT,
+        worktree_branch TEXT,
+        due_date TEXT,
+        recurrence_interval INTEGER,
+        recurrence_unit TEXT,
+        archived_at TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE comments (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        thread_id TEXT,
+        author_id TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE attachments (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        filename TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO projects VALUES ('local', 'Local', NULL, 2, '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z');
+      INSERT INTO tasks VALUES (
+        'legacy-task', 'LOCAL-1', 'local', 'Legacy task', '', 'todo', 'none', '[]', 1000,
+        'legacy-thread', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1,
+        '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z'
+      );
+      INSERT INTO comments VALUES (
+        'legacy-comment', 'legacy-task', 'Legacy comment', 'legacy-comment-thread', 'local', '本地用户', 1,
+        '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z'
+      );
+      INSERT INTO attachments VALUES (
+        'legacy-attachment', 'legacy-task', 'legacy.txt', 'text/plain', 0,
+        '2026-07-20T00:00:00.000Z'
+      );
+    `);
+    database.close();
+    return { databasePath };
+  });
+
+  const result = await request(baseUrl, "/api/tasks/legacy-task");
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.task.threadId, "legacy-thread");
+  assert.equal(Object.hasOwn(result.body.task, "linkedThreadId"), false);
+  const columns = runningApps.at(-1).app.database.database.prepare("PRAGMA table_info(tasks)").all();
+  assert.equal(columns.some((column) => column.name === "thread_id"), true);
+  assert.equal(columns.some((column) => column.name === "linked_thread_id"), false);
+  const taskThreads = runningApps.at(-1).app.database.database.prepare(`
+    SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'task_threads'
+  `).get();
+  assert.equal(taskThreads, undefined);
+  const comments = await request(baseUrl, "/api/tasks/legacy-task/comments");
+  assert.equal(comments.body.comments[0].threadId, "legacy-comment-thread");
+  assert.deepEqual(comments.body.comments[0].attachments, []);
+  const attachments = await request(baseUrl, "/api/tasks/legacy-task/attachments");
+  assert.equal(attachments.body.attachments[0].commentId, null);
+
+  let version = result.body.task.version;
+  for (const status of ["in_review", "blocked", "canceled"]) {
+    const moveResult = await request(baseUrl, "/api/tasks/legacy-task/move", {
+      method: "POST",
+      body: { version, status },
+    });
+    assert.equal(moveResult.response.status, 200);
+    assert.equal(moveResult.body.task.status, status);
+    version = moveResult.body.task.version;
+  }
+  const tasksSql = runningApps.at(-1).app.database.database.prepare(`
+    SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tasks'
+  `).get().sql;
+  assert.match(tasksSql, /'in_review'/);
+  assert.match(tasksSql, /'blocked'/);
+  assert.match(tasksSql, /'canceled'/);
+  const commentForeignKeys = runningApps.at(-1).app.database.database
+    .prepare("PRAGMA foreign_key_list(comments)")
+    .all();
+  assert.equal(commentForeignKeys.some((foreignKey) => foreignKey.table === "tasks"), true);
+});
+
+test("task thread migration excludes comment-only aggregate entries", async () => {
+  const baseUrl = await startServer(async (directory) => {
+    const databasePath = path.join(directory, "taskboard.sqlite");
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        workspace_path TEXT,
+        next_task_number INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        labels TEXT NOT NULL DEFAULT '[]',
+        sort_order REAL NOT NULL,
+        git_branch TEXT,
+        worktree_path TEXT,
+        worktree_branch TEXT,
+        due_date TEXT,
+        recurrence_interval INTEGER,
+        recurrence_unit TEXT,
+        archived_at TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE task_threads (
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        thread_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, thread_id)
+      );
+      CREATE TABLE comments (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        thread_id TEXT,
+        author_id TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO projects VALUES ('local', 'Local', NULL, 2, '2026-07-20T00:00:00.000Z', '2026-07-20T00:00:00.000Z');
+      INSERT INTO tasks VALUES (
+        'aggregate-task', 'LOCAL-1', 'local', 'Aggregate task', '', 'todo', 'none', '[]', 1000,
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1,
+        '2026-07-20T00:00:00.000Z', '2026-07-20T03:00:00.000Z'
+      );
+      INSERT INTO task_threads VALUES ('aggregate-task', 'thread-subject', '2026-07-20T01:00:00.000Z');
+      INSERT INTO task_threads VALUES ('aggregate-task', 'thread-comment-only', '2026-07-20T02:00:00.000Z');
+      INSERT INTO comments VALUES (
+        'aggregate-comment', 'aggregate-task', 'Comment', 'thread-comment-only', 'local', '本地用户', 1,
+        '2026-07-20T02:00:00.000Z', '2026-07-20T02:00:00.000Z'
+      );
+    `);
+    database.close();
+    return { databasePath };
+  });
+
+  const task = await request(baseUrl, "/api/tasks/aggregate-task");
+  assert.equal(task.body.task.threadId, "thread-subject");
+  const taskThreads = runningApps.at(-1).app.database.database.prepare(`
+    SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'task_threads'
+  `).get();
+  assert.equal(taskThreads, undefined);
+  const comments = await request(baseUrl, "/api/tasks/aggregate-task/comments");
+  assert.equal(comments.body.comments[0].threadId, "thread-comment-only");
+});
+
+test("development context scan resolves the current Codex conversation workspace", async () => {
+  let expectedWorkspace;
+  const baseUrl = await startServer(async (directory) => {
+    expectedWorkspace = directory;
+    const processesPath = path.join(directory, "chat_processes.json");
+    await writeFile(processesPath, JSON.stringify({
+      recent: [{
+        conversationId: "019f7f96-287b-7da0-bc7f-ffe03af85cc8",
+        cwd: directory,
+        updatedAtMs: 20,
+      }],
+    }));
+    return {
+      codexStatePath: path.join(directory, "missing-state.json"),
+      codexProcessesPath: processesPath,
+    };
+  });
+  const result = await request(
+    baseUrl,
+    "/api/projects/local/development-contexts?codexThreadId=019f7f96-287b-7da0-bc7f-ffe03af85cc8",
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.workspacePath, expectedWorkspace);
+  assert.deepEqual(result.body.contexts, []);
+
+  const deviceWorkspace = path.join(expectedWorkspace, "another-device-workspace");
+  const deviceResult = await request(
+    baseUrl,
+    `/api/projects/local/development-contexts?workspacePath=${encodeURIComponent(deviceWorkspace)}`,
+  );
+  assert.equal(deviceResult.response.status, 200);
+  assert.equal(deviceResult.body.workspacePath, deviceWorkspace);
+});
+
+test("device workspaces come from this machine's Codex project roots", async () => {
+  const baseUrl = await startServer(async (directory) => {
+    const codexStatePath = path.join(directory, "codex-state.json");
+    await writeFile(codexStatePath, JSON.stringify({
+      "local-projects": {
+        "local-project-a": { rootPaths: ["/Users/alice/project-a"] },
+        "local-project-b": { rootPaths: ["/Users/alice/project-b"] },
+      },
+    }));
+    return { codexStatePath };
+  });
+  const result = await request(baseUrl, "/api/device-workspaces");
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body.workspaces, {
+    "local-project-a": "/Users/alice/project-a",
+    "local-project-b": "/Users/alice/project-b",
+  });
+});
+
+test("rejects non-loopback Host and Origin headers", async () => {
+  const baseUrl = await startServer();
+
+  const codexOriginResult = await request(baseUrl, "/health", {
+    headers: { origin: "app://-" },
+  });
+  assert.equal(codexOriginResult.response.status, 200);
+
+  const hostResult = await requestWithHost(baseUrl, "taskboard.example.com");
+  assert.equal(hostResult.status, 403);
+  assert.equal(hostResult.body.error.code, "INVALID_HOST");
+
+  const originResult = await request(baseUrl, "/health", {
+    headers: { origin: "https://evil.example" },
+  });
+  assert.equal(originResult.response.status, 403);
+  assert.equal(originResult.body.error.code, "INVALID_ORIGIN");
+});
+
+test("project and task CRUD flow", async () => {
+  const baseUrl = await startServer();
+
+  const projectResult = await request(baseUrl, "/api/projects", {
+    method: "POST",
+    body: { id: "website", name: "Website", workspacePath: "/work/website" },
+  });
+  assert.equal(projectResult.response.status, 201);
+  assert.equal(projectResult.body.project.id, "website");
+  assert.equal(projectResult.body.project.workspacePath, "/work/website");
+
+  const createResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: {
+      projectId: "website",
+      title: "Build task board",
+      description: "Create the first local board",
+      status: "todo",
+      priority: "high",
+      labels: ["frontend", "mvp"],
+      threadId: "thread-123",
+      developmentContext: {
+        type: "worktree",
+        path: "/work/website/.worktrees/taskboard",
+        branch: "worktree/taskboard",
+      },
+      dueDate: "2026-07-24",
+      recurrence: { interval: 2, unit: "week" },
+    },
+  });
+  assert.equal(createResult.response.status, 201);
+  const created = createResult.body.task;
+  assert.equal(created.identifier, "WEBSITE-1");
+  assert.equal(created.version, 1);
+  assert.equal(created.sortOrder, 1000);
+  assert.equal(created.archivedAt, null);
+  assert.deepEqual(created.labels, ["frontend", "mvp"]);
+  assert.equal(created.threadId, "thread-123");
+  assert.deepEqual(created.developmentContext, {
+    type: "worktree",
+    path: "/work/website/.worktrees/taskboard",
+    branch: "worktree/taskboard",
+  });
+  assert.equal(created.dueDate, "2026-07-24");
+  assert.deepEqual(created.recurrence, { interval: 2, unit: "week" });
+
+  const projectsAfterCreate = await request(baseUrl, "/api/projects");
+  const websiteProject = projectsAfterCreate.body.projects.find((project) => project.id === "website");
+  assert.equal(websiteProject.issueCount, 1);
+
+  const getResult = await request(baseUrl, `/api/tasks/${created.id}`);
+  assert.equal(getResult.response.status, 200);
+  assert.deepEqual(getResult.body.task, created);
+  const getByIdentifier = await request(baseUrl, `/api/tasks/${created.identifier}`);
+  assert.equal(getByIdentifier.response.status, 200);
+  assert.equal(getByIdentifier.body.task.id, created.id);
+
+  const listResult = await request(baseUrl, "/api/tasks?projectId=website&status=todo");
+  assert.equal(listResult.response.status, 200);
+  assert.deepEqual(listResult.body.tasks.map((task) => task.id), [created.id]);
+
+  const patchResult = await request(baseUrl, `/api/tasks/${created.identifier}`, {
+    method: "PATCH",
+    body: {
+      version: created.version,
+      title: "Build polished task board",
+      priority: "urgent",
+      threadId: "thread-456",
+      developmentContext: { type: "branch", branch: "feature/polish" },
+    },
+  });
+  assert.equal(patchResult.response.status, 200);
+  const updated = patchResult.body.task;
+  assert.equal(updated.title, "Build polished task board");
+  assert.equal(updated.priority, "urgent");
+  assert.equal(updated.threadId, "thread-456");
+  assert.deepEqual(updated.developmentContext, { type: "branch", branch: "feature/polish" });
+  assert.equal(updated.version, 2);
+
+  const archiveResult = await request(baseUrl, `/api/tasks/${created.id}/archive`, {
+    method: "POST",
+    body: { version: updated.version, threadId: "thread-archive" },
+  });
+  assert.equal(archiveResult.response.status, 200);
+  assert.equal(archiveResult.body.task.version, 3);
+  assert.equal(archiveResult.body.task.threadId, "thread-archive");
+  assert.match(archiveResult.body.task.archivedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+  const activeList = await request(baseUrl, "/api/tasks?projectId=website");
+  assert.deepEqual(activeList.body.tasks, []);
+  const archivedList = await request(baseUrl, "/api/tasks?projectId=website&archived=true");
+  assert.deepEqual(archivedList.body.tasks.map((task) => task.id), [created.id]);
+
+  const projectsAfterArchive = await request(baseUrl, "/api/projects");
+  const archivedWebsiteProject = projectsAfterArchive.body.projects.find((project) => project.id === "website");
+  assert.equal(archivedWebsiteProject.issueCount, 1);
+
+  const restoreResult = await request(baseUrl, `/api/tasks/${created.id}/restore`, {
+    method: "POST",
+    body: { version: archiveResult.body.task.version, threadId: "thread-restore" },
+  });
+  assert.equal(restoreResult.response.status, 200);
+  assert.equal(restoreResult.body.task.archivedAt, null);
+  assert.equal(restoreResult.body.task.version, 4);
+  assert.equal(restoreResult.body.task.threadId, "thread-restore");
+
+  const activeAfterRestore = await request(baseUrl, "/api/tasks?projectId=website");
+  assert.deepEqual(activeAfterRestore.body.tasks.map((task) => task.id), [created.id]);
+});
+
+test("moving a task updates its status and sort order", async () => {
+  const baseUrl = await startServer();
+  const createResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Move me" },
+  });
+  const task = createResult.body.task;
+
+  const moveResult = await request(baseUrl, `/api/tasks/${task.id}/move`, {
+    method: "POST",
+    body: { version: task.version, status: "in_progress", sortOrder: 2500.5, threadId: "thread-move" },
+  });
+  assert.equal(moveResult.response.status, 200);
+  assert.equal(moveResult.body.task.status, "in_progress");
+  assert.equal(moveResult.body.task.sortOrder, 2500.5);
+  assert.equal(moveResult.body.task.threadId, "thread-move");
+  assert.equal(moveResult.body.task.version, 2);
+});
+
+test("all task statuses are accepted, filtered, and listed in workflow order", async () => {
+  const baseUrl = await startServer();
+  const statuses = ["canceled", "done", "blocked", "in_review", "in_progress", "todo", "backlog"];
+
+  for (const status of statuses) {
+    const createResult = await request(baseUrl, "/api/tasks", {
+      method: "POST",
+      body: { title: status, status },
+    });
+    assert.equal(createResult.response.status, 201);
+    assert.equal(createResult.body.task.status, status);
+  }
+
+  const listResult = await request(baseUrl, "/api/tasks");
+  assert.deepEqual(
+    listResult.body.tasks.map((task) => task.status),
+    ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "canceled"],
+  );
+
+  for (const status of ["in_review", "blocked", "canceled"]) {
+    const filteredResult = await request(baseUrl, `/api/tasks?status=${status}`);
+    assert.equal(filteredResult.response.status, 200);
+    assert.deepEqual(filteredResult.body.tasks.map((task) => task.status), [status]);
+  }
+});
+
+test("task and comment mutations keep content-specific conversation attribution", async () => {
+  const baseUrl = await startServer();
+  const createResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Keep attribution", threadId: "thread-original" },
+  });
+  const task = createResult.body.task;
+  const updateResult = await request(baseUrl, `/api/tasks/${task.id}`, {
+    method: "PATCH",
+    body: { version: task.version, title: "Still attributed" },
+  });
+  assert.equal(updateResult.body.task.threadId, "thread-original");
+
+  const repeatedUpdate = await request(baseUrl, `/api/tasks/${task.id}`, {
+    method: "PATCH",
+    body: { version: updateResult.body.task.version, title: "Still attributed again", threadId: "thread-original" },
+  });
+  assert.equal(repeatedUpdate.body.task.threadId, "thread-original");
+
+  const commentCreate = await request(baseUrl, `/api/tasks/${task.id}/comments`, {
+    method: "POST",
+    body: { body: "Attributed comment", threadId: "thread-comment" },
+  });
+  const comment = commentCreate.body.comment;
+  const commentUpdate = await request(baseUrl, `/api/comments/${comment.id}`, {
+    method: "PATCH",
+    body: { version: comment.version, body: "Edited from the UI" },
+  });
+  assert.equal(commentUpdate.body.comment.threadId, "thread-comment");
+  const taskAfterComment = await request(baseUrl, `/api/tasks/${task.id}`);
+  assert.equal(taskAfterComment.body.task.threadId, "thread-original");
+});
+
+test("stale updates receive a version conflict", async () => {
+  const baseUrl = await startServer();
+  const createResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Concurrent edit" },
+  });
+  const task = createResult.body.task;
+
+  const firstUpdate = await request(baseUrl, `/api/tasks/${task.id}`, {
+    method: "PATCH",
+    body: { version: task.version, title: "First editor" },
+  });
+  assert.equal(firstUpdate.response.status, 200);
+
+  const staleUpdate = await request(baseUrl, `/api/tasks/${task.id}/move`, {
+    method: "POST",
+    body: { version: task.version, status: "done", sortOrder: 1 },
+  });
+  assert.equal(staleUpdate.response.status, 409);
+  assert.equal(staleUpdate.body.error.code, "VERSION_CONFLICT");
+  assert.deepEqual(staleUpdate.body.error.details, {
+    expectedVersion: 1,
+    actualVersion: 2,
+  });
+});
+
+test("issue comments can be created, edited, listed, and deleted", async () => {
+  const baseUrl = await startServer();
+  const createTaskResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Discuss me" },
+  });
+  const task = createTaskResult.body.task;
+
+  const emptyList = await request(baseUrl, `/api/tasks/${task.id}/comments`);
+  assert.equal(emptyList.response.status, 200);
+  assert.deepEqual(emptyList.body.comments, []);
+
+  const createResult = await request(baseUrl, `/api/tasks/${task.id}/comments`, {
+    method: "POST",
+    body: { body: "First comment", threadId: "thread-comment-create" },
+  });
+  assert.equal(createResult.response.status, 201);
+  const comment = createResult.body.comment;
+  assert.equal(comment.taskId, task.id);
+  assert.equal(comment.body, "First comment");
+  assert.equal(comment.threadId, "thread-comment-create");
+  assert.deepEqual(comment.attachments, []);
+  assert.equal(comment.authorId, "local");
+  assert.equal(comment.authorName, "本地用户");
+  assert.equal(comment.version, 1);
+
+  const listResult = await request(baseUrl, `/api/tasks/${task.id}/comments`);
+  assert.deepEqual(listResult.body.comments.map((item) => item.id), [comment.id]);
+
+  const updateResult = await request(baseUrl, `/api/comments/${comment.id}`, {
+    method: "PATCH",
+    body: { version: comment.version, body: "Edited comment", threadId: "thread-comment-update" },
+  });
+  assert.equal(updateResult.response.status, 200);
+  const updated = updateResult.body.comment;
+  assert.equal(updated.body, "Edited comment");
+  assert.equal(updated.threadId, "thread-comment-update");
+  assert.equal(updated.version, 2);
+
+  const taskAfterUpdate = await request(baseUrl, `/api/tasks/${task.id}`);
+  assert.equal(taskAfterUpdate.body.task.threadId, null);
+
+  const staleUpdate = await request(baseUrl, `/api/comments/${comment.id}`, {
+    method: "PATCH",
+    body: { version: comment.version, body: "Stale edit" },
+  });
+  assert.equal(staleUpdate.response.status, 409);
+  assert.equal(staleUpdate.body.error.code, "VERSION_CONFLICT");
+
+  const deleteResult = await request(baseUrl, `/api/comments/${comment.id}`, {
+    method: "DELETE",
+    body: { version: updated.version, threadId: "thread-comment-delete" },
+  });
+  assert.equal(deleteResult.response.status, 204);
+
+  const finalList = await request(baseUrl, `/api/tasks/${task.id}/comments`);
+  assert.deepEqual(finalList.body.comments, []);
+  const taskAfterDelete = await request(baseUrl, `/api/tasks/${task.id}`);
+  assert.equal(taskAfterDelete.body.task.threadId, null);
+});
+
+test("issue attachments can be uploaded, listed, opened, downloaded, and deleted", async () => {
+  const baseUrl = await startServer();
+  const createTaskResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Attach files" },
+  });
+  const task = createTaskResult.body.task;
+
+  const emptyList = await request(baseUrl, `/api/tasks/${task.id}/attachments`);
+  assert.equal(emptyList.response.status, 200);
+  assert.deepEqual(emptyList.body.attachments, []);
+
+  const contents = "attachment contents\n";
+  const uploadResult = await request(baseUrl, `/api/tasks/${task.id}/attachments`, {
+    method: "POST",
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "x-taskboard-filename": encodeURIComponent("设计说明.txt"),
+    },
+    body: contents,
+  });
+  assert.equal(uploadResult.response.status, 201);
+  const attachment = uploadResult.body.attachment;
+  assert.equal(attachment.taskId, task.id);
+  assert.equal(attachment.commentId, null);
+  assert.equal(attachment.filename, "设计说明.txt");
+  assert.equal(attachment.contentType, "text/plain");
+  assert.equal(attachment.size, Buffer.byteLength(contents));
+  assert.match(attachment.createdAt, /^\d{4}-\d{2}-\d{2}T/);
+
+  const listResult = await request(baseUrl, `/api/tasks/${task.id}/attachments`);
+  assert.deepEqual(listResult.body.attachments, [attachment]);
+
+  const contentResponse = await fetch(`${baseUrl}/api/attachments/${attachment.id}/content`);
+  assert.equal(contentResponse.status, 200);
+  assert.equal(contentResponse.headers.get("content-type"), "text/plain");
+  assert.match(contentResponse.headers.get("content-disposition"), /^inline; filename\*=UTF-8''/);
+  assert.equal(await contentResponse.text(), contents);
+
+  const headResponse = await fetch(`${baseUrl}/api/attachments/${attachment.id}/content`, { method: "HEAD" });
+  assert.equal(headResponse.status, 200);
+  assert.equal(Number(headResponse.headers.get("content-length")), Buffer.byteLength(contents));
+  assert.equal(await headResponse.text(), "");
+
+  const htmlUpload = await request(baseUrl, `/api/tasks/${task.id}/attachments`, {
+    method: "POST",
+    headers: {
+      "content-type": "text/html",
+      "x-taskboard-filename": encodeURIComponent("page.html"),
+    },
+    body: "<script>document.body.textContent = 'unsafe'</script>",
+  });
+  const htmlAttachment = htmlUpload.body.attachment;
+  const htmlContent = await fetch(`${baseUrl}/api/attachments/${htmlAttachment.id}/content`);
+  assert.equal(htmlContent.headers.get("content-type"), "application/octet-stream");
+  assert.match(htmlContent.headers.get("content-disposition"), /^attachment;/);
+  assert.equal(htmlContent.headers.get("content-security-policy"), "sandbox; default-src 'none'");
+  const htmlDelete = await request(baseUrl, `/api/attachments/${htmlAttachment.id}`, { method: "DELETE" });
+  assert.equal(htmlDelete.response.status, 204);
+
+  const deleteResult = await request(baseUrl, `/api/attachments/${attachment.id}`, { method: "DELETE" });
+  assert.equal(deleteResult.response.status, 204);
+  const finalList = await request(baseUrl, `/api/tasks/${task.id}/attachments`);
+  assert.deepEqual(finalList.body.attachments, []);
+  const deletedContent = await request(baseUrl, `/api/attachments/${attachment.id}/content`);
+  assert.equal(deletedContent.response.status, 404);
+  assert.equal(deletedContent.body.error.code, "ATTACHMENT_NOT_FOUND");
+});
+
+test("comments support attachments and deleting a comment removes its files", async () => {
+  const baseUrl = await startServer();
+  const createTaskResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Comment files" },
+  });
+  const task = createTaskResult.body.task;
+  const createCommentResult = await request(baseUrl, `/api/tasks/${task.id}/comments`, {
+    method: "POST",
+    body: { body: "", threadId: "thread-attachment" },
+  });
+  assert.equal(createCommentResult.response.status, 201);
+  const comment = createCommentResult.body.comment;
+  assert.equal(comment.body, "");
+
+  const contents = "comment attachment\n";
+  const uploadResult = await request(baseUrl, `/api/comments/${comment.id}/attachments`, {
+    method: "POST",
+    headers: {
+      "content-type": "text/plain",
+      "x-taskboard-filename": encodeURIComponent("comment.txt"),
+    },
+    body: contents,
+  });
+  assert.equal(uploadResult.response.status, 201);
+  const attachment = uploadResult.body.attachment;
+  assert.equal(attachment.taskId, task.id);
+  assert.equal(attachment.commentId, comment.id);
+
+  const attachmentList = await request(baseUrl, `/api/comments/${comment.id}/attachments`);
+  assert.deepEqual(attachmentList.body.attachments, [attachment]);
+  const commentList = await request(baseUrl, `/api/tasks/${task.id}/comments`);
+  assert.deepEqual(commentList.body.comments[0].attachments, [attachment]);
+  const taskAttachmentList = await request(baseUrl, `/api/tasks/${task.id}/attachments`);
+  assert.deepEqual(taskAttachmentList.body.attachments, []);
+
+  const storagePath = path.join(runningApps.at(-1).app.options.attachmentsDirectory, attachment.id);
+  await access(storagePath);
+  const deleteResult = await request(baseUrl, `/api/comments/${comment.id}`, {
+    method: "DELETE",
+    body: { version: comment.version, threadId: "thread-delete-comment" },
+  });
+  assert.equal(deleteResult.response.status, 204);
+  await assert.rejects(access(storagePath), { code: "ENOENT" });
+  const deletedContent = await request(baseUrl, `/api/attachments/${attachment.id}/content`);
+  assert.equal(deletedContent.response.status, 404);
+  const taskAfterDelete = await request(baseUrl, `/api/tasks/${task.id}`);
+  assert.equal(taskAfterDelete.body.task.threadId, null);
+});
+
+test("attachment uploads reject unsafe filenames", async () => {
+  const baseUrl = await startServer();
+  const createTaskResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Validate attachments" },
+  });
+  const task = createTaskResult.body.task;
+
+  const result = await request(baseUrl, `/api/tasks/${task.id}/attachments`, {
+    method: "POST",
+    headers: {
+      "content-type": "text/plain",
+      "x-taskboard-filename": encodeURIComponent("../outside.txt"),
+    },
+    body: "unsafe",
+  });
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.error.code, "INVALID_FILENAME");
+});
+
+test("request boundaries reject unknown fields and invalid values", async () => {
+  const baseUrl = await startServer();
+
+  const unknown = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Invalid", unexpected: true },
+  });
+  assert.equal(unknown.response.status, 400);
+  assert.equal(unknown.body.error.code, "UNKNOWN_FIELD");
+
+  const invalid = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Invalid", status: "started" },
+  });
+  assert.equal(invalid.response.status, 400);
+  assert.equal(invalid.body.error.code, "INVALID_FIELD");
+  assert.match(invalid.body.error.message, /in_review/);
+  assert.match(invalid.body.error.message, /blocked/);
+  assert.match(invalid.body.error.message, /canceled/);
+
+  const invalidWorktree = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: {
+      title: "Invalid",
+      developmentContext: { type: "worktree", path: "/tmp/bad\0path", branch: null },
+    },
+  });
+  assert.equal(invalidWorktree.response.status, 400);
+  assert.equal(invalidWorktree.body.error.code, "INVALID_FIELD");
+});
+
+test("task changes are broadcast over server-sent events", async () => {
+  const baseUrl = await startServer();
+  const eventResponse = await fetch(`${baseUrl}/api/events`);
+  assert.equal(eventResponse.status, 200);
+  const reader = eventResponse.body.getReader();
+  const decoder = new TextDecoder();
+  await reader.read();
+
+  const createResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Broadcast me" },
+  });
+  assert.equal(createResult.response.status, 201);
+
+  let message = "";
+  while (!message.includes("\n\n")) {
+    const chunk = await reader.read();
+    assert.equal(chunk.done, false);
+    message += decoder.decode(chunk.value, { stream: true });
+  }
+  assert.match(message, /event: task\.created/);
+  const dataLine = message.split("\n").find((line) => line.startsWith("data: "));
+  const event = JSON.parse(dataLine.slice(6));
+  assert.equal(event.type, "task.created");
+  assert.equal(event.task.id, createResult.body.task.id);
+  await reader.cancel();
+});

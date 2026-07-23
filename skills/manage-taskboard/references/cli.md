@@ -1,0 +1,89 @@
+# taskctl CLI
+
+`taskctl` emits JSON. Add `--json` when making the output contract explicit.
+
+## Context and projects
+
+```bash
+taskctl context current [--cwd PATH] [--json]
+taskctl project list [--json]
+taskctl project create --name NAME [--id ID] [--workspace-path PATH] [--json]
+```
+
+Use `--workspace-path` to associate a project with a local repository. `context current` chooses the most specific project whose workspace contains the current directory, then falls back to the `local` project.
+
+Set `CODEX_TASKBOARD_URL` to override the default API origin, `http://127.0.0.1:47823`.
+
+Every issue or comment write must be attributed to a Codex conversation. In Codex, `taskctl` reads the current conversation from `CODEX_THREAD_ID`. Outside Codex, pass `--thread-id ID` explicitly. An explicit option takes precedence over the environment. Read commands do not require a conversation id.
+
+Every successful command writes one JSON object with `schemaVersion` to stdout. The current schema version is `2`. Errors write one JSON object to stderr. Exit codes are `0` for success, `2` for invalid input, `3` when the service is unavailable, `4` for API or response errors, and `5` for conflicts.
+
+## Read issues
+
+```bash
+taskctl issue list [--project PROJECT_ID] [--status STATUS] [--json]
+taskctl issue get ID [--json]
+```
+
+## Create issues
+
+```bash
+taskctl issue create \
+  --project PROJECT_ID \
+  --title TITLE \
+  [--description TEXT | --description-file FILE] \
+  [--status STATUS] \
+  [--priority PRIORITY] \
+  [--labels a,b] \
+  [--thread-id ID] \
+  [--git-branch BRANCH] \
+  [--worktree-path PATH] \
+  [--worktree-branch BRANCH] \
+  [--due-date YYYY-MM-DD] \
+  [--recurrence-interval N --recurrence-unit day|week|month|year] \
+  [--json]
+```
+
+Statuses are `backlog`, `todo`, `in_progress`, `in_review`, `blocked`, `done`, and `canceled`. Priorities are `none`, `urgent`, `high`, `medium`, and `low`.
+
+## Update issues
+
+Read the issue immediately before a write and pass its `version` with `--if-version`.
+
+```bash
+taskctl issue update ID \
+  [--title TITLE] \
+  [--description TEXT | --description-file FILE] \
+  [--status STATUS] \
+  [--priority PRIORITY] \
+  [--labels a,b] \
+  [--thread-id ID] \
+  [--git-branch BRANCH] \
+  [--worktree-path PATH] \
+  [--worktree-branch BRANCH] \
+  [--due-date YYYY-MM-DD] \
+  [--recurrence-interval N --recurrence-unit day|week|month|year] \
+  [--if-version N] \
+  [--json]
+
+taskctl issue move ID --status STATUS [--thread-id ID] [--if-version N] [--json]
+taskctl issue archive ID [--thread-id ID] [--if-version N] [--json]
+taskctl issue restore ID [--thread-id ID] [--if-version N] [--json]
+```
+
+Use `issue move` to set `in_progress` before implementation, `in_review` when work is ready for review, `blocked` when it cannot continue, `canceled` when it will not continue, and `done` only after verifying completion. On a version conflict, fetch the issue again and reconcile before retrying.
+
+Use either `--git-branch` or `--worktree-path`/`--worktree-branch`; an issue has only one development context. Issue JSON stores it as `developmentContext`, either `{ "type": "branch", "branch": "..." }` or `{ "type": "worktree", "path": "...", "branch": "..." }`. Its singular `threadId` is the Codex conversation that most recently created or changed the issue itself. Recurrence requires a due date.
+
+## Issue comments
+
+Use the issue id to read or append comments. Comment updates and deletes require the latest comment `version` returned by `comment list`.
+
+```bash
+taskctl comment list ISSUE_ID [--json]
+taskctl comment add ISSUE_ID --body TEXT [--thread-id ID] [--json]
+taskctl comment update COMMENT_ID --body TEXT --if-version N [--thread-id ID] [--json]
+taskctl comment delete COMMENT_ID --if-version N [--thread-id ID] [--json]
+```
+
+Each comment JSON object independently records the most recent conversation that created or changed that comment as `threadId`. Comment operations never change the parent issue's `threadId`.

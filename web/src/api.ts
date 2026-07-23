@@ -1,0 +1,233 @@
+import type { Attachment, Comment, DevelopmentScan, Project, Task, TaskboardMetadata, TaskDraft, TaskStatus } from "./types";
+
+interface ApiErrorBody {
+  error?: {
+    code?: string;
+    message?: string;
+    details?: unknown;
+  };
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly details?: unknown;
+
+  constructor(status: number, body: ApiErrorBody) {
+    super(body.error?.message ?? `Request failed (${status})`);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = body.error?.code ?? "REQUEST_FAILED";
+    this.details = body.error?.details;
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+
+  let response: Response;
+  try {
+    response = await fetch(path, { ...init, headers });
+  } catch {
+    throw new ApiError(0, {
+      error: {
+        code: "SERVICE_UNAVAILABLE",
+        message: "无法连接本地 Taskboard 服务，请重新通过 Taskboard 启动 Codex。",
+      },
+    });
+  }
+  const body = (await response.json().catch(() => ({}))) as T & ApiErrorBody;
+
+  if (!response.ok) throw new ApiError(response.status, body);
+  return body;
+}
+
+export async function listProjects(signal?: AbortSignal): Promise<Project[]> {
+  const data = await request<{ projects: Project[] }>("/api/projects", { signal });
+  return data.projects;
+}
+
+export async function getTaskboardMetadata(signal?: AbortSignal): Promise<TaskboardMetadata> {
+  return request<TaskboardMetadata>("/api/meta", { signal });
+}
+
+export async function listDeviceWorkspaces(signal?: AbortSignal): Promise<Record<string, string>> {
+  const data = await request<{ workspaces: Record<string, string> }>("/api/device-workspaces", { signal });
+  return data.workspaces;
+}
+
+export async function createProject(input: {
+  id: string;
+  name: string;
+  workspacePath: string | null;
+}): Promise<Project> {
+  const data = await request<{ project: Project }>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return data.project;
+}
+
+export async function listDevelopmentContexts(
+  projectId: string,
+  codexProjectId?: string,
+  codexThreadId?: string,
+  signal?: AbortSignal,
+  workspacePath?: string,
+): Promise<DevelopmentScan> {
+  const query = new URLSearchParams();
+  if (codexProjectId) query.set("codexProjectId", codexProjectId);
+  if (codexThreadId) query.set("codexThreadId", codexThreadId);
+  if (workspacePath) query.set("workspacePath", workspacePath);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return request<DevelopmentScan>(
+    `/api/projects/${encodeURIComponent(projectId)}/development-contexts${suffix}`,
+    { signal },
+  );
+}
+
+export async function listTasks(projectId: string, signal?: AbortSignal): Promise<Task[]> {
+  const params = new URLSearchParams({ projectId, archived: "false" });
+  const data = await request<{ tasks: Task[] }>(`/api/tasks?${params}`, { signal });
+  return data.tasks;
+}
+
+export async function createTask(projectId: string, draft: TaskDraft, threadId?: string): Promise<Task> {
+  const data = await request<{ task: Task }>("/api/tasks", {
+    method: "POST",
+    body: JSON.stringify({ projectId, ...draft, ...(threadId ? { threadId } : {}) }),
+  });
+  return data.task;
+}
+
+export async function updateTask(task: Task, draft: TaskDraft, threadId?: string): Promise<Task> {
+  const data = await request<{ task: Task }>(`/api/tasks/${encodeURIComponent(task.id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ version: task.version, ...draft, ...(threadId ? { threadId } : {}) }),
+  });
+  return data.task;
+}
+
+export async function moveTask(
+  task: Task,
+  status: TaskStatus,
+  sortOrder: number,
+  threadId?: string,
+): Promise<Task> {
+  const data = await request<{ task: Task }>(
+    `/api/tasks/${encodeURIComponent(task.id)}/move`,
+    {
+      method: "POST",
+      body: JSON.stringify({ version: task.version, status, sortOrder, ...(threadId ? { threadId } : {}) }),
+    },
+  );
+  return data.task;
+}
+
+export async function archiveTask(task: Task, threadId?: string): Promise<Task> {
+  const data = await request<{ task: Task }>(
+    `/api/tasks/${encodeURIComponent(task.id)}/archive`,
+    {
+      method: "POST",
+      body: JSON.stringify({ version: task.version, ...(threadId ? { threadId } : {}) }),
+    },
+  );
+  return data.task;
+}
+
+export async function restoreTask(task: Task, threadId?: string): Promise<Task> {
+  const data = await request<{ task: Task }>(
+    `/api/tasks/${encodeURIComponent(task.id)}/restore`,
+    {
+      method: "POST",
+      body: JSON.stringify({ version: task.version, ...(threadId ? { threadId } : {}) }),
+    },
+  );
+  return data.task;
+}
+
+export async function listComments(taskId: string, signal?: AbortSignal): Promise<Comment[]> {
+  const data = await request<{ comments: Comment[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/comments`,
+    { signal },
+  );
+  return data.comments;
+}
+
+export async function createComment(taskId: string, body: string, threadId?: string): Promise<Comment> {
+  const data = await request<{ comment: Comment }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/comments`,
+    {
+      method: "POST",
+      body: JSON.stringify({ body, ...(threadId ? { threadId } : {}) }),
+    },
+  );
+  return data.comment;
+}
+
+export async function updateComment(comment: Comment, body: string, threadId?: string): Promise<Comment> {
+  const data = await request<{ comment: Comment }>(
+    `/api/comments/${encodeURIComponent(comment.id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ version: comment.version, body, ...(threadId ? { threadId } : {}) }),
+    },
+  );
+  return data.comment;
+}
+
+export async function deleteComment(comment: Comment, threadId?: string): Promise<void> {
+  await request(`/api/comments/${encodeURIComponent(comment.id)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ version: comment.version, ...(threadId ? { threadId } : {}) }),
+  });
+}
+
+export async function listAttachments(taskId: string, signal?: AbortSignal): Promise<Attachment[]> {
+  const data = await request<{ attachments: Attachment[] }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/attachments`,
+    { signal },
+  );
+  return data.attachments;
+}
+
+export async function uploadAttachment(taskId: string, file: File): Promise<Attachment> {
+  const data = await request<{ attachment: Attachment }>(
+    `/api/tasks/${encodeURIComponent(taskId)}/attachments`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        "X-Taskboard-Filename": encodeURIComponent(file.name),
+      },
+      body: file,
+    },
+  );
+  return data.attachment;
+}
+
+export async function uploadCommentAttachment(commentId: string, file: File): Promise<Attachment> {
+  const data = await request<{ attachment: Attachment }>(
+    `/api/comments/${encodeURIComponent(commentId)}/attachments`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        "X-Taskboard-Filename": encodeURIComponent(file.name),
+      },
+      body: file,
+    },
+  );
+  return data.attachment;
+}
+
+export async function deleteAttachment(attachment: Attachment): Promise<void> {
+  await request(`/api/attachments/${encodeURIComponent(attachment.id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function attachmentContentUrl(attachment: Attachment): string {
+  return `/api/attachments/${encodeURIComponent(attachment.id)}/content`;
+}

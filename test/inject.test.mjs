@@ -1,0 +1,218 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "node:test";
+
+const sourceUrl = new URL("../inject/codex-taskboard.user.js", import.meta.url);
+const source = await readFile(sourceUrl, "utf8");
+const webStyles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
+const webApp = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+
+test("injection is an idempotent IIFE guarded by a versioned sentinel", () => {
+  assert.match(source, /^\(\(\) => \{/);
+  assert.match(source, /const SENTINEL_KEY = "__codexTaskboardInjection__"/);
+  assert.match(source, /previous\?\.version === VERSION/);
+  assert.match(source, /previous\.refresh\(\);\s*return;/);
+  assert.match(source, /window\[SENTINEL_KEY\] = api/);
+});
+
+test("embedded page uses the local taskboard URL and supports a runtime override", () => {
+  assert.match(source, /http:\/\/127\.0\.0\.1:47823\/\?host=codex/);
+  assert.match(source, /window\.__CODEX_TASKBOARD_URL__/);
+  assert.match(source, /nextFrame\.src = taskboardUrl\.href/);
+  assert.match(source, /frameOrigin = taskboardUrl\.origin/);
+});
+
+test("entry clones the native Plugins row and the page covers the complete Codex workspace", () => {
+  assert.match(source, /const PLUGIN_LABELS = \["插件", "plugins"\]/);
+  assert.match(source, /const button = reference\.cloneNode\(true\)/);
+  assert.match(source, /reference\.after\(entry\)/);
+  assert.match(source, /document\.querySelector\("\.app-shell-main-content-frame"\)/);
+  assert.match(source, /const surface = viewport\?\.parentElement/);
+  assert.match(source, /surface\.appendChild\(page\)/);
+  assert.match(source, /#\$\{PAGE_ID\} \{[\s\S]*?top: 0;/);
+  assert.doesNotMatch(source, /--codex-taskboard-top-offset/);
+  assert.match(source, /child\.setAttribute\(HIDDEN_ATTRIBUTE, "true"\)/);
+  assert.match(source, /page\.hidden = false/);
+  assert.doesNotMatch(source, /codex-taskboard-overlay/);
+  assert.doesNotMatch(source, /codex-taskboard-toolbar/);
+  assert.doesNotMatch(source, /aria-modal/);
+});
+
+test("opening Taskboard suppresses native selection and contextual header until close", () => {
+  assert.match(source, /aside nav\[role="navigation"\] \[aria-current\]/);
+  assert.match(source, /node\.removeAttribute\("aria-current"\)/);
+  assert.match(source, /NATIVE_SELECTED_ATTRIBUTE/);
+  assert.match(source, /app-shell-header-context-menu-surface/);
+  assert.match(source, /restoreNativeSelection\(\)/);
+  assert.match(source, /function onDocumentClick[\s\S]*closeTaskboard\(false\);/);
+  assert.doesNotMatch(source, /setTimeout\(\(\) => closeTaskboard\(false\), 0\)/);
+});
+
+test("the embedded header fills the native titlebar without clipping or a full-page no-drag region", () => {
+  assert.match(source, /top: 0;/);
+  assert.match(source, /z-index: 31 !important/);
+  assert.doesNotMatch(source, /headerRightInset/);
+  assert.doesNotMatch(source, /NATIVE_HEADER_RIGHT_INSET/);
+  assert.doesNotMatch(source, /clip-path: polygon/);
+  assert.doesNotMatch(source, /codex-taskboard-titlebar-fill/);
+  assert.doesNotMatch(source, /#\$\{PAGE_ID\} \{[^}]*-webkit-app-region: no-drag !important;/);
+  assert.doesNotMatch(source, /#\$\{FRAME_ID\} \{[^}]*-webkit-app-region: no-drag !important;/);
+  assert.match(source, /const NO_DRAG_LEFT_ID = "codex-taskboard-no-drag-left"/);
+  assert.match(source, /const NO_DRAG_RIGHT_ID = "codex-taskboard-no-drag-right"/);
+  assert.match(source, /window\.addEventListener\("resize", scheduleRefresh\)/);
+});
+
+test("only the empty embedded header spacer is draggable", () => {
+  assert.match(webApp, /<div ref=\{dragRegionRef\} className="workspace-drag-region" aria-hidden="true" \/>/);
+  assert.match(webApp, /type: "taskboard:drag-region"/);
+  assert.match(source, /const DRAG_REGION_ID = "codex-taskboard-drag-region"/);
+  assert.match(source, /message\.type === "taskboard:drag-region"/);
+  assert.match(source, /function updateDragRegion\(payload\)/);
+  assert.match(source, /#\$\{DRAG_REGION_ID\} \{[\s\S]*?-webkit-app-region: drag;/);
+  assert.doesNotMatch(webStyles, /\.app-shell\.embedded \.workspace-header \{\s*-webkit-app-region: no-drag;/);
+  assert.match(
+    webStyles,
+    /\.app-shell\.embedded \.workspace-drag-region \{\s*-webkit-app-region: drag;/,
+  );
+  assert.match(
+    webStyles,
+    /\.app-shell\.embedded \.workspace-header \.header-actions,[\s\S]*?-webkit-app-region: no-drag;/,
+  );
+});
+
+test("the embedded header clears the macOS window controls when the Codex sidebar is collapsed", () => {
+  assert.match(source, /const MACOS_TITLEBAR_SAFE_LEFT = 80/);
+  assert.match(source, /function titlebarLeftInset\(\)/);
+  assert.match(source, /if \(nativeSidebarCollapsed\(\)\) return MACOS_TITLEBAR_SAFE_LEFT/);
+  assert.match(source, /MACOS_TITLEBAR_SAFE_LEFT - surfaceLeft/);
+  assert.match(source, /titlebarLeftInset: titlebarLeftInset\(\)/);
+  assert.match(webApp, /--codex-titlebar-left-inset/);
+  assert.match(webStyles, /padding-left: calc\(16px \+ var\(--codex-titlebar-left-inset, 0px\)\)/);
+});
+
+test("the embedded header exposes Codex's native sidebar expansion when collapsed", () => {
+  assert.match(source, /\[data-app-shell-sidebar-trigger="true"\]/);
+  assert.match(source, /function nativeSidebarCollapsed\(\)/);
+  assert.match(source, /sidebarCollapsed: nativeSidebarCollapsed\(\)/);
+  assert.match(source, /message\.type === "taskboard:expand-sidebar"/);
+  assert.match(source, /function expandNativeSidebar\(\)[\s\S]*?trigger\.click\(\)/);
+  assert.match(webApp, /embedded && hostContext\?\.sidebarCollapsed/);
+  assert.match(webApp, /type: "taskboard:expand-sidebar"/);
+  assert.match(webApp, /className="detail-back-button codex-sidebar-expand-button"/);
+  assert.match(webApp, /<LinearIcon name="codexSidebarExpand" \/>/);
+  assert.match(webStyles, /\.codex-sidebar-expand-button \{[\s\S]*?width: 28px;[\s\S]*?height: 28px;/);
+});
+
+test("opening asks the resident launcher to ensure the service and rebuilds failed frames", () => {
+  assert.match(source, /const HOST_BINDING_NAME = "__codexTaskboardHostV1"/);
+  assert.match(source, /return requestHost\("ensure"\)/);
+  assert.match(source, /result\.restarted/);
+  assert.match(source, /loadTaskboardFrame\(\)/);
+  assert.match(source, /waitForFrameReady\(\)/);
+  assert.match(source, /hostResponse: onHostResponse/);
+  assert.match(source, /function hasLiveHostBinding/);
+  assert.match(source, /HOST_HEARTBEAT_MAX_AGE_MS/);
+});
+
+test("the injected iframe can be cache-busted without reloading the Codex shell", () => {
+  assert.match(source, /const FRAME_REFRESH_PARAM = "__codex_taskboard_refresh"/);
+  assert.match(source, /function reloadFrame\(\)/);
+  assert.match(source, /loadTaskboardFrame\(true\)/);
+  assert.match(source, /reloadFrame,/);
+});
+
+test("iframe messages require both the exact origin and source window", () => {
+  assert.match(
+    source,
+    /event\.source !== frame\.contentWindow \|\| event\.origin !== frameOrigin/,
+  );
+  assert.match(source, /message\.type === "taskboard:open-thread"/);
+  assert.match(source, /message\.type === "taskboard:create-thread"/);
+  assert.match(source, /postMessage\(message, frameOrigin\)/);
+});
+
+test("issues open an unsent native Codex composer without binding before work happens", () => {
+  assert.match(source, /function createThreadForTask\(payload\)/);
+  assert.match(source, /\[data-app-action-sidebar-select-project\]/);
+  assert.match(source, /data-codex-composer/);
+  assert.match(source, /prefillPrompt: prompt/);
+  assert.match(source, /requestHostComposerPrefill\(prompt\)/);
+  assert.match(source, /requestHost\("prefill-composer", \{ text: prompt \}\)/);
+  assert.match(source, /function waitForPreparedComposer\(identifier\)/);
+  assert.doesNotMatch(source, /submit\.click\(\)/);
+  assert.match(source, /type: "taskboard:thread-prepared"/);
+  assert.doesNotMatch(source, /function waitForCreatedThread/);
+  assert.doesNotMatch(source, /type: "taskboard:thread-created"/);
+  assert.doesNotMatch(webApp, /taskboard:thread-created/);
+  assert.match(
+    webApp,
+    /\[\$manage-taskboard\]\(\$\{manageTaskboardSkillPath\}\) e-taskboard Addressing the issues mentioned in \$\{task\.identifier\}/,
+  );
+  assert.match(webApp, /type: "taskboard:create-thread"/);
+  assert.match(webApp, /type: "taskboard:open-thread", payload: \{ threadId \}/);
+});
+
+test("the standalone web page opens linked Codex tasks through the app deep link", () => {
+  assert.match(webApp, /window\.location\.assign\(`codex:\/\/threads\/\$\{encodeURIComponent\(threadId\.trim\(\)\)\}`\)/);
+});
+
+test("the injected app opens an existing local Codex task instead of a new composer", () => {
+  const openThreadSource = source.slice(
+    source.indexOf("async function openThread"),
+    source.indexOf("function projectRowById"),
+  );
+  assert.match(openThreadSource, /if \(row\?\.isConnected\) \{\s*row\.click\?\.\(\);\s*return;/);
+  assert.match(openThreadSource, /await dispatchHostMessage\(\{\s*type: "navigate-to-route",\s*path: routeForThread\(normalizedThreadId\)/);
+  assert.match(source, /return `\/local\/\$\{encodeURIComponent\(threadId\)\}`/);
+  assert.doesNotMatch(source, /return `\/thread\/\$\{encodeURIComponent\(threadId\)\}`/);
+  assert.doesNotMatch(openThreadSource, /focusComposerNonce/);
+});
+
+test("host navigation follows Codex's renderer message bus", () => {
+  assert.match(source, /function dispatchHostMessage\(message\)/);
+  assert.match(source, /window\.postMessage\(message, window\.location\.origin\)/);
+  assert.doesNotMatch(source, /new CustomEvent\("codex-message-from-view"/);
+});
+
+test("the standalone web page opens unlinked issues as prefilled empty Codex tasks", () => {
+  assert.match(webApp, /const query = new URLSearchParams\(\)/);
+  assert.match(webApp, /query\.set\("path", workspacePath\)/);
+  assert.match(webApp, /query\.set\("prompt", prompt\)/);
+  assert.match(webApp, /window\.location\.assign\(`codex:\/\/new\?/);
+});
+
+test("host context captures all Codex projects even when the sidebar section is collapsed", () => {
+  assert.match(source, /function readCodexProjects\(\)/);
+  assert.match(source, /\[data-app-action-sidebar-project-row\]/);
+  assert.match(source, /data-app-action-sidebar-project-id/);
+  assert.match(source, /function findProjectsSection\(\)/);
+  assert.match(source, /data-app-action-sidebar-section-collapsed/);
+  assert.match(source, /async function captureHostContext\(\)/);
+  assert.match(source, /while \(!section && Date\.now\(\) < sectionDeadline\)/);
+  assert.match(source, /requestHostEnsure\(taskboardUrl\),\s*captureHostContext\(\),/);
+  assert.match(source, /let lastNativeThreadId = ""/);
+  assert.match(source, /clickedThreadId.*lastNativeThreadId/s);
+  assert.match(source, /activeThreadId \|\| lastNativeThreadId \|\| normalizeThreadId\(threadIdFromLocation\(\)\)/);
+  assert.match(source, /replace\(\/\^\(\?:local\|cloud\):\/i, ""\)/);
+  assert.match(source, /function findTasksSection\(\)/);
+});
+
+test("cleanup removes observers, listeners, timers and owned DOM", () => {
+  assert.match(source, /observer\?\.disconnect\(\)/);
+  assert.match(source, /window\.removeEventListener\("message", onFrameMessage\)/);
+  assert.match(source, /document\.removeEventListener\("click", onDocumentClick, true\)/);
+  assert.match(source, /window\.removeEventListener\("popstate", onNativeRouteChange\)/);
+  assert.match(source, /window\.clearTimeout\(reattachTimer\)/);
+  assert.match(source, /data-codex-taskboard-owned/);
+  assert.match(source, /delete window\[SENTINEL_KEY\]/);
+});
+
+test("host integration stays thin", () => {
+  assert.match(source, /new MutationObserver\(scheduleRefresh\)/);
+  assert.match(source, /type: "taskboard:host-context"/);
+  assert.match(source, /type: "taskboard:theme"/);
+  assert.match(source, /type: "navigate-to-route"/);
+  assert.doesNotMatch(source, /__codexSessionDeleteBridge/);
+  assert.doesNotMatch(source, /import\s*\(/);
+  assert.doesNotMatch(source, /window\.fetch\s*=/);
+});
