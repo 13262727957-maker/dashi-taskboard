@@ -699,13 +699,13 @@ export function TaskDetail({
                     key={comment.id}
                     id={`comment-${comment.id}`}
                   >
-                    <ActorAvatar
-                      type={comment.authorType}
-                      name={comment.authorName}
-                      avatarUrl={comment.authorAvatarUrl}
-                    />
                     <div className="comment-card">
                       <header className="comment-header">
+                        <ActorAvatar
+                          type={comment.authorType}
+                          name={comment.authorName}
+                          avatarUrl={comment.authorAvatarUrl}
+                        />
                         <strong>{comment.authorName}</strong>
                         <span className="actor-id">@{comment.authorId}</span>
                         <time title={exactTime(comment.createdAt)}>{relativeTime(comment.createdAt)}</time>
