@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ApiError,
   attachmentContentUrl,
@@ -109,36 +111,17 @@ function contextLabel(context: DevelopmentContext): string {
   return `${context.branch ?? "detached"} · ${folder}`;
 }
 
-function renderInlineText(value: string): ReactNode[] {
-  return value.split(/(`[^`]+`)/g).filter(Boolean).map((part, index) => (
-    part.startsWith("`") && part.endsWith("`")
-      ? <code key={`${part}:${index}`}>{part.slice(1, -1)}</code>
-      : <span key={`${part}:${index}`}>{part}</span>
-  ));
-}
-
 function DescriptionDocument({ value }: { value: string }) {
   return (
     <div className="issue-description-document">
-      {value.split("\n").map((line, index) => {
-        const heading = /^(#{1,3})\s+(.+)$/.exec(line);
-        if (heading) {
-          const content = renderInlineText(heading[2]);
-          if (heading[1].length === 1) return <h2 key={index}>{content}</h2>;
-          if (heading[1].length === 2) return <h3 key={index}>{content}</h3>;
-          return <h4 key={index}>{content}</h4>;
-        }
-        const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
-        if (bullet) {
-          return <div className="description-list-item" key={index}><span>•</span><p>{renderInlineText(bullet[1])}</p></div>;
-        }
-        const numbered = /^\s*(\d+)\.\s+(.+)$/.exec(line);
-        if (numbered) {
-          return <div className="description-list-item" key={index}><span>{numbered[1]}.</span><p>{renderInlineText(numbered[2])}</p></div>;
-        }
-        if (!line.trim()) return <div className="description-spacer" key={index} aria-hidden="true" />;
-        return <p key={index}>{renderInlineText(line)}</p>;
-      })}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+        }}
+      >
+        {value}
+      </ReactMarkdown>
     </div>
   );
 }
