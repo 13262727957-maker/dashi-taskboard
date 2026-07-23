@@ -1951,14 +1951,14 @@ kbd {
   pointer-events: none;
 }
 
-.task-card .card-actions,
 .task-card .card-actions button,
 .task-card .thread-link {
   pointer-events: auto;
 }
 
 .card-topline {
-  height: 15px;
+  position: relative;
+  height: 16px;
   min-width: 0;
 }
 
@@ -1973,30 +1973,30 @@ kbd {
 }
 
 .card-actions {
+  position: absolute;
+  top: -1px;
+  right: 0;
+  display: flex;
+  align-items: center;
   gap: 1px;
-  margin-left: auto;
   opacity: 0;
+  pointer-events: none;
   transform: translateX(3px);
   transition: opacity 100ms ease, transform 100ms ease;
-}
-
-.card-assignee-avatar {
-  width: 16px;
-  height: 16px;
-  margin-left: auto;
-  border-width: 1px;
-  font-size: 7px;
-}
-
-.card-assignee-avatar + .card-actions {
-  margin-left: 3px;
 }
 
 .task-card:hover .card-actions,
 .task-card:focus-within .card-actions,
 .task-card.is-context-open .card-actions {
   opacity: 1;
+  pointer-events: auto;
   transform: translateX(0);
+}
+
+.task-card:hover .card-assignee-avatar,
+.task-card:focus-within .card-assignee-avatar,
+.task-card.is-context-open .card-assignee-avatar {
+  opacity: 0;
 }
 
 .icon-button.compact {
@@ -2896,6 +2896,15 @@ kbd {
 .actor-avatar-agent-image {
   border-radius: 0;
   object-fit: contain;
+}
+
+.actor-avatar.card-assignee-avatar {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  border-width: 1px;
+  font-size: 7px;
+  transition: opacity 100ms ease;
 }
 
 .comment-card {
@@ -6061,6 +6070,15 @@ kbd {
   .comment-actions,
   .attachment-actions {
     opacity: 1;
+  }
+
+  .card-actions {
+    pointer-events: auto;
+    transform: translateX(0);
+  }
+
+  .card-assignee-avatar {
+    opacity: 0;
   }
 }
 
