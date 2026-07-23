@@ -14,9 +14,10 @@ Use `taskctl` for every project, issue, and comment operation. Read [references/
 3. Let `taskctl` attribute every issue or comment mutation to the current Codex conversation through `CODEX_THREAD_ID`. Outside Codex, pass the exact conversation id with `--thread-id`.
 4. Set the issue status to `in_progress` before starting implementation.
 5. Include `--if-version <version>` on every concurrent update, using the version returned by the latest read.
-6. Before completion, verify the requested work and acceptance criteria.
-7. Move work that is ready for review to `in_review`, work that cannot continue to `blocked`, and work that will not continue to `canceled`.
+6. Before requesting review, verify the requested work and acceptance criteria.
+7. After implementation and self-verification, always move the issue to `in_review`; never move it directly to `done`.
 8. Add a comment when the issue needs a durable progress note or verification result.
-9. Set the issue status to `done` only after verification succeeds.
+9. Move an issue from `in_review` to `done` only when the user explicitly confirms acceptance or explicitly asks to mark it complete. Codex self-verification alone is not sufficient.
+10. Move work that cannot continue to `blocked`, and work that will not continue to `canceled`.
 
 If an update reports a version conflict, read the issue again, reconcile the newer state, and retry with its current version.

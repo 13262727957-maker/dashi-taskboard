@@ -12,7 +12,6 @@ const PRIORITY_LABELS: Record<TaskPriority, string> = {
 
 interface TaskCardProps {
   task: Task;
-  projectName: string;
   statusIndex: number;
   isDragging: boolean;
   dragShift: number;
@@ -29,7 +28,6 @@ interface TaskCardProps {
 
 export function TaskCard({
   task,
-  projectName,
   statusIndex,
   isDragging,
   dragShift,
@@ -43,10 +41,6 @@ export function TaskCard({
   onDragEnd,
   onOpenThread,
 }: TaskCardProps) {
-  const createdAt = new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(task.createdAt));
   const dueDate = task.dueDate
     ? new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(`${task.dueDate}T12:00:00`))
     : null;
@@ -118,7 +112,6 @@ export function TaskCard({
         <span className={`priority-icon priority-icon-${task.priority}`} title={PRIORITY_LABELS[task.priority]}>
           <LinearPriorityIcon priority={task.priority} />
         </span>
-        <span className="project-chip" title={projectName}>{projectName}</span>
         {task.labels.slice(0, 2).map((label) => (
           <span className="label-chip" key={label}>{label}</span>
         ))}
@@ -141,10 +134,6 @@ export function TaskCard({
             <LinearIcon name="conversation" />
           </button>
         )}
-      </div>
-
-      <div className="card-footer">
-        <span className="created-at">创建于 {createdAt}</span>
       </div>
     </article>
   );

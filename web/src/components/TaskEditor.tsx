@@ -1,20 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { ApiError } from "../api";
-import { labelColor } from "../labels";
 import {
   TASK_PRIORITIES,
   TASK_STATUSES,
   type DevelopmentContext,
   type DevelopmentScan,
-  type Project,
   type Recurrence,
   type Task,
   type TaskDraft,
   type TaskPriority,
   type TaskStatus,
+  type WorkflowOption,
 } from "../types";
 import { STATUS_DETAILS } from "./BoardColumn";
+import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
 
 const PRIORITY_LABELS: Record<TaskPriority, string> = {
@@ -35,8 +35,8 @@ const RECURRENCE_UNITS: Record<Recurrence["unit"], string> = {
 interface TaskEditorProps {
   task: Task | null;
   initialStatus: TaskStatus;
-  project: Project | null;
   labels: string[];
+  workflows: WorkflowOption[];
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
   onCancel: () => void;
@@ -91,8 +91,8 @@ function contextLabel(context: DevelopmentContext): string {
 export function TaskEditor({
   task,
   initialStatus,
-  project,
   labels: availableLabels,
+  workflows,
   developmentScan,
   developmentScanLoading,
   onCancel,
@@ -106,7 +106,7 @@ export function TaskEditor({
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? initialStatus);
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "none");
   const [selectedLabels, setSelectedLabels] = useState<string[]>(task?.labels ?? []);
-  const [labelSearch, setLabelSearch] = useState("");
+  const [workflowId, setWorkflowId] = useState(task?.workflowId ?? "");
   const [developmentContext, setDevelopmentContext] = useState<DevelopmentContext | null>(task?.developmentContext ?? null);
   const [dueDate, setDueDate] = useState(task?.dueDate ?? "");
   const [recurrence, setRecurrence] = useState<Recurrence | null>(task?.recurrence ?? null);
@@ -125,11 +125,7 @@ export function TaskEditor({
     return options;
   }, [developmentContext, developmentScan.contexts]);
 
-  const filteredLabels = availableLabels.filter((label) => (
-    !labelSearch.trim() || label.toLocaleLowerCase().includes(labelSearch.trim().toLocaleLowerCase())
-  ));
-  const customLabel = labelSearch.trim();
-  const canCreateLabel = Boolean(customLabel) && !availableLabels.includes(customLabel);
+  const workflowAvailable = !workflowId || workflows.some((workflow) => workflow.id === workflowId);
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -161,6 +157,7 @@ export function TaskEditor({
         status,
         priority,
         labels: selectedLabels,
+        workflowId: workflowId || null,
         developmentContext,
         dueDate: dueDate || null,
         recurrence,
@@ -190,12 +187,6 @@ export function TaskEditor({
     });
   }
 
-  function toggleLabel(label: string) {
-    setSelectedLabels((current) => current.includes(label)
-      ? current.filter((item) => item !== label)
-      : [...current, label]);
-  }
-
   function chooseDueDate(value: string) {
     setDueDate(value);
     setMenu(null);
@@ -217,9 +208,6 @@ export function TaskEditor({
       <form className="task-form" onSubmit={handleSubmit}>
         <header className="dialog-header">
           <div className="dialog-context">
-            <span className="dialog-project-icon" aria-hidden="true">{project?.name.slice(0, 1).toUpperCase() ?? "L"}</span>
-            <span>{project?.name ?? "Local"}</span>
-            <span className="dialog-chevron"><LinearIcon name="chevronRight" /></span>
             <strong id="task-dialog-title">{task ? task.identifier : "新建议题"}</strong>
           </div>
           <div className="dialog-header-actions">
@@ -257,28 +245,27 @@ export function TaskEditor({
                 {TASK_PRIORITIES.map((value) => <option value={value} key={value}>{PRIORITY_LABELS[value]}</option>)}
               </select>
             </label>
-            <span className="property-control property-project"><span className="dialog-project-icon" aria-hidden="true">{project?.name.slice(0, 1).toUpperCase() ?? "L"}</span>{project?.name ?? "Local"}</span>
-            <div className="composer-menu-anchor">
-              <button className="property-control" type="button" onClick={() => setMenu(menu === "labels" ? null : "labels")}>
-                <LinearIcon name="label" />
-                <span>{selectedLabels.length > 0 ? selectedLabels.join(", ") : "标签"}</span>
-              </button>
-              {menu === "labels" && (
-                <div className="composer-popover label-popover">
-                  <input autoFocus value={labelSearch} onChange={(event) => setLabelSearch(event.target.value)} placeholder="Add labels…" aria-label="搜索标签" />
-                  <div className="label-options">
-                    {filteredLabels.map((label) => (
-                      <button type="button" key={label} onClick={() => toggleLabel(label)}>
-                        <i style={{ background: labelColor(label) }} />
-                        <span>{label}</span>
-                        {selectedLabels.includes(label) && <b><LinearIcon name="check" /></b>}
-                      </button>
-                    ))}
-                    {canCreateLabel && <button type="button" onClick={() => { toggleLabel(customLabel); setLabelSearch(""); }}><i style={{ background: labelColor(customLabel) }} /><span>创建 “{customLabel}”</span></button>}
-                  </div>
-                </div>
-              )}
-            </div>
+            <LabelPicker
+              availableLabels={availableLabels}
+              selectedLabels={selectedLabels}
+              open={menu === "labels"}
+              triggerClassName="property-control"
+              showIcon
+              onOpenChange={(open) => setMenu(open ? "labels" : null)}
+              onChange={setSelectedLabels}
+            />
+
+            <label className="property-control property-workflow">
+              <LinearIcon name="dashboard" />
+              <span className="sr-only">工作流</span>
+              <select value={workflowId} onChange={(event) => setWorkflowId(event.target.value)}>
+                <option value="">工作流</option>
+                {!workflowAvailable && <option value={workflowId}>当前设备未找到此流程</option>}
+                {workflows.map((workflow) => (
+                  <option value={workflow.id} key={workflow.id}>{workflow.name}</option>
+                ))}
+              </select>
+            </label>
 
             <label className="property-control property-development" title={developmentScan.workspacePath ?? undefined}>
               <LinearIcon name="branch" />

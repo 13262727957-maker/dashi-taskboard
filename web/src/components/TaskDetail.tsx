@@ -13,18 +13,21 @@ import {
 } from "../api";
 import { TASK_STATUSES } from "../types";
 import type {
+  ActorIdentity,
+  ActorType,
   Attachment,
   Comment,
   DevelopmentContext,
   DevelopmentScan,
-  Project,
   Recurrence,
   Task,
   TaskDraft,
   TaskPriority,
   TaskStatus,
+  WorkflowOption,
 } from "../types";
 import { STATUS_DETAILS } from "./BoardColumn";
+import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
 
 const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
@@ -39,7 +42,9 @@ const PRIORITY_DETAILS: Record<TaskPriority, { label: string; bars: number }> = 
 
 interface TaskDetailProps {
   task: Task;
-  project: Project;
+  currentUser: ActorIdentity;
+  availableLabels: string[];
+  workflows: WorkflowOption[];
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
   commentsRevision: number;
@@ -160,9 +165,31 @@ function ConversationLink({
   );
 }
 
+function ActorAvatar({
+  type,
+  name,
+  avatarUrl,
+}: {
+  type: ActorType;
+  name: string;
+  avatarUrl: string | null;
+}) {
+  return (
+    <div className={`comment-avatar actor-avatar-${type}`} aria-hidden="true">
+      {type === "agent" ? (
+        <img className="actor-avatar-image" src="/codex-app-icon.png" alt="" />
+      ) : avatarUrl ? (
+        <img className="actor-avatar-image" src={avatarUrl} alt="" referrerPolicy="no-referrer" />
+      ) : name.slice(0, 1)}
+    </div>
+  );
+}
+
 export function TaskDetail({
   task,
-  project,
+  currentUser,
+  availableLabels,
+  workflows,
   developmentScan,
   developmentScanLoading,
   commentsRevision,
@@ -178,7 +205,7 @@ export function TaskDetail({
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [editingDescription, setEditingDescription] = useState(false);
-  const [labels, setLabels] = useState(task.labels.join(", "));
+  const [labelMenuOpen, setLabelMenuOpen] = useState(false);
   const [savingProperty, setSavingProperty] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(true);
@@ -203,12 +230,13 @@ export function TaskDetail({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const commentAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const workflowAvailable = !currentTask.workflowId
+    || workflows.some((workflow) => workflow.id === currentTask.workflowId);
 
   useEffect(() => {
     setCurrentTask(task);
     if (document.activeElement !== titleRef.current) setTitle(task.title);
     if (document.activeElement !== descriptionRef.current) setDescription(task.description);
-    setLabels(task.labels.join(", "));
   }, [task]);
 
   useEffect(() => {
@@ -302,14 +330,12 @@ export function TaskDetail({
       setCurrentTask(saved);
       setTitle(saved.title);
       setDescription(saved.description);
-      setLabels(saved.labels.join(", "));
       onAnnounce(`${saved.identifier} 已更新。`);
       return saved;
     } catch (error) {
       onError(messageFor(error));
       setTitle(currentTask.title);
       setDescription(currentTask.description);
-      setLabels(currentTask.labels.join(", "));
       return null;
     } finally {
       setSavingProperty(null);
@@ -345,15 +371,6 @@ export function TaskDetail({
     const normalized = description.trim();
     if (normalized === currentTask.description) return;
     await saveTask({ description: normalized }, "description");
-  }
-
-  async function saveLabels() {
-    const nextLabels = [...new Set(labels.split(/[,，]/).map((label) => label.trim()).filter(Boolean))];
-    if (nextLabels.join("\u0000") === currentTask.labels.join("\u0000")) {
-      setLabels(nextLabels.join(", "));
-      return;
-    }
-    await saveTask({ labels: nextLabels }, "labels");
   }
 
   async function submitComment() {
@@ -656,21 +673,37 @@ export function TaskDetail({
               </header>
 
               <div className="activity-stream">
-                <div className="activity-entry activity-created">
-                  <span className="activity-rail-icon" aria-hidden="true">
-                    <LinearStatusIcon status="backlog" />
-                  </span>
-                  <p>创建了此议题 <time title={exactTime(currentTask.createdAt)}>{relativeTime(currentTask.createdAt)}</time></p>
+                <div className={`activity-entry activity-created is-${currentTask.creatorType}`}>
+                  <ActorAvatar
+                    type={currentTask.creatorType}
+                    name={currentTask.creatorName}
+                    avatarUrl={currentTask.creatorAvatarUrl}
+                  />
+                  <p>
+                    <strong>{currentTask.creatorName}</strong>
+                    <span className="actor-id">@{currentTask.creatorId}</span>
+                    创建了此议题
+                    <time title={exactTime(currentTask.createdAt)}>{relativeTime(currentTask.createdAt)}</time>
+                  </p>
                 </div>
 
                 {commentsLoading ? (
                   <div className="comments-loading" aria-label="正在加载评论" aria-busy="true"><i /><i /></div>
                 ) : comments.map((comment) => (
-                  <article className="comment-entry" key={comment.id} id={`comment-${comment.id}`}>
-                    <div className="comment-avatar" aria-hidden="true">{comment.authorName.slice(0, 1)}</div>
+                  <article
+                    className={`comment-entry is-${comment.authorType}`}
+                    key={comment.id}
+                    id={`comment-${comment.id}`}
+                  >
+                    <ActorAvatar
+                      type={comment.authorType}
+                      name={comment.authorName}
+                      avatarUrl={comment.authorAvatarUrl}
+                    />
                     <div className="comment-card">
                       <header className="comment-header">
                         <strong>{comment.authorName}</strong>
+                        <span className="actor-id">@{comment.authorId}</span>
                         <time title={exactTime(comment.createdAt)}>{relativeTime(comment.createdAt)}</time>
                         {comment.version > 1 && <span title={`编辑于 ${exactTime(comment.updatedAt)}`}>已编辑</span>}
                         <div className="comment-actions" data-comment-menu-root={comment.id}>
@@ -776,8 +809,13 @@ export function TaskDetail({
 
               <form className="comment-composer" onSubmit={(event) => { event.preventDefault(); void submitComment(); }}>
                 <div className="composer-author">
-                  <span className="comment-avatar" aria-hidden="true">本</span>
-                  <strong>本地用户</strong>
+                  <ActorAvatar
+                    type="user"
+                    name={currentUser.name}
+                    avatarUrl={currentUser.avatarUrl}
+                  />
+                  <strong>{currentUser.name}</strong>
+                  <span className="actor-id">@{currentUser.id}</span>
                 </div>
                 <textarea
                   ref={composerRef}
@@ -871,31 +909,43 @@ export function TaskDetail({
                 ))}
               </select>
             </label>
-            <div className="detail-property-row static">
-              <span className="detail-property-icon project-property-icon" aria-hidden="true">{project.name.slice(0, 1).toUpperCase()}</span>
-              <span className="detail-property-label">项目</span>
-              <span className="detail-property-value">{project.name}</span>
-            </div>
-            <label className="detail-property-row labels-property">
+            <div className="detail-property-row labels-property">
               <span className="detail-property-icon" aria-hidden="true">
                 <LinearIcon name="label" />
               </span>
               <span className="detail-property-label">标签</span>
-              <input
-                value={labels}
-                placeholder="添加标签…"
+              <LabelPicker
+                availableLabels={availableLabels}
+                selectedLabels={currentTask.labels}
+                open={labelMenuOpen}
                 disabled={savingProperty === "labels"}
-                aria-label="标签，以逗号分隔"
-                onChange={(event) => setLabels(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                  if (event.key === "Escape") {
-                    setLabels(currentTask.labels.join(", "));
-                    event.currentTarget.blur();
-                  }
-                }}
-                onBlur={() => void saveLabels()}
+                className="detail-label-picker"
+                triggerClassName="detail-label-trigger"
+                placeholder="添加标签…"
+                onOpenChange={setLabelMenuOpen}
+                onChange={(nextLabels) => void saveTask({ labels: nextLabels }, "labels")}
               />
+            </div>
+            <label className="detail-property-row workflow-property">
+              <span className="detail-property-icon" aria-hidden="true">
+                <LinearIcon name="dashboard" />
+              </span>
+              <span className="detail-property-label">工作流</span>
+              <select
+                value={currentTask.workflowId ?? ""}
+                disabled={savingProperty === "workflowId"}
+                onChange={(event) => void saveTask({
+                  workflowId: event.target.value || null,
+                }, "workflowId")}
+              >
+                <option value="">未绑定</option>
+                {!workflowAvailable && currentTask.workflowId && (
+                  <option value={currentTask.workflowId}>当前设备未找到此流程</option>
+                )}
+                {workflows.map((workflow) => (
+                  <option value={workflow.id} key={workflow.id}>{workflow.name}</option>
+                ))}
+              </select>
             </label>
             <label className="detail-property-row development-property">
               <span className="detail-property-icon" aria-hidden="true">

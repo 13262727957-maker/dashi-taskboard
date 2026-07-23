@@ -121,6 +121,23 @@ test("the injected iframe can be cache-busted without reloading the Codex shell"
   assert.match(source, /reloadFrame,/);
 });
 
+test("reopening reuses a ready cache-busted iframe without showing the startup placeholder", () => {
+  assert.match(source, /function frameMatchesTaskboardUrl\(taskboardUrl\)/);
+  assert.match(source, /loadedUrl\.searchParams\.delete\(FRAME_REFRESH_PARAM\)/);
+  assert.match(source, /expectedUrl\.searchParams\.delete\(FRAME_REFRESH_PARAM\)/);
+  const prepareSource = source.slice(
+    source.indexOf("async function prepareTaskboard"),
+    source.indexOf("function restoreNativeContent"),
+  );
+  assert.match(prepareSource, /const canReuseFrame = Boolean\([\s\S]*frameMatchesTaskboardUrl\(taskboardUrl\)/);
+  assert.match(prepareSource, /if \(canReuseFrame\) showFrame\(\);\s*else showLoading\(\);/);
+  assert.match(
+    prepareSource,
+    /if \(!frameReady \|\| result\.restarted \|\| !frameMatchesTaskboardUrl\(taskboardUrl\)\) \{\s*showLoading\(\);/,
+  );
+  assert.doesNotMatch(prepareSource, /async function prepareTaskboard\(generation\) \{\s*showLoading\(\);/);
+});
+
 test("iframe messages require both the exact origin and source window", () => {
   assert.match(
     source,
@@ -131,14 +148,18 @@ test("iframe messages require both the exact origin and source window", () => {
   assert.match(source, /postMessage\(message, frameOrigin\)/);
 });
 
-test("issues open an unsent native Codex composer without binding before work happens", () => {
+test("issues open an unsent native Codex composer in the exact workspace with a Skill mention", () => {
   assert.match(source, /function createThreadForTask\(payload\)/);
   assert.match(source, /\[data-app-action-sidebar-select-project\]/);
   assert.match(source, /data-codex-composer/);
-  assert.match(source, /prefillPrompt: prompt/);
-  assert.match(source, /requestHostComposerPrefill\(prompt\)/);
-  assert.match(source, /requestHost\("prefill-composer", \{ text: prompt \}\)/);
-  assert.match(source, /function waitForPreparedComposer\(identifier\)/);
+  assert.match(source, /type: "electron-set-active-workspace-root"/);
+  assert.match(source, /root: workspacePath/);
+  assert.doesNotMatch(source, /prefillPrompt: prompt/);
+  assert.match(source, /requestHostTaskComposerPrefill\(\{/);
+  assert.match(source, /requestHost\("prefill-task-composer"/);
+  assert.match(source, /function waitForPreparedComposer\(identifier, skillPath\)/);
+  assert.match(source, /\[skill-mention-name\]/);
+  assert.match(source, /mention\.getAttribute\("skill-mention-path"\) === skillPath/);
   assert.doesNotMatch(source, /submit\.click\(\)/);
   assert.match(source, /type: "taskboard:thread-prepared"/);
   assert.doesNotMatch(source, /function waitForCreatedThread/);
@@ -146,8 +167,16 @@ test("issues open an unsent native Codex composer without binding before work ha
   assert.doesNotMatch(webApp, /taskboard:thread-created/);
   assert.match(
     webApp,
-    /\[\$manage-taskboard\]\(\$\{manageTaskboardSkillPath\}\) e-taskboard Addressing the issues mentioned in \$\{task\.identifier\}/,
+    /const instruction = `e-taskboard Addressing the issues mentioned in \$\{task\.identifier\}`/,
   );
+  assert.match(
+    webApp,
+    /const prompt = `\[\$manage-taskboard\]\(\$\{manageTaskboardSkillPath\}\) \$\{instruction\}`/,
+  );
+  assert.match(webApp, /skillName: "manage-taskboard"/);
+  assert.match(webApp, /skillDisplayName: "Manage Taskboard"/);
+  assert.match(webApp, /skillPath: manageTaskboardSkillPath/);
+  assert.match(webApp, /instruction,/);
   assert.match(webApp, /type: "taskboard:create-thread"/);
   assert.match(webApp, /type: "taskboard:open-thread", payload: \{ threadId \}/);
 });

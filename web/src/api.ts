@@ -1,4 +1,29 @@
-import type { Attachment, Comment, DevelopmentScan, Project, Task, TaskboardMetadata, TaskDraft, TaskStatus } from "./types";
+import type {
+  ActorIdentity,
+  Attachment,
+  Comment,
+  DevelopmentScan,
+  Project,
+  Task,
+  TaskboardMetadata,
+  TaskDraft,
+  TaskStatus,
+  WorkflowCapabilities,
+  WorkflowWorkspaceRecord,
+} from "./types";
+
+const DEFAULT_USER_ACTOR: ActorIdentity = {
+  type: "user",
+  id: "local-user",
+  name: "本地用户",
+  avatarUrl: null,
+};
+
+let currentUserActor = DEFAULT_USER_ACTOR;
+
+export function setCurrentUserActor(actor?: ActorIdentity) {
+  currentUserActor = actor?.type === "user" ? actor : DEFAULT_USER_ACTOR;
+}
 
 interface ApiErrorBody {
   error?: {
@@ -25,6 +50,14 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") {
+    headers.set("X-Taskboard-User-Id", currentUserActor.id);
+    headers.set("X-Taskboard-User-Name", encodeURIComponent(currentUserActor.name));
+    if (currentUserActor.avatarUrl) {
+      headers.set("X-Taskboard-User-Avatar", currentUserActor.avatarUrl);
+    }
+  }
 
   let response: Response;
   try {
@@ -55,6 +88,42 @@ export async function getTaskboardMetadata(signal?: AbortSignal): Promise<Taskbo
 export async function listDeviceWorkspaces(signal?: AbortSignal): Promise<Record<string, string>> {
   const data = await request<{ workspaces: Record<string, string> }>("/api/device-workspaces", { signal });
   return data.workspaces;
+}
+
+export async function listWorkflowCapabilities(
+  workspacePath?: string,
+  signal?: AbortSignal,
+): Promise<WorkflowCapabilities> {
+  const query = new URLSearchParams();
+  if (workspacePath) query.set("workspacePath", workspacePath);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return request<WorkflowCapabilities>(`/api/workflow-capabilities${suffix}`, { signal });
+}
+
+export async function getWorkflowWorkspace<T>(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<WorkflowWorkspaceRecord<T>> {
+  const data = await request<{ workflow: WorkflowWorkspaceRecord<T> }>(
+    `/api/projects/${encodeURIComponent(projectId)}/workflow-workspace`,
+    { signal },
+  );
+  return data.workflow;
+}
+
+export async function saveWorkflowWorkspace<T>(
+  projectId: string,
+  workspace: T,
+  version: number,
+): Promise<WorkflowWorkspaceRecord<T>> {
+  const data = await request<{ workflow: WorkflowWorkspaceRecord<T> }>(
+    `/api/projects/${encodeURIComponent(projectId)}/workflow-workspace`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ version, workspace }),
+    },
+  );
+  return data.workflow;
 }
 
 export async function createProject(input: {

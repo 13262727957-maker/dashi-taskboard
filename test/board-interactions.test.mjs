@@ -8,6 +8,7 @@ const apiSource = await readFile(new URL("../web/src/api.ts", import.meta.url), 
 const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 const detailSource = await readFile(new URL("../web/src/components/TaskDetail.tsx", import.meta.url), "utf8");
 const editorSource = await readFile(new URL("../web/src/components/TaskEditor.tsx", import.meta.url), "utf8");
+const labelPickerSource = await readFile(new URL("../web/src/components/LabelPicker.tsx", import.meta.url), "utf8");
 const contextMenuSource = await readFile(new URL("../web/src/components/TaskContextMenu.tsx", import.meta.url), "utf8");
 const cardSource = await readFile(new URL("../web/src/components/TaskCard.tsx", import.meta.url), "utf8");
 const filterSource = await readFile(new URL("../web/src/taskFilters.ts", import.meta.url), "utf8");
@@ -43,10 +44,36 @@ test("text selection is reserved for editable fields", () => {
   assert.match(styles, /input,[\s\S]*?textarea,[\s\S]*?\[contenteditable="true"\][\s\S]*?user-select: text/);
 });
 
+test("issue cards omit redundant metadata and keep three compact, well-spaced rows", () => {
+  assert.doesNotMatch(cardSource, /task\.createdAt|创建于|card-footer|created-at|projectName|project-chip/);
+  assert.doesNotMatch(styles, /\.card-footer|\.created-at|\.project-chip/);
+  assert.match(styles, /\.task-card \{[\s\S]*?min-height: 80px;[\s\S]*?gap: 6px;[\s\S]*?padding: 7px 8px/);
+  assert.match(detailSource, /currentTask\.createdAt/);
+});
+
+test("scrollbars stay proportional while the workflow node library hides its bar", () => {
+  assert.match(styles, /:root \{[\s\S]*?--scrollbar-thumb: rgba\(27, 27, 27, 0\.15\)/);
+  assert.match(styles, /:root\[data-theme="dark"\] \{[\s\S]*?--scrollbar-thumb: rgba\(238, 238, 239, 0\.15\)/);
+  assert.match(styles, /\* \{[\s\S]*?scrollbar-color: var\(--scrollbar-thumb\) transparent[\s\S]*?scrollbar-width: thin/);
+  assert.match(styles, /\*::\-webkit-scrollbar-track,[\s\S]*?\*::\-webkit-scrollbar-track-piece,[\s\S]*?\*::\-webkit-scrollbar-corner \{[\s\S]*?background: transparent/);
+  assert.match(styles, /\*::\-webkit-scrollbar-button \{[\s\S]*?display: none/);
+  assert.match(styles, /\*::\-webkit-scrollbar-thumb \{[\s\S]*?min-height: 30px[\s\S]*?background: var\(--scrollbar-thumb\)[\s\S]*?background-clip: padding-box/);
+  assert.doesNotMatch(styles, /scrollbar-color: var\(--border-strong\) transparent/);
+  assert.doesNotMatch(styles, /\*::\-webkit-scrollbar-thumb:(?:vertical|horizontal)/);
+  assert.match(styles, /\.workflow-node-groups \{[\s\S]*?overflow-y: auto;[\s\S]*?scrollbar-width: none/);
+  assert.match(styles, /\.workflow-node-groups::\-webkit-scrollbar \{[\s\S]*?display: none;[\s\S]*?width: 0;[\s\S]*?height: 0/);
+});
+
 test("each status column remains a drop target for the full board height", () => {
-  assert.match(styles, /\.board \{[\s\S]*?align-items: stretch/);
-  assert.match(styles, /\.board-column \{[\s\S]*?display: flex;[\s\S]*?flex-direction: column/);
-  assert.match(styles, /\.column-list \{[\s\S]*?flex: 1/);
+  assert.match(styles, /\.board \{[\s\S]*?align-items: stretch;[\s\S]*?height: 100%/);
+  assert.match(styles, /\.board-column \{[\s\S]*?display: flex;[\s\S]*?flex-direction: column;[\s\S]*?height: 100%/);
+  assert.match(styles, /\.column-list \{[\s\S]*?flex: 1 0 auto;[\s\S]*?min-height: calc\(100% - 48px\)/);
+});
+
+test("the issue board has no shared vertical scroll and each status column scrolls below a sticky heading", () => {
+  assert.match(styles, /\.board-scroll \{[\s\S]*?overflow-x: auto;[\s\S]*?overflow-y: hidden;[\s\S]*?overscroll-behavior-y: none/);
+  assert.match(styles, /\.board-column \{[\s\S]*?overflow-x: hidden;[\s\S]*?overflow-y: auto;[\s\S]*?overscroll-behavior-y: contain/);
+  assert.match(styles, /\.column-header \{[\s\S]*?position: sticky;[\s\S]*?top: 0;[\s\S]*?background: var\(--board-column-surface\)/);
 });
 
 test("the complete Linear-style workflow shares one ordered status source", () => {
@@ -83,9 +110,9 @@ test("review, blocked and canceled statuses round-trip through filter URLs", () 
 });
 
 test("the column surface wraps its heading and issue list", () => {
-  assert.match(styles, /\.board-column \{[\s\S]*?background: var\(--column-header\)/);
-  assert.match(styles, /\.column-header \{[\s\S]*?background: transparent/);
-  assert.match(styles, /\.column-list \{[\s\S]*?padding: 0 8px 8px/);
+  assert.match(styles, /\.board-column \{[\s\S]*?--board-column-surface: var\(--column-header\)[\s\S]*?background: var\(--board-column-surface\)/);
+  assert.match(styles, /\.column-header \{[\s\S]*?background: var\(--board-column-surface\)/);
+  assert.match(styles, /\.column-list \{[\s\S]*?padding: 8px 8px 8px/);
 });
 
 test("common issue mutations enter a Linear-style undo queue", () => {
@@ -125,6 +152,20 @@ test("issues expose processing conversations without manual binding", () => {
   assert.match(contextMenuSource, /onOpenInThread/);
 });
 
+test("issues bind one workflow from the current project's workflow tabs", () => {
+  assert.match(typesSource, /export interface Task \{[\s\S]*?workflowId: string \| null/);
+  assert.match(typesSource, /export interface TaskDraft \{[\s\S]*?workflowId: string \| null/);
+  assert.match(appSource, /function taskToDraft[\s\S]*?workflowId: task\.workflowId/);
+  assert.match(appSource, /const \[workflowOptions, setWorkflowOptions\] = useState<WorkflowOption\[\]>/);
+  assert.match(appSource, /workflowOptionsFromWorkspace\(record\.workspace\)/);
+  assert.match(editorSource, /workflows: WorkflowOption\[\]/);
+  assert.match(editorSource, /workflowId: workflowId \|\| null/);
+  assert.match(editorSource, /<span className="sr-only">工作流<\/span>/);
+  assert.match(detailSource, /<span className="detail-property-label">工作流<\/span>/);
+  assert.match(detailSource, /workflowId: event\.target\.value \|\| null/);
+  assert.match(detailSource, /当前设备未找到此流程/);
+});
+
 test("comments stage, upload, render and delete their own attachments", () => {
   assert.match(apiSource, /export async function uploadCommentAttachment/);
   assert.match(apiSource, /\/api\/comments\/\$\{encodeURIComponent\(commentId\)\}\/attachments/);
@@ -132,4 +173,19 @@ test("comments stage, upload, render and delete their own attachments", () => {
   assert.match(detailSource, /uploadCommentAttachment\(comment\.id, file\)/);
   assert.match(detailSource, /comment\.attachments\.map/);
   assert.match(detailSource, /setPendingAttachmentDelete\(attachment\)/);
+});
+
+test("issue creation and detail share one searchable, creatable label picker", () => {
+  assert.match(editorSource, /<LabelPicker/);
+  assert.match(detailSource, /<LabelPicker/);
+  assert.match(appSource, /<TaskDetail[\s\S]*?availableLabels=\{availableLabels\}/);
+  assert.match(detailSource, /selectedLabels=\{currentTask\.labels\}/);
+  assert.match(detailSource, /saveTask\(\{ labels: nextLabels \}, "labels"\)/);
+  assert.doesNotMatch(detailSource, /标签，以逗号分隔|function saveLabels|labels\.split/);
+  assert.match(labelPickerSource, /availableLabels\.filter/);
+  assert.match(labelPickerSource, /selectedLabels\.includes\(label\)/);
+  assert.match(labelPickerSource, /创建 “\{normalizedSearch\}”/);
+  assert.match(labelPickerSource, /labelColor\(normalizedSearch\)/);
+  assert.match(labelPickerSource, /aria-multiselectable="true"/);
+  assert.match(styles, /\.detail-label-picker \.label-popover/);
 });

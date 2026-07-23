@@ -6,6 +6,8 @@ const appSource = await readFile(new URL("../web/src/App.tsx", import.meta.url),
 const apiSource = await readFile(new URL("../web/src/api.ts", import.meta.url), "utf8");
 const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 const editorSource = await readFile(new URL("../web/src/components/TaskEditor.tsx", import.meta.url), "utf8");
+const detailSource = await readFile(new URL("../web/src/components/TaskDetail.tsx", import.meta.url), "utf8");
+const labelPickerSource = await readFile(new URL("../web/src/components/LabelPicker.tsx", import.meta.url), "utf8");
 const labelsSource = await readFile(new URL("../web/src/labels.ts", import.meta.url), "utf8");
 
 test("the project home merges live Codex projects with persisted Taskboard projects", () => {
@@ -61,11 +63,20 @@ test("the issue composer includes Linear-style labels and scheduling", () => {
   for (const label of ["缺陷", "特性", "for-claude", "hold", "改进", "phase-1", "phase-6"]) {
     assert.match(labelsSource, new RegExp(label));
   }
-  assert.match(editorSource, /创建 “\{customLabel\}”/);
+  assert.match(editorSource, /<LabelPicker/);
+  assert.match(labelPickerSource, /创建 “\{normalizedSearch\}”/);
   assert.match(editorSource, /设置截止日期/);
   assert.match(editorSource, /设置重复/);
   assert.match(editorSource, /最早截止日期/);
   assert.match(editorSource, /developmentScan\.contexts/);
+});
+
+test("the current project is shown only in navigation, not in issue creation or detail properties", () => {
+  assert.doesNotMatch(editorSource, /property-project|dialog-project-icon|project\?\.name/);
+  assert.doesNotMatch(detailSource, /detail-property-label">项目|project-property-icon|project\.name/);
+  assert.doesNotMatch(styles, /\.property-project|\.dialog-project-icon|\.project-property-icon/);
+  assert.match(appSource, /createTaskRequest\(selectedProjectId, draft\)/);
+  assert.match(appSource, /className="header-project-switcher"/);
 });
 
 test("the project header exposes real controls instead of decorative actions", () => {
@@ -96,4 +107,10 @@ test("the project home omits the navigation bar but keeps an invisible drag regi
   assert.match(appSource, /selectedProjectId \? \([\s\S]*?<header className="workspace-header"/);
   assert.match(appSource, /className="home-window-drag-region"/);
   assert.match(styles, /\.home-window-drag-region \{[\s\S]*?position: absolute;[\s\S]*?pointer-events: none/);
+});
+
+test("realtime updates remain active on the project home and reconcile after reconnecting", () => {
+  assert.match(appSource, /useEffect\(\(\) => \{\s*const source = new EventSource\("\/api\/events"\)/);
+  assert.match(appSource, /event\.type\.startsWith\("task\."\)[\s\S]*?scheduleRefresh\(\{ projects: true, tasks: affectsSelectedProject \}\)/);
+  assert.match(appSource, /source\.onopen = \(\) => \{[\s\S]*?scheduleRefresh\(\{ projects: true, tasks: Boolean\(selectedProjectId\) \}\)/);
 });

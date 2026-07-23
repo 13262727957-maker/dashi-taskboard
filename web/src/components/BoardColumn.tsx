@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DragEvent } from "react";
 import type { Task, TaskStatus } from "../types";
+import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 import { LinearIcon, LinearStatusIcon } from "./LinearIcon";
 import { TaskCard } from "./TaskCard";
 
@@ -25,7 +26,6 @@ interface BoardColumnProps {
   status: TaskStatus;
   statusIndex: number;
   tasks: Task[];
-  projectName: string;
   isDropTarget: boolean;
   draggedTaskId: string | null;
   draggedTaskHeight: number;
@@ -41,13 +41,13 @@ interface BoardColumnProps {
   onDragEnter: (status: TaskStatus) => void;
   onDrop: (status: TaskStatus, taskId: string, beforeTaskId: string | null) => void;
   onOpenThread: (threadId: string) => void;
+  onHide: (status: TaskStatus) => void;
 }
 
 export function BoardColumn({
   status,
   statusIndex,
   tasks,
-  projectName,
   isDropTarget,
   draggedTaskId,
   draggedTaskHeight,
@@ -63,6 +63,7 @@ export function BoardColumn({
   onDragEnter,
   onDrop,
   onOpenThread,
+  onHide,
 }: BoardColumnProps) {
   const details = STATUS_DETAILS[status];
   const [dropBeforeTaskId, setDropBeforeTaskId] = useState<string | null | undefined>();
@@ -134,9 +135,14 @@ export function BoardColumn({
           <span className="task-count" aria-label={`${tasks.length} 个议题`}>{tasks.length}</span>
         </div>
         <div className="column-actions">
-          <button className="icon-button column-menu" type="button" aria-label={`${details.label}选项`} title="选项">
-            <LinearIcon name="more" />
-          </button>
+          {tasks.length > 0 && (
+            <ColumnVisibilityMenu
+              label={details.label}
+              action="hide"
+              className="icon-button column-menu"
+              onAction={() => onHide(status)}
+            />
+          )}
           <button
             type="button"
             className="icon-button add-task-button"
@@ -156,7 +162,6 @@ export function BoardColumn({
             <TaskCard
               key={task.id}
               task={task}
-              projectName={projectName}
               statusIndex={statusIndex}
               isDragging={draggedTaskId === task.id}
               dragShift={dragShift}

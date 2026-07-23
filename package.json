@@ -25,6 +25,8 @@
     "check": "npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
+    "@lobehub/icons-static-svg": "^1.94.0",
+    "@xyflow/react": "^12.11.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

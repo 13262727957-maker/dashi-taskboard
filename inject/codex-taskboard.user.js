@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.6.2";
+  const VERSION = "0.6.5";
   const SENTINEL_KEY = "__codexTaskboardInjection__";
   const DEFAULT_TASKBOARD_URL = "http://127.0.0.1:47823/?host=codex";
   const ENTRY_ID = "codex-taskboard-entry";
@@ -478,6 +478,40 @@
     window.setTimeout(postHostContext, REATTACH_DELAY_MS);
   }
 
+  function userIdFromName(name) {
+    const slug = name.normalize("NFKD")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 96);
+    if (slug) return slug;
+    let hash = 2166136261;
+    for (const character of name) {
+      hash ^= character.codePointAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `codex-user-${(hash >>> 0).toString(36)}`;
+  }
+
+  function readCodexUser() {
+    const avatar = Array.from(document.querySelectorAll("img"))
+      .find((image) => image.src.includes("cdn.auth0.com/avatars/"));
+    const profileButton = avatar?.closest("button")
+      || Array.from(document.querySelectorAll('button[aria-haspopup="menu"]')).find((button) => (
+        normalizedLabel(button.getAttribute("aria-label")).includes("profile")
+        || normalizedLabel(button.getAttribute("aria-label")).includes("个人资料")
+      ));
+    const name = profileButton?.textContent?.replace(/\s+/g, " ").trim();
+    if (!name) return null;
+    const avatarUrl = avatar?.currentSrc || avatar?.src || null;
+    return {
+      type: "user",
+      id: userIdFromName(name),
+      name,
+      avatarUrl,
+    };
+  }
+
   function readHostContext(projects = readCodexProjects()) {
     const row = activeThreadRow();
     const activeThreadId = normalizeThreadId(row?.getAttribute("data-app-action-sidebar-thread-id"));
@@ -494,6 +528,7 @@
     const payload = {
       theme: currentTheme(),
       projects,
+      user: readCodexUser() ?? undefined,
       titlebarLeftInset: titlebarLeftInset(),
       sidebarCollapsed: nativeSidebarCollapsed(),
     };
@@ -585,56 +620,91 @@
     }
   }
 
-  async function waitForPreparedComposer(identifier) {
+  async function waitForPreparedComposer(identifier, skillPath) {
     const deadline = Date.now() + 8_000;
     while (Date.now() < deadline) {
       const editor = document.querySelector('[data-codex-composer="true"][contenteditable="true"]');
       if (editor && editor.getClientRects().length > 0) {
         const containsIdentifier = normalizedLabel(editor.textContent).includes(normalizedLabel(identifier));
-        if (containsIdentifier) return editor;
+        const skillMention = Array.from(editor.querySelectorAll("[skill-mention-name]"))
+          .find((mention) => (
+            mention.getAttribute("skill-mention-name") === "manage-taskboard"
+            && mention.getAttribute("skill-mention-path") === skillPath
+          ));
+        if (containsIdentifier && skillMention) return editor;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 80));
     }
-    throw new Error("Codex 对话输入框没有接受 Issue 启动指令");
+    throw new Error("Codex 对话输入框没有生成 manage-taskboard Skill 引用");
   }
 
   async function createThreadForTask(payload) {
     const taskId = typeof payload?.taskId === "string" ? payload.taskId.trim() : "";
     const identifier = typeof payload?.identifier === "string" ? payload.identifier.trim() : "";
-    const prompt = typeof payload?.prompt === "string" ? payload.prompt.trim() : "";
-    if (!taskId || !identifier || !prompt || pendingThreadCreation) return;
+    const instruction = typeof payload?.instruction === "string" ? payload.instruction.trim() : "";
+    const skillName = typeof payload?.skillName === "string" ? payload.skillName.trim() : "";
+    const skillDisplayName = typeof payload?.skillDisplayName === "string"
+      ? payload.skillDisplayName.trim()
+      : "";
+    const skillPath = typeof payload?.skillPath === "string" ? payload.skillPath.trim() : "";
+    const workspacePath = typeof payload?.workspacePath === "string"
+      ? payload.workspacePath.trim()
+      : "";
+    if (
+      !taskId
+      || !identifier
+      || !instruction
+      || !skillName
+      || !skillDisplayName
+      || !skillPath
+      || pendingThreadCreation
+    ) return;
     pendingThreadCreation = taskId;
     try {
-      await ensureProjectRows();
-      const snapshotProjectId = hostContextSnapshot?.projectId || "";
-      const requestedProjectId = typeof payload.codexProjectId === "string" ? payload.codexProjectId.trim() : "";
-      const row = projectRowByLabel(payload.workspaceLabel)
-        || projectRowById(requestedProjectId)
-        || projectRowById(snapshotProjectId)
-        || projectRowByLabel(payload.projectName);
-      if (row?.getAttribute("data-app-action-sidebar-project-collapsed") === "true") {
-        row.click?.();
-        await new Promise((resolve) => window.setTimeout(resolve, 120));
-      }
-      const selectProject = row?.querySelector("[data-app-action-sidebar-select-project]");
       const bridge = window.electronBridge;
       if (!bridge || typeof bridge.sendMessageFromView !== "function") {
         throw new Error("当前 Codex 版本没有提供原生对话导航能力");
       }
 
+      if (workspacePath) {
+        await bridge.sendMessageFromView({
+          type: "electron-set-active-workspace-root",
+          root: workspacePath,
+        });
+      } else {
+        await ensureProjectRows();
+        const snapshotProjectId = hostContextSnapshot?.projectId || "";
+        const requestedProjectId = typeof payload.codexProjectId === "string"
+          ? payload.codexProjectId.trim()
+          : "";
+        const row = projectRowByLabel(payload.workspaceLabel)
+          || projectRowById(requestedProjectId)
+          || projectRowById(snapshotProjectId)
+          || projectRowByLabel(payload.projectName);
+        if (row?.getAttribute("data-app-action-sidebar-project-collapsed") === "true") {
+          row.click?.();
+          await new Promise((resolve) => window.setTimeout(resolve, 120));
+        }
+        const selectProject = row?.querySelector("[data-app-action-sidebar-select-project]");
+        selectProject?.click?.();
+        if (selectProject) await new Promise((resolve) => window.setTimeout(resolve, 120));
+      }
+
       closeTaskboard(false);
-      selectProject?.click?.();
-      if (selectProject) await new Promise((resolve) => window.setTimeout(resolve, 120));
       await dispatchHostMessage({
         type: "navigate-to-route",
         path: "/",
         state: {
           focusComposerNonce: Date.now(),
-          prefillPrompt: prompt,
         },
       });
-      await requestHostComposerPrefill(prompt);
-      await waitForPreparedComposer(identifier);
+      await requestHostTaskComposerPrefill({
+        instruction,
+        skillDisplayName,
+        skillName,
+        skillPath,
+      });
+      await waitForPreparedComposer(identifier, skillPath);
       postToFrame({ type: "taskboard:thread-prepared", payload: { taskId } });
     } catch (error) {
       postToFrame({
@@ -888,8 +958,31 @@
     return requestHost("ensure");
   }
 
-  function requestHostComposerPrefill(prompt) {
-    return requestHost("prefill-composer", { text: prompt });
+  function requestHostTaskComposerPrefill({
+    instruction,
+    skillDisplayName,
+    skillName,
+    skillPath,
+  }) {
+    return requestHost("prefill-task-composer", {
+      instruction,
+      skillDisplayName,
+      skillName,
+      skillPath,
+    });
+  }
+
+  function frameMatchesTaskboardUrl(taskboardUrl) {
+    if (!frame) return false;
+    try {
+      const loadedUrl = new URL(frame.getAttribute("src") || frame.src);
+      loadedUrl.searchParams.delete(FRAME_REFRESH_PARAM);
+      const expectedUrl = new URL(taskboardUrl.href);
+      expectedUrl.searchParams.delete(FRAME_REFRESH_PARAM);
+      return loadedUrl.href === expectedUrl.href;
+    } catch (_) {
+      return false;
+    }
   }
 
   function onHostResponse(response) {
@@ -903,17 +996,24 @@
   }
 
   async function prepareTaskboard(generation) {
-    showLoading();
+    const taskboardUrl = resolveTaskboardUrl();
+    const canReuseFrame = Boolean(
+      frameReady
+      && frame?.isConnected
+      && frameMatchesTaskboardUrl(taskboardUrl),
+    );
+    if (canReuseFrame) showFrame();
+    else showLoading();
+
     try {
-      const taskboardUrl = resolveTaskboardUrl();
       const [result, context] = await Promise.all([
         requestHostEnsure(taskboardUrl),
         captureHostContext(),
       ]);
       if (!active || generation !== openGeneration) return;
       hostContextSnapshot = context;
-      const loadedUrl = frame?.getAttribute("src") || "";
-      if (!frameReady || result.restarted || loadedUrl !== taskboardUrl.href) {
+      if (!frameReady || result.restarted || !frameMatchesTaskboardUrl(taskboardUrl)) {
+        showLoading();
         loadTaskboardFrame();
         await waitForFrameReady();
       }

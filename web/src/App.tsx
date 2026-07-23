@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   ApiError,
   archiveTask as archiveTaskRequest,
   createProject as createProjectRequest,
   createTask as createTaskRequest,
+  getWorkflowWorkspace,
   getTaskboardMetadata,
   listDevelopmentContexts,
   listDeviceWorkspaces,
@@ -11,10 +22,13 @@ import {
   listTasks,
   moveTask as moveTaskRequest,
   restoreTask as restoreTaskRequest,
+  setCurrentUserActor,
   uploadAttachment,
   updateTask as updateTaskRequest,
 } from "./api";
 import { BoardColumn, STATUS_DETAILS } from "./components/BoardColumn";
+import { BoardSettingsMenu } from "./components/BoardSettingsMenu";
+import { HiddenColumns } from "./components/HiddenColumns";
 import { LinearIcon } from "./components/LinearIcon";
 import { TaskContextMenu } from "./components/TaskContextMenu";
 import { TaskDetail } from "./components/TaskDetail";
@@ -31,16 +45,28 @@ import {
 } from "./taskFilters";
 import {
   TASK_STATUSES,
+  type ActorIdentity,
   type DevelopmentScan,
   type HostContext,
   type Project,
   type Task,
   type TaskDraft,
   type TaskStatus,
+  type WorkflowOption,
 } from "./types";
+import {
+  DEFAULT_WORKFLOW_OPTIONS,
+  readLegacyWorkflowWorkspace,
+  workflowOptionsFromWorkspace,
+} from "./workflowStore";
 
 type ConnectionState = "connecting" | "live" | "reconnecting";
 type Theme = "light" | "dark";
+type BoardView = "issues" | "workflow";
+
+const WorkflowBoard = lazy(() => import("./components/WorkflowBoard").then((module) => ({
+  default: module.WorkflowBoard,
+})));
 
 interface EditorState {
   task: Task | null;
@@ -72,9 +98,20 @@ interface UndoNotice {
   message: string;
 }
 
+type ColumnVisibilityByProject = Record<string, Partial<Record<TaskStatus, boolean>>>;
+
+const DEFAULT_USER_ACTOR: ActorIdentity = {
+  type: "user",
+  id: "local-user",
+  name: "本地用户",
+  avatarUrl: null,
+};
+
 const LAST_PROJECT_KEY = "taskboard.lastProjectId";
 const FAVORITE_PROJECTS_KEY = "taskboard.favoriteProjectIds";
 const DEVICE_WORKSPACE_PATHS_KEY = "taskboard.deviceWorkspacePaths.v1";
+const SHOW_EMPTY_COLUMNS_KEY = "taskboard.showEmptyColumns.v1";
+const COLUMN_VISIBILITY_KEY = "taskboard.columnVisibility.v1";
 
 const EVENT_NAMES = [
   "task.created",
@@ -88,6 +125,7 @@ const EVENT_NAMES = [
   "attachment.created",
   "attachment.deleted",
   "project.created",
+  "workflow.updated",
 ] as const;
 
 function isTheme(value: unknown): value is Theme {
@@ -123,6 +161,30 @@ function readDeviceWorkspacePaths(): Record<string, string> {
   }
 }
 
+function readShowEmptyColumns(): boolean {
+  return window.localStorage.getItem(SHOW_EMPTY_COLUMNS_KEY) === "true";
+}
+
+function readColumnVisibilityByProject(): ColumnVisibilityByProject {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(COLUMN_VISIBILITY_KEY) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const result: ColumnVisibilityByProject = {};
+    for (const [projectId, visibilityValue] of Object.entries(value)) {
+      if (!visibilityValue || typeof visibilityValue !== "object" || Array.isArray(visibilityValue)) continue;
+      const visibility: Partial<Record<TaskStatus, boolean>> = {};
+      for (const status of TASK_STATUSES) {
+        const visible = (visibilityValue as Record<string, unknown>)[status];
+        if (typeof visible === "boolean") visibility[status] = visible;
+      }
+      result[projectId] = visibility;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 function workspaceName(path?: string): string | null {
   if (!path) return null;
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -148,6 +210,7 @@ function taskToDraft(task: Task): TaskDraft {
     status: task.status,
     priority: task.priority,
     labels: task.labels,
+    workflowId: task.workflowId,
     developmentContext: task.developmentContext,
     dueDate: task.dueDate,
     recurrence: task.recurrence,
@@ -174,10 +237,15 @@ export function App() {
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(readTaskFilters);
+  const [showEmptyColumns, setShowEmptyColumns] = useState(readShowEmptyColumns);
+  const [columnVisibilityByProject, setColumnVisibilityByProject] = useState(readColumnVisibilityByProject);
+  const [boardView, setBoardView] = useState<BoardView>("issues");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
   const [commentsRevision, setCommentsRevision] = useState(0);
   const [attachmentsRevision, setAttachmentsRevision] = useState(0);
+  const [workflowRevision, setWorkflowRevision] = useState(0);
+  const [workflowOptions, setWorkflowOptions] = useState<WorkflowOption[]>(DEFAULT_WORKFLOW_OPTIONS);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedTaskHeight, setDraggedTaskHeight] = useState(0);
@@ -218,6 +286,7 @@ export function App() {
   }, []);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const currentUser = hostContext?.user ?? DEFAULT_USER_ACTOR;
   const selectedDeviceWorkspacePath = deviceWorkspacePaths[selectedProjectId];
   const detailTask = detailTaskId
     ? tasks.find((task) => task.id === detailTaskId) ?? null
@@ -330,6 +399,7 @@ export function App() {
       if (message.type !== "taskboard:host-context" || !message.payload) return;
       const payload = message.payload as HostContext;
       setHostContext(payload);
+      setCurrentUserActor(payload.user);
       if (isTheme(payload.theme)) setTheme(payload.theme);
     }
 
@@ -397,6 +467,14 @@ export function App() {
     return () => controller.abort();
   }, [loadProjectList]);
 
+  const refreshProjectList = useCallback(async () => {
+    try {
+      setProjects(await listProjects());
+    } catch (error) {
+      setLoadError(errorMessage(error));
+    }
+  }, []);
+
   const refreshTasks = useCallback(async (
     projectId: string,
     options: { quiet?: boolean; signal?: AbortSignal } = {},
@@ -429,6 +507,26 @@ export function App() {
     void refreshTasks(selectedProjectId, { signal: controller.signal });
     return () => controller.abort();
   }, [refreshTasks, selectedProjectId]);
+
+  const refreshWorkflowOptions = useCallback(async (projectId: string, signal?: AbortSignal) => {
+    const record = await getWorkflowWorkspace<unknown>(projectId, signal);
+    if (!signal?.aborted) setWorkflowOptions(workflowOptionsFromWorkspace(record.workspace));
+  }, []);
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      setWorkflowOptions(DEFAULT_WORKFLOW_OPTIONS);
+      return;
+    }
+    setWorkflowOptions(workflowOptionsFromWorkspace(readLegacyWorkflowWorkspace(selectedProjectId)));
+    const controller = new AbortController();
+    void refreshWorkflowOptions(selectedProjectId, controller.signal).catch((error) => {
+      if ((error as Error).name !== "AbortError") {
+        setWorkflowOptions(workflowOptionsFromWorkspace(readLegacyWorkflowWorkspace(selectedProjectId)));
+      }
+    });
+    return () => controller.abort();
+  }, [refreshWorkflowOptions, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -470,24 +568,54 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!selectedProjectId) return;
     const source = new EventSource("/api/events");
     let refreshTimer: number | undefined;
+    let refreshProjectsPending = false;
+    let refreshTasksPending = false;
+
+    const scheduleRefresh = (options: { projects?: boolean; tasks?: boolean }) => {
+      refreshProjectsPending ||= options.projects === true;
+      refreshTasksPending ||= options.tasks === true;
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        if (refreshProjectsPending) void refreshProjectList();
+        if (refreshTasksPending && selectedProjectId) {
+          void refreshTasks(selectedProjectId, { quiet: true });
+        }
+        refreshProjectsPending = false;
+        refreshTasksPending = false;
+      }, 120);
+    };
 
     const handleEvent = (event: Event) => {
       const message = event as MessageEvent<string>;
       let payload: { projectId?: string; taskId?: string } = {};
       try {
         payload = JSON.parse(message.data) as { projectId?: string; taskId?: string };
-        if (payload.projectId && payload.projectId !== selectedProjectId) return;
       } catch {
         // A malformed event should not interrupt later updates.
+      }
+      const affectsSelectedProject = Boolean(selectedProjectId)
+        && (!payload.projectId || payload.projectId === selectedProjectId);
+      if (event.type === "project.created") {
+        scheduleRefresh({ projects: true });
+        return;
+      }
+      if (event.type.startsWith("task.")) {
+        scheduleRefresh({ projects: true, tasks: affectsSelectedProject });
+        return;
+      }
+      if (!affectsSelectedProject) return;
+      if (event.type === "workflow.updated") {
+        setWorkflowRevision((current) => current + 1);
+        if (selectedProjectId) void refreshWorkflowOptions(selectedProjectId);
+        return;
       }
       if (event.type.startsWith("comment.")) {
         if (!detailTaskId || !payload.taskId || payload.taskId === detailTaskId) {
           setCommentsRevision((current) => current + 1);
         }
-        void refreshTasks(selectedProjectId, { quiet: true });
+        scheduleRefresh({ tasks: true });
         return;
       }
       if (event.type.startsWith("attachment.")) {
@@ -497,14 +625,18 @@ export function App() {
         }
         return;
       }
-      window.clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(() => {
-        void refreshTasks(selectedProjectId, { quiet: true });
-      }, 120);
     };
 
     EVENT_NAMES.forEach((name) => source.addEventListener(name, handleEvent));
-    source.onopen = () => setConnection("live");
+    source.onopen = () => {
+      setConnection("live");
+      scheduleRefresh({ projects: true, tasks: Boolean(selectedProjectId) });
+      if (selectedProjectId) void refreshWorkflowOptions(selectedProjectId);
+      if (detailTaskId) {
+        setCommentsRevision((current) => current + 1);
+        setAttachmentsRevision((current) => current + 1);
+      }
+    };
     source.onerror = () => setConnection("reconnecting");
 
     return () => {
@@ -512,7 +644,7 @@ export function App() {
       EVENT_NAMES.forEach((name) => source.removeEventListener(name, handleEvent));
       source.close();
     };
-  }, [detailTaskId, refreshTasks, selectedProjectId]);
+  }, [detailTaskId, refreshProjectList, refreshTasks, refreshWorkflowOptions, selectedProjectId]);
 
   function pushUndo(message: string, undo: () => Promise<void>, showNotice = true) {
     const operation = { id: ++undoSequenceRef.current, message, undo };
@@ -564,11 +696,17 @@ export function App() {
         return;
       }
       if (isTyping || contextMenu || projectMenuOpen) return;
-      if (event.key.toLowerCase() === "c" && !event.metaKey && !event.ctrlKey && selectedProjectId) {
+      if (
+        event.key.toLowerCase() === "c"
+        && !event.metaKey
+        && !event.ctrlKey
+        && selectedProjectId
+        && boardView === "issues"
+      ) {
         event.preventDefault();
         setEditor({ task: null, status: "backlog" });
       }
-      if (event.key === "/" && !detailTaskId && selectedProjectId) {
+      if (event.key === "/" && !detailTaskId && selectedProjectId && boardView === "issues") {
         event.preventDefault();
         document.getElementById("task-search")?.focus();
       }
@@ -579,7 +717,7 @@ export function App() {
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [contextMenu, detailTaskId, editor, projectMenuOpen, selectedProjectId]);
+  }, [boardView, contextMenu, detailTaskId, editor, projectMenuOpen, selectedProjectId]);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter(
@@ -594,6 +732,51 @@ export function App() {
       TASK_STATUSES.map((status) => [status, filteredTasks.filter((task) => task.status === status)]),
     ) as Record<TaskStatus, Task[]>;
   }, [filteredTasks]);
+
+  const columnVisibility = columnVisibilityByProject[selectedProjectId];
+
+  const visibleStatuses = useMemo(
+    () => TASK_STATUSES.filter((status) => (
+      tasksByStatus[status].length === 0
+        ? showEmptyColumns
+        : (columnVisibility?.[status] ?? true)
+    )),
+    [columnVisibility, showEmptyColumns, tasksByStatus],
+  );
+
+  const hiddenStatuses = useMemo(
+    () => TASK_STATUSES.filter((status) => (
+      tasksByStatus[status].length === 0
+        ? !showEmptyColumns
+        : !(columnVisibility?.[status] ?? true)
+    )),
+    [columnVisibility, showEmptyColumns, tasksByStatus],
+  );
+
+  function updateShowEmptyColumns(show: boolean) {
+    window.localStorage.setItem(SHOW_EMPTY_COLUMNS_KEY, String(show));
+    setShowEmptyColumns(show);
+  }
+
+  function updateColumnVisibility(status: TaskStatus, visible: boolean) {
+    if (!selectedProjectId || tasksByStatus[status].length === 0) return;
+    setColumnVisibilityByProject((current) => {
+      const next = {
+        ...current,
+        [selectedProjectId]: {
+          ...current[selectedProjectId],
+          [status]: visible,
+        },
+      };
+      window.localStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function selectBoardView(view: BoardView) {
+    closeContextMenu();
+    setBoardView(view);
+  }
 
   async function saveEditor(draft: TaskDraft, attachments: File[]) {
     if (!selectedProjectId || !editor) return;
@@ -724,6 +907,19 @@ export function App() {
     }
   }
 
+  function finishTaskDrop(destination: TaskStatus, taskId: string, beforeTaskId: string | null = null) {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    setDraggedTaskId(null);
+    setDraggedTaskHeight(0);
+    setDropTarget(null);
+    if (!task) return;
+    setSettlingTaskId(task.id);
+    window.setTimeout(() => {
+      setSettlingTaskId((current) => current === task.id ? null : current);
+    }, 220);
+    void moveTask(task, destination, beforeTaskId, true);
+  }
+
   async function updateTaskProperties(task: Task, changes: Partial<TaskDraft>, message?: string): Promise<Task> {
     const previous = task;
     setActionError(null);
@@ -824,7 +1020,8 @@ export function App() {
       ?? selectedDeviceWorkspacePath
       ?? developmentScan.workspacePath
       ?? hostContext?.workspacePath;
-    const prompt = `[$manage-taskboard](${manageTaskboardSkillPath}) e-taskboard Addressing the issues mentioned in ${task.identifier}`;
+    const instruction = `e-taskboard Addressing the issues mentioned in ${task.identifier}`;
+    const prompt = `[$manage-taskboard](${manageTaskboardSkillPath}) ${instruction}`;
 
     if (!embedded || window.parent === window) {
       const query = new URLSearchParams();
@@ -842,7 +1039,10 @@ export function App() {
       payload: {
         taskId: task.id,
         identifier: task.identifier,
-        prompt,
+        instruction,
+        skillName: "manage-taskboard",
+        skillDisplayName: "Manage Taskboard",
+        skillPath: manageTaskboardSkillPath,
         codexProjectId: codexProject?.id ?? (selectedProject?.id === "local" ? hostContext?.projectId : selectedProject?.id),
         projectName: selectedProject?.name,
         workspacePath,
@@ -1101,23 +1301,23 @@ export function App() {
 
           <div className="header-actions">
             {selectedProjectId && (
-              <>
-                <span className={`toolbar-connection connection-${connection}`} title={connection}>
-                  <span aria-hidden="true" />
-                  <span className="sr-only">
-                    {connection === "live" ? "实时同步" : connection === "connecting" ? "正在连接" : "正在重新连接"}
-                  </span>
+              <span className={`toolbar-connection connection-${connection}`} title={connection}>
+                <span aria-hidden="true" />
+                <span className="sr-only">
+                  {connection === "live" ? "实时同步" : connection === "connecting" ? "正在连接" : "正在重新连接"}
                 </span>
-                <button
-                  className="icon-button header-create-button"
-                  type="button"
-                  onClick={() => setEditor({ task: null, status: "backlog" })}
-                  aria-label="新建议题"
-                  title="新建议题 (C)"
-                >
-                  <LinearIcon name="plus" />
-                </button>
-              </>
+              </span>
+            )}
+            {selectedProjectId && boardView === "issues" && (
+              <button
+                className="icon-button header-create-button"
+                type="button"
+                onClick={() => setEditor({ task: null, status: "backlog" })}
+                aria-label="新建议题"
+                title="新建议题 (C)"
+              >
+                <LinearIcon name="plus" />
+              </button>
             )}
           </div>
           </header>
@@ -1126,13 +1326,25 @@ export function App() {
         )}
 
         {selectedProjectId && !detailTask && <div className="board-toolbar">
-          <div className="view-tabs" aria-label="议题视图">
-            <span>活跃</span>
-            <span>积压事项</span>
-            <span className="active">所有议题 <b>{tasks.length}</b></span>
-            <span className="add-view" aria-hidden="true"><LinearIcon name="plus" /></span>
+          <div className="view-tabs" aria-label="看板视图">
+            <button
+              className={`view-tab${boardView === "issues" ? " active" : ""}`}
+              type="button"
+              aria-pressed={boardView === "issues"}
+              onClick={() => selectBoardView("issues")}
+            >
+              议题看板
+            </button>
+            <button
+              className={`view-tab${boardView === "workflow" ? " active" : ""}`}
+              type="button"
+              aria-pressed={boardView === "workflow"}
+              onClick={() => selectBoardView("workflow")}
+            >
+              流程看板
+            </button>
           </div>
-          <div className="toolbar-tools">
+          {boardView === "issues" && <div className="toolbar-tools">
             <label className={`search-field${search ? " has-value" : ""}`} title="搜索议题 (/)" >
               <LinearIcon className="search-icon" name="search" />
               <span className="sr-only">搜索议题</span>
@@ -1152,6 +1364,10 @@ export function App() {
               filters={filters}
               onChange={setFilters}
             />
+            <BoardSettingsMenu
+              showEmptyColumns={showEmptyColumns}
+              onShowEmptyColumnsChange={updateShowEmptyColumns}
+            />
             {(search || activeFilterCount > 0) && (
               <button
                 className="clear-filter"
@@ -1163,7 +1379,7 @@ export function App() {
                 <LinearIcon name="close" />
               </button>
             )}
-          </div>
+          </div>}
         </div>}
 
         {(loadError || actionError) && (
@@ -1265,7 +1481,9 @@ export function App() {
           <TaskDetail
             key={detailTask.id}
             task={detailTask}
-            project={selectedProject}
+            currentUser={currentUser}
+            availableLabels={availableLabels}
+            workflows={workflowOptions}
             developmentScan={developmentScan}
             developmentScanLoading={developmentScanLoading}
             commentsRevision={commentsRevision}
@@ -1277,6 +1495,21 @@ export function App() {
             onError={setActionError}
             onAnnounce={setAnnouncement}
           />
+        ) : boardView === "workflow" ? (
+          <Suspense fallback={<div className="workflow-board-loading">正在打开流程看板…</div>}>
+            <WorkflowBoard
+              key={selectedProject?.id ?? "local"}
+              projectId={selectedProject?.id ?? "local"}
+              projectName={selectedProject?.name ?? "当前项目"}
+              workspacePath={
+                selectedDeviceWorkspacePath
+                ?? developmentScan.workspacePath
+                ?? hostContext?.workspacePath
+              }
+              revision={workflowRevision}
+              onWorkflowsChange={setWorkflowOptions}
+            />
+          </Suspense>
         ) : tasksLoading && !hasLoadedTasks ? (
           <div className="loading-board" aria-label="Loading issues" aria-busy="true">
             {TASK_STATUSES.map((status) => (
@@ -1285,29 +1518,29 @@ export function App() {
               </div>
             ))}
           </div>
-        ) : filteredTasks.length === 0 && tasks.length > 0 ? (
-          <section className="page-empty filter-empty">
-            <span className="empty-search" aria-hidden="true"><LinearIcon name="search" /></span>
-            <h2>没有匹配的议题</h2>
-            <p>请更换搜索词，或移除一个筛选条件。</p>
-            <button
-              className="button secondary"
-              type="button"
-              onClick={() => { setSearch(""); setFilters(EMPTY_TASK_FILTERS); }}
-            >
-              清除筛选
-            </button>
-          </section>
         ) : (
           <div className="board-scroll" aria-label="Issue board">
             <div className="board">
-              {TASK_STATUSES.map((status, index) => (
+              {filteredTasks.length === 0 && tasks.length > 0 && !showEmptyColumns && (
+                <section className="page-empty filter-empty board-filter-empty">
+                  <span className="empty-search" aria-hidden="true"><LinearIcon name="search" /></span>
+                  <h2>没有匹配的议题</h2>
+                  <p>请更换搜索词，或移除一个筛选条件。</p>
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={() => { setSearch(""); setFilters(EMPTY_TASK_FILTERS); }}
+                  >
+                    清除筛选
+                  </button>
+                </section>
+              )}
+              {visibleStatuses.map((status) => (
                 <BoardColumn
                   key={status}
                   status={status}
-                  statusIndex={index}
+                  statusIndex={TASK_STATUSES.indexOf(status)}
                   tasks={tasksByStatus[status]}
-                  projectName={selectedProject?.name ?? "Workspace"}
                   isDropTarget={dropTarget === status}
                   draggedTaskId={draggedTaskId}
                   draggedTaskHeight={draggedTaskHeight}
@@ -1329,22 +1562,23 @@ export function App() {
                     setDropTarget(null);
                   }}
                   onDragEnter={setDropTarget}
-                  onDrop={(destination, taskId, beforeTaskId) => {
-                    const task = tasks.find((candidate) => candidate.id === taskId);
-                    setDraggedTaskId(null);
-                    setDraggedTaskHeight(0);
-                    setDropTarget(null);
-                    if (task) {
-                      setSettlingTaskId(task.id);
-                      window.setTimeout(() => {
-                        setSettlingTaskId((current) => current === task.id ? null : current);
-                      }, 220);
-                      void moveTask(task, destination, beforeTaskId, true);
-                    }
-                  }}
+                  onDrop={finishTaskDrop}
                   onOpenThread={openThread}
+                  onHide={(hiddenStatus) => updateColumnVisibility(hiddenStatus, false)}
                 />
               ))}
+              {hiddenStatuses.length > 0 && (
+                <HiddenColumns
+                  statuses={hiddenStatuses}
+                  counts={Object.fromEntries(
+                    TASK_STATUSES.map((status) => [status, tasksByStatus[status].length]),
+                  ) as Record<TaskStatus, number>}
+                  dropTarget={dropTarget}
+                  onDragTargetChange={setDropTarget}
+                  onDrop={(destination, taskId) => finishTaskDrop(destination, taskId)}
+                  onShow={(shownStatus) => updateColumnVisibility(shownStatus, true)}
+                />
+              )}
             </div>
           </div>
         )}
@@ -1355,8 +1589,8 @@ export function App() {
           key={editor.task?.id ?? `new-${editor.status}`}
           task={editor.task}
           initialStatus={editor.status}
-          project={selectedProject}
           labels={availableLabels}
+          workflows={workflowOptions}
           developmentScan={developmentScan}
           developmentScanLoading={developmentScanLoading}
           onCancel={() => setEditor(null)}

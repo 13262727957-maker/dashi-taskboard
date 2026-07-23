@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -18,11 +18,11 @@ afterEach(async () => {
   }
 });
 
-async function startServer(configure) {
+async function startServer(configure, listenOptions = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "codex-taskboard-test-"));
   const options = configure ? await configure(directory) : {};
   const app = createTaskboardServer({ dataDirectory: directory, ...options });
-  const address = await app.listen({ port: 0 });
+  const address = await app.listen({ port: 0, ...listenOptions });
   runningApps.push({ app, directory });
   return `http://127.0.0.1:${address.port}`;
 }
@@ -84,6 +84,156 @@ test("health and the default local project are available", async () => {
   assert.equal(result.body.projects[0].name, "Local");
   assert.equal(result.body.projects[0].workspacePath, null);
   assert.equal(result.body.projects[0].issueCount, 0);
+});
+
+test("workflow workspaces persist centrally with optimistic concurrency", async () => {
+  const baseUrl = await startServer();
+  const initial = await request(baseUrl, "/api/projects/local/workflow-workspace");
+  assert.deepEqual(initial.body.workflow, {
+    projectId: "local",
+    workspace: null,
+    version: 0,
+    updatedAt: null,
+  });
+
+  const workspace = {
+    version: 1,
+    tabs: [{ id: "issue-delivery", name: "议题处理与交付" }],
+    activeWorkflowId: "issue-delivery",
+    snapshots: {
+      "issue-delivery": {
+        nodes: [{ id: "issue-trigger", position: { x: 100, y: 80 }, data: { kind: "issue-trigger" } }],
+        edges: [],
+        selectedNodeId: "issue-trigger",
+      },
+    },
+  };
+  const created = await request(baseUrl, "/api/projects/local/workflow-workspace", {
+    method: "PUT",
+    body: { version: 0, workspace },
+  });
+  assert.equal(created.response.status, 200);
+  assert.equal(created.body.workflow.version, 1);
+  assert.deepEqual(created.body.workflow.workspace, workspace);
+
+  const fromAnotherClient = await request(baseUrl, "/api/projects/local/workflow-workspace");
+  assert.equal(fromAnotherClient.body.workflow.version, 1);
+  assert.deepEqual(fromAnotherClient.body.workflow.workspace, workspace);
+
+  const renamedWorkspace = {
+    ...workspace,
+    tabs: [{ id: "issue-delivery", name: "统一交付流程" }],
+  };
+  const updated = await request(baseUrl, "/api/projects/local/workflow-workspace", {
+    method: "PUT",
+    body: { version: 1, workspace: renamedWorkspace },
+  });
+  assert.equal(updated.response.status, 200);
+  assert.equal(updated.body.workflow.version, 2);
+
+  const stale = await request(baseUrl, "/api/projects/local/workflow-workspace", {
+    method: "PUT",
+    body: { version: 1, workspace },
+  });
+  assert.equal(stale.response.status, 409);
+  assert.equal(stale.body.error.code, "VERSION_CONFLICT");
+  assert.deepEqual(stale.body.error.details, {
+    expectedVersion: 1,
+    actualVersion: 2,
+  });
+});
+
+test("workflow workspace changes are broadcast to other open clients", async () => {
+  const baseUrl = await startServer();
+  const eventResponse = await fetch(`${baseUrl}/api/events`);
+  const reader = eventResponse.body.getReader();
+  const decoder = new TextDecoder();
+  await reader.read();
+
+  const workspace = {
+    version: 1,
+    tabs: [{ id: "issue-delivery", name: "议题处理与交付" }],
+    activeWorkflowId: "issue-delivery",
+    snapshots: {
+      "issue-delivery": { nodes: [], edges: [], selectedNodeId: null },
+    },
+  };
+  const saved = await request(baseUrl, "/api/projects/local/workflow-workspace", {
+    method: "PUT",
+    body: { version: 0, workspace },
+  });
+  assert.equal(saved.response.status, 200);
+
+  let message = "";
+  while (!message.includes("\n\n")) {
+    const chunk = await reader.read();
+    assert.equal(chunk.done, false);
+    message += decoder.decode(chunk.value, { stream: true });
+  }
+  assert.match(message, /event: workflow\.updated/);
+  const dataLine = message.split("\n").find((line) => line.startsWith("data: "));
+  const event = JSON.parse(dataLine.slice(6));
+  assert.equal(event.type, "workflow.updated");
+  assert.equal(event.projectId, "local");
+  assert.equal(event.workflowVersion, 1);
+  await reader.cancel();
+});
+
+test("workflow capabilities come from the live Codex skill and MCP catalogs", async () => {
+  let workspacePath;
+  const baseUrl = await startServer(async (directory) => {
+    workspacePath = directory;
+    const codexExecutable = path.join(directory, "fake-codex");
+    await writeFile(codexExecutable, `#!/bin/sh
+if [ "$1" = "mcp" ]; then
+  printf '%s\\n' '[{"name":"context7","enabled":true,"transport":{"type":"streamable_http"}},{"name":"disabled-server","enabled":false,"transport":{"type":"stdio"}}]'
+  exit 0
+fi
+while IFS= read -r line; do
+  case "$line" in
+    *'"id":1'*) printf '%s\\n' '{"id":1,"result":{"platformFamily":"unix"}}' ;;
+    *'"id":2'*) printf '%s\\n' '{"id":2,"result":{"data":[{"cwd":"workspace","skills":[{"name":"user-skill","enabled":true,"scope":"user","interface":null},{"name":"repo-skill","enabled":true,"scope":"repo","interface":{"displayName":"Repository Skill"}},{"name":"user-skill","enabled":true,"scope":"system","interface":{"displayName":"Duplicate"}},{"name":"disabled-skill","enabled":false,"scope":"user","interface":null}],"errors":[]}]}}' ;;
+  esac
+done
+`);
+    await chmod(codexExecutable, 0o755);
+    return { codexExecutable };
+  });
+
+  const result = await request(
+    baseUrl,
+    `/api/workflow-capabilities?workspacePath=${encodeURIComponent(workspacePath)}`,
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(result.body, {
+    skills: [
+      { id: "repo-skill", label: "Repository Skill", scope: "repo" },
+      { id: "user-skill", label: "user-skill", scope: "user" },
+    ],
+    mcpServers: [
+      { id: "context7", label: "context7", transport: "streamable_http" },
+    ],
+  });
+
+  const invalidPath = await request(baseUrl, "/api/workflow-capabilities?workspacePath=relative");
+  assert.equal(invalidPath.response.status, 400);
+  assert.equal(invalidPath.body.error.code, "INVALID_FIELD");
+
+  const unknownQuery = await request(baseUrl, "/api/workflow-capabilities?extra=true");
+  assert.equal(unknownQuery.response.status, 400);
+  assert.equal(unknownQuery.body.error.code, "UNKNOWN_QUERY_PARAMETER");
+
+  const wrongMethod = await request(baseUrl, "/api/workflow-capabilities", { method: "POST" });
+  assert.equal(wrongMethod.response.status, 405);
+});
+
+test("workflow capability discovery fails instead of inventing fallback options", async () => {
+  const baseUrl = await startServer(async (directory) => ({
+    codexExecutable: path.join(directory, "missing-codex"),
+  }));
+  const result = await request(baseUrl, "/api/workflow-capabilities");
+  assert.equal(result.response.status, 500);
+  assert.equal(result.body.error.code, "INTERNAL_ERROR");
 });
 
 test("existing task and comment thread attribution remains content-specific", async () => {
@@ -162,16 +312,24 @@ test("existing task and comment thread attribution remains content-specific", as
   const result = await request(baseUrl, "/api/tasks/legacy-task");
   assert.equal(result.response.status, 200);
   assert.equal(result.body.task.threadId, "legacy-thread");
+  assert.equal(result.body.task.creatorType, "agent");
+  assert.equal(result.body.task.creatorId, "codex-agent");
+  assert.equal(result.body.task.creatorName, "Codex Agent");
   assert.equal(Object.hasOwn(result.body.task, "linkedThreadId"), false);
   const columns = runningApps.at(-1).app.database.database.prepare("PRAGMA table_info(tasks)").all();
   assert.equal(columns.some((column) => column.name === "thread_id"), true);
+  assert.equal(columns.some((column) => column.name === "workflow_id"), true);
   assert.equal(columns.some((column) => column.name === "linked_thread_id"), false);
+  assert.equal(result.body.task.workflowId, null);
   const taskThreads = runningApps.at(-1).app.database.database.prepare(`
     SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'task_threads'
   `).get();
   assert.equal(taskThreads, undefined);
   const comments = await request(baseUrl, "/api/tasks/legacy-task/comments");
   assert.equal(comments.body.comments[0].threadId, "legacy-comment-thread");
+  assert.equal(comments.body.comments[0].authorType, "agent");
+  assert.equal(comments.body.comments[0].authorId, "codex-agent");
+  assert.equal(comments.body.comments[0].authorName, "Codex Agent");
   assert.deepEqual(comments.body.comments[0].attachments, []);
   const attachments = await request(baseUrl, "/api/tasks/legacy-task/attachments");
   assert.equal(attachments.body.attachments[0].commentId, null);
@@ -329,13 +487,24 @@ test("device workspaces come from this machine's Codex project roots", async () 
   });
 });
 
-test("rejects non-loopback Host and Origin headers", async () => {
-  const baseUrl = await startServer();
+test("accepts private LAN requests and rejects public Host and Origin headers", async () => {
+  const baseUrl = await startServer(undefined, { host: "0.0.0.0" });
 
   const codexOriginResult = await request(baseUrl, "/health", {
     headers: { origin: "app://-" },
   });
   assert.equal(codexOriginResult.response.status, 200);
+
+  const lanHostResult = await requestWithHost(baseUrl, "192.168.1.24:47823");
+  assert.equal(lanHostResult.status, 200);
+
+  const lanOriginResult = await request(baseUrl, "/health", {
+    headers: { origin: "http://192.168.1.24:47823" },
+  });
+  assert.equal(lanOriginResult.response.status, 200);
+
+  const localHostnameResult = await requestWithHost(baseUrl, "taskboard.local:47823");
+  assert.equal(localHostnameResult.status, 200);
 
   const hostResult = await requestWithHost(baseUrl, "taskboard.example.com");
   assert.equal(hostResult.status, 403);
@@ -386,6 +555,10 @@ test("project and task CRUD flow", async () => {
   assert.equal(created.archivedAt, null);
   assert.deepEqual(created.labels, ["frontend", "mvp"]);
   assert.equal(created.threadId, "thread-123");
+  assert.equal(created.creatorType, "user");
+  assert.equal(created.creatorId, "local-user");
+  assert.equal(created.creatorName, "本地用户");
+  assert.equal(created.creatorAvatarUrl, null);
   assert.deepEqual(created.developmentContext, {
     type: "worktree",
     path: "/work/website/.worktrees/taskboard",
@@ -475,6 +648,49 @@ test("moving a task updates its status and sort order", async () => {
   assert.equal(moveResult.body.task.sortOrder, 2500.5);
   assert.equal(moveResult.body.task.threadId, "thread-move");
   assert.equal(moveResult.body.task.version, 2);
+});
+
+test("tasks can bind, change, and unbind one project workflow", async () => {
+  const baseUrl = await startServer();
+  const createResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: {
+      title: "Bind workflow",
+      workflowId: "issue-delivery",
+    },
+  });
+  assert.equal(createResult.response.status, 201);
+  assert.equal(createResult.body.task.workflowId, "issue-delivery");
+
+  const changedResult = await request(baseUrl, `/api/tasks/${createResult.body.task.id}`, {
+    method: "PATCH",
+    body: {
+      version: createResult.body.task.version,
+      workflowId: "workflow-123",
+    },
+  });
+  assert.equal(changedResult.response.status, 200);
+  assert.equal(changedResult.body.task.workflowId, "workflow-123");
+
+  const unboundResult = await request(baseUrl, `/api/tasks/${createResult.body.task.id}`, {
+    method: "PATCH",
+    body: {
+      version: changedResult.body.task.version,
+      workflowId: null,
+    },
+  });
+  assert.equal(unboundResult.response.status, 200);
+  assert.equal(unboundResult.body.task.workflowId, null);
+
+  const invalidResult = await request(baseUrl, `/api/tasks/${createResult.body.task.id}`, {
+    method: "PATCH",
+    body: {
+      version: unboundResult.body.task.version,
+      workflowId: " ",
+    },
+  });
+  assert.equal(invalidResult.response.status, 400);
+  assert.equal(invalidResult.body.error.code, "INVALID_FIELD");
 });
 
 test("all task statuses are accepted, filtered, and listed in workflow order", async () => {
@@ -584,7 +800,8 @@ test("issue comments can be created, edited, listed, and deleted", async () => {
   assert.equal(comment.body, "First comment");
   assert.equal(comment.threadId, "thread-comment-create");
   assert.deepEqual(comment.attachments, []);
-  assert.equal(comment.authorId, "local");
+  assert.equal(comment.authorType, "user");
+  assert.equal(comment.authorId, "local-user");
   assert.equal(comment.authorName, "本地用户");
   assert.equal(comment.version, 1);
 
@@ -621,6 +838,72 @@ test("issue comments can be created, edited, listed, and deleted", async () => {
   assert.deepEqual(finalList.body.comments, []);
   const taskAfterDelete = await request(baseUrl, `/api/tasks/${task.id}`);
   assert.equal(taskAfterDelete.body.task.threadId, null);
+});
+
+test("taskctl issue creation and comments use the Codex Agent identity", async () => {
+  const baseUrl = await startServer();
+  const agentHeaders = {
+    "x-taskboard-client": "taskctl",
+    "x-taskboard-user-id": "spoofed-user",
+    "x-taskboard-user-name": "Spoofed User",
+    "x-taskboard-user-avatar": "https://example.com/spoofed.png",
+  };
+  const createTaskResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    headers: agentHeaders,
+    body: { title: "Created by Codex", threadId: "thread-agent-create" },
+  });
+  assert.equal(createTaskResult.response.status, 201);
+  const task = createTaskResult.body.task;
+  assert.equal(task.creatorType, "agent");
+  assert.equal(task.creatorId, "codex-agent");
+  assert.equal(task.creatorName, "Codex Agent");
+  assert.equal(task.creatorAvatarUrl, null);
+
+  const createCommentResult = await request(baseUrl, `/api/tasks/${task.id}/comments`, {
+    method: "POST",
+    headers: agentHeaders,
+    body: { body: "Implemented by Codex", threadId: "thread-agent-comment" },
+  });
+  assert.equal(createCommentResult.response.status, 201);
+  const comment = createCommentResult.body.comment;
+  assert.equal(comment.authorType, "agent");
+  assert.equal(comment.authorId, "codex-agent");
+  assert.equal(comment.authorName, "Codex Agent");
+  assert.equal(comment.authorAvatarUrl, null);
+  assert.equal(comment.threadId, "thread-agent-comment");
+});
+
+test("Codex-hosted user mutations persist the current account identity and avatar", async () => {
+  const baseUrl = await startServer();
+  const userHeaders = {
+    "x-taskboard-user-id": "jadon-bao",
+    "x-taskboard-user-name": "jadon%20bao",
+    "x-taskboard-user-avatar": "https://cdn.auth0.com/avatars/jb.png",
+  };
+  const createTaskResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    headers: userHeaders,
+    body: { title: "Created in Codex UI" },
+  });
+  assert.equal(createTaskResult.response.status, 201);
+  const task = createTaskResult.body.task;
+  assert.equal(task.creatorType, "user");
+  assert.equal(task.creatorId, "jadon-bao");
+  assert.equal(task.creatorName, "jadon bao");
+  assert.equal(task.creatorAvatarUrl, "https://cdn.auth0.com/avatars/jb.png");
+
+  const createCommentResult = await request(baseUrl, `/api/tasks/${task.id}/comments`, {
+    method: "POST",
+    headers: userHeaders,
+    body: { body: "Commented in Codex UI" },
+  });
+  assert.equal(createCommentResult.response.status, 201);
+  const comment = createCommentResult.body.comment;
+  assert.equal(comment.authorType, "user");
+  assert.equal(comment.authorId, "jadon-bao");
+  assert.equal(comment.authorName, "jadon bao");
+  assert.equal(comment.authorAvatarUrl, "https://cdn.auth0.com/avatars/jb.png");
 });
 
 test("issue attachments can be uploaded, listed, opened, downloaded, and deleted", async () => {
@@ -793,9 +1076,13 @@ test("request boundaries reject unknown fields and invalid values", async () => 
   assert.equal(invalidWorktree.body.error.code, "INVALID_FIELD");
 });
 
-test("task changes are broadcast over server-sent events", async () => {
-  const baseUrl = await startServer();
-  const eventResponse = await fetch(`${baseUrl}/api/events`);
+test("task changes from one LAN client are broadcast to another client", async () => {
+  const baseUrl = await startServer(undefined, { host: "0.0.0.0" });
+  const lanHeaders = {
+    host: "192.168.1.24:47823",
+    origin: "http://192.168.1.24:47823",
+  };
+  const eventResponse = await fetch(`${baseUrl}/api/events`, { headers: lanHeaders });
   assert.equal(eventResponse.status, 200);
   const reader = eventResponse.body.getReader();
   const decoder = new TextDecoder();
@@ -803,6 +1090,7 @@ test("task changes are broadcast over server-sent events", async () => {
 
   const createResult = await request(baseUrl, "/api/tasks", {
     method: "POST",
+    headers: lanHeaders,
     body: { title: "Broadcast me" },
   });
   assert.equal(createResult.response.status, 201);
@@ -818,5 +1106,11 @@ test("task changes are broadcast over server-sent events", async () => {
   const event = JSON.parse(dataLine.slice(6));
   assert.equal(event.type, "task.created");
   assert.equal(event.task.id, createResult.body.task.id);
+
+  const listResult = await request(baseUrl, "/api/tasks?projectId=local", {
+    headers: lanHeaders,
+  });
+  assert.equal(listResult.response.status, 200);
+  assert.equal(listResult.body.tasks.some((task) => task.id === createResult.body.task.id), true);
   await reader.cancel();
 });

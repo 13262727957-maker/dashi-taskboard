@@ -11,6 +11,14 @@ export const TASK_PRIORITIES = ["none", "urgent", "high", "medium", "low"] as co
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+export type ActorType = "user" | "agent";
+
+export interface ActorIdentity {
+  type: ActorType;
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+}
 
 export type DevelopmentContext =
   | { type: "branch"; branch: string }
@@ -28,6 +36,35 @@ export interface DevelopmentScan {
 
 export interface TaskboardMetadata {
   manageTaskboardSkillPath: string;
+}
+
+export interface WorkflowCapabilityOption {
+  id: string;
+  label: string;
+  scope: "user" | "repo" | "system" | "admin";
+}
+
+export interface WorkflowMcpServerOption {
+  id: string;
+  label: string;
+  transport: string;
+}
+
+export interface WorkflowCapabilities {
+  skills: WorkflowCapabilityOption[];
+  mcpServers: WorkflowMcpServerOption[];
+}
+
+export interface WorkflowOption {
+  id: string;
+  name: string;
+}
+
+export interface WorkflowWorkspaceRecord<T = unknown> {
+  projectId: string;
+  workspace: T | null;
+  version: number;
+  updatedAt: string | null;
 }
 
 export interface Project {
@@ -50,6 +87,11 @@ export interface Task {
   labels: string[];
   sortOrder: number;
   threadId: string | null;
+  creatorType: ActorType;
+  creatorId: string;
+  creatorName: string;
+  creatorAvatarUrl: string | null;
+  workflowId: string | null;
   developmentContext: DevelopmentContext | null;
   dueDate: string | null;
   recurrence: Recurrence | null;
@@ -63,8 +105,10 @@ export interface Comment {
   id: string;
   taskId: string;
   body: string;
+  authorType: ActorType;
   authorId: string;
   authorName: string;
+  authorAvatarUrl: string | null;
   threadId: string | null;
   attachments: Attachment[];
   version: number;
@@ -83,6 +127,7 @@ export interface Attachment {
 }
 
 export interface HostContext {
+  user?: ActorIdentity;
   workspacePath?: string;
   threadId?: string;
   theme?: "light" | "dark";
@@ -98,6 +143,7 @@ export interface TaskDraft {
   status: TaskStatus;
   priority: TaskPriority;
   labels: string[];
+  workflowId: string | null;
   developmentContext: DevelopmentContext | null;
   dueDate: string | null;
   recurrence: Recurrence | null;

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +30,6 @@ const INLINE_ATTACHMENT_TYPES = new Set([
   "text/plain",
 ]);
 const PROJECT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 const TRUSTED_EMBED_ORIGINS = new Set(["app://-"]);
 const CONTENT_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -63,15 +63,38 @@ function sendEmpty(response, status, headers = {}) {
   response.end();
 }
 
-function assertLoopbackRequest(request) {
+function normalizeHostname(hostname) {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function isTrustedNetworkHost(hostname) {
+  const host = normalizeHostname(hostname);
+  if (host === "localhost" || host === "::1" || host.endsWith(".local")) return true;
+  if (isIP(host) === 4) {
+    const octets = host.split(".").map(Number);
+    return octets[0] === 127
+      || octets[0] === 10
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+      || (octets[0] === 169 && octets[1] === 254);
+  }
+  if (isIP(host) === 6) {
+    return host.startsWith("fc")
+      || host.startsWith("fd")
+      || /^fe[89ab]/.test(host);
+  }
+  return false;
+}
+
+function assertTrustedNetworkRequest(request) {
   let host;
   try {
     host = new URL(`http://${request.headers.host ?? ""}`).hostname;
   } catch {
-    throw new ApiError(403, "INVALID_HOST", "Request Host must be loopback");
+    throw new ApiError(403, "INVALID_HOST", "Request Host must be local or private");
   }
-  if (!LOOPBACK_HOSTS.has(host)) {
-    throw new ApiError(403, "INVALID_HOST", "Request Host must be loopback");
+  if (!isTrustedNetworkHost(host)) {
+    throw new ApiError(403, "INVALID_HOST", "Request Host must be local or private");
   }
 
   const origin = request.headers.origin;
@@ -81,10 +104,10 @@ function assertLoopbackRequest(request) {
   try {
     originHost = new URL(origin).hostname;
   } catch {
-    throw new ApiError(403, "INVALID_ORIGIN", "Request Origin must be loopback");
+    throw new ApiError(403, "INVALID_ORIGIN", "Request Origin must be local or private");
   }
-  if (!LOOPBACK_HOSTS.has(originHost)) {
-    throw new ApiError(403, "INVALID_ORIGIN", "Request Origin must be loopback");
+  if (!isTrustedNetworkHost(originHost)) {
+    throw new ApiError(403, "INVALID_ORIGIN", "Request Origin must be local or private");
   }
 }
 
@@ -188,6 +211,75 @@ function parseVersion(value) {
   return value;
 }
 
+function parseWorkflowVersion(value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new ApiError(400, "INVALID_FIELD", "'version' must be a non-negative integer");
+  }
+  return value;
+}
+
+function parseWorkflowWorkspace(value) {
+  assertPlainObject(value);
+  assertAllowedKeys(value, new Set(["version", "tabs", "activeWorkflowId", "snapshots"]));
+  if (value.version !== 1) {
+    throw new ApiError(400, "INVALID_FIELD", "'workspace.version' must be 1");
+  }
+  if (!Array.isArray(value.tabs) || value.tabs.length === 0 || value.tabs.length > 100) {
+    throw new ApiError(400, "INVALID_FIELD", "'workspace.tabs' must contain 1 to 100 workflows");
+  }
+  const tabs = value.tabs.map((tab, index) => {
+    assertPlainObject(tab);
+    assertAllowedKeys(tab, new Set(["id", "name"]));
+    return {
+      id: stringField(tab.id, `workspace.tabs[${index}].id`, { required: true, maxLength: 128 }),
+      name: stringField(tab.name, `workspace.tabs[${index}].name`, { required: true, maxLength: 120 }),
+    };
+  });
+  if (new Set(tabs.map((tab) => tab.id)).size !== tabs.length) {
+    throw new ApiError(400, "INVALID_FIELD", "'workspace.tabs' ids must be unique");
+  }
+  const activeWorkflowId = stringField(value.activeWorkflowId, "workspace.activeWorkflowId", {
+    required: true,
+    maxLength: 128,
+  });
+  if (!tabs.some((tab) => tab.id === activeWorkflowId)) {
+    throw new ApiError(400, "INVALID_FIELD", "'workspace.activeWorkflowId' must reference a workflow tab");
+  }
+  assertPlainObject(value.snapshots);
+  const snapshots = {};
+  for (const tab of tabs) {
+    const snapshot = value.snapshots[tab.id];
+    assertPlainObject(snapshot);
+    assertAllowedKeys(snapshot, new Set(["nodes", "edges", "selectedNodeId"]));
+    if (!Array.isArray(snapshot.nodes) || snapshot.nodes.length > 10_000) {
+      throw new ApiError(400, "INVALID_FIELD", `'workspace.snapshots.${tab.id}.nodes' must be an array`);
+    }
+    if (!Array.isArray(snapshot.edges) || snapshot.edges.length > 20_000) {
+      throw new ApiError(400, "INVALID_FIELD", `'workspace.snapshots.${tab.id}.edges' must be an array`);
+    }
+    const selectedNodeId = stringField(
+      snapshot.selectedNodeId ?? null,
+      `workspace.snapshots.${tab.id}.selectedNodeId`,
+      { nullable: true, maxLength: 256 },
+    );
+    snapshots[tab.id] = {
+      nodes: snapshot.nodes,
+      edges: snapshot.edges,
+      selectedNodeId,
+    };
+  }
+  return { version: 1, tabs, activeWorkflowId, snapshots };
+}
+
+function parseWorkflowWorkspaceSave(body) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, new Set(["version", "workspace"]));
+  return {
+    version: parseWorkflowVersion(body.version),
+    workspace: parseWorkflowWorkspace(body.workspace),
+  };
+}
+
 function parseSortOrder(value) {
   if (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value) > 1_000_000_000_000) {
     throw new ApiError(400, "INVALID_FIELD", "'sortOrder' must be a finite number between -1000000000000 and 1000000000000");
@@ -266,11 +358,68 @@ function parseThreadId(value) {
   return stringField(value, "threadId", { required: true, maxLength: 256 });
 }
 
+function requestHeader(request, name) {
+  const value = request.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function actorFromRequest(request) {
+  if (request.headers["x-taskboard-client"] === "taskctl") {
+    return { type: "agent", id: "codex-agent", name: "Codex Agent", avatarUrl: null };
+  }
+
+  const rawId = requestHeader(request, "x-taskboard-user-id");
+  const rawName = requestHeader(request, "x-taskboard-user-name");
+  const rawAvatarUrl = requestHeader(request, "x-taskboard-user-avatar");
+  if (rawId === undefined && rawName === undefined && rawAvatarUrl === undefined) {
+    return { type: "user", id: "local-user", name: "本地用户", avatarUrl: null };
+  }
+  if (rawId === undefined || rawName === undefined) {
+    throw new ApiError(400, "INVALID_ACTOR", "User identity requires both an ID and name");
+  }
+
+  const id = stringField(rawId, "X-Taskboard-User-Id", { required: true, maxLength: 96 });
+  if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(id)) {
+    throw new ApiError(400, "INVALID_ACTOR", "User ID contains unsupported characters");
+  }
+  let decodedName;
+  try {
+    decodedName = decodeURIComponent(rawName);
+  } catch {
+    throw new ApiError(400, "INVALID_ACTOR", "User name is not valid URL-encoded text");
+  }
+  const name = stringField(decodedName, "X-Taskboard-User-Name", { required: true, maxLength: 120 });
+
+  let avatarUrl = null;
+  if (rawAvatarUrl !== undefined) {
+    const value = stringField(rawAvatarUrl, "X-Taskboard-User-Avatar", { required: true, maxLength: 2048 });
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new ApiError(400, "INVALID_ACTOR", "User avatar URL is invalid");
+    }
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new ApiError(400, "INVALID_ACTOR", "User avatar URL must use HTTP or HTTPS");
+    }
+    avatarUrl = parsed.toString();
+  }
+  return { type: "user", id, name, avatarUrl };
+}
+
+function parseWorkflowId(value) {
+  const workflowId = stringField(value, "workflowId", { nullable: true, maxLength: 128 });
+  if (workflowId === "") {
+    throw new ApiError(400, "INVALID_FIELD", "'workflowId' cannot be empty");
+  }
+  return workflowId;
+}
+
 function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId",
-    "developmentContext", "dueDate", "recurrence",
+    "workflowId", "developmentContext", "dueDate", "recurrence",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -282,6 +431,7 @@ function parseTaskCreate(body) {
     labels: body.labels === undefined ? [] : parseLabels(body.labels),
     sortOrder: body.sortOrder === undefined ? undefined : parseSortOrder(body.sortOrder),
     threadId: parseThreadId(body.threadId),
+    workflowId: parseWorkflowId(body.workflowId ?? null),
     developmentContext: parseDevelopmentContext(body.developmentContext ?? null),
     dueDate: parseDueDate(body.dueDate ?? null),
     recurrence: parseRecurrence(body.recurrence ?? null),
@@ -296,7 +446,7 @@ function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "version", "title", "description", "status", "priority", "labels", "threadId",
-    "developmentContext", "dueDate", "recurrence",
+    "workflowId", "developmentContext", "dueDate", "recurrence",
   ]));
   const version = parseVersion(body.version);
   const threadId = parseThreadId(body.threadId);
@@ -306,6 +456,7 @@ function parseTaskPatch(body) {
   if (body.status !== undefined) changes.status = parseStatus(body.status);
   if (body.priority !== undefined) changes.priority = parsePriority(body.priority);
   if (body.labels !== undefined) changes.labels = parseLabels(body.labels);
+  if (body.workflowId !== undefined) changes.workflowId = parseWorkflowId(body.workflowId);
   if (body.developmentContext !== undefined) changes.developmentContext = parseDevelopmentContext(body.developmentContext);
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
   if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);
@@ -471,7 +622,7 @@ class EventHub {
   emit(type, value) {
     const event = {
       type,
-      projectId: value.project?.id ?? value.task?.projectId,
+      projectId: value.projectId ?? value.project?.id ?? value.task?.projectId,
       taskId: value.task?.id ?? value.comment?.taskId ?? value.attachment?.taskId,
       ...value,
       at: new Date().toISOString(),
@@ -641,21 +792,168 @@ async function scanDevelopmentContexts(workspacePath) {
   }
 }
 
+async function discoverSkills(codexExecutable, workspacePath) {
+  const entries = await new Promise((resolve, reject) => {
+    const child = spawn(codexExecutable, ["app-server", "--stdio"], {
+      cwd: workspacePath,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    let settled = false;
+    let buffer = "";
+    const timeout = setTimeout(() => {
+      finish(new Error("Timed out while reading Codex skills"));
+    }, 10_000);
+
+    function finish(error, value) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.stdin.end();
+      child.kill("SIGTERM");
+      if (error) reject(error);
+      else resolve(value);
+    }
+
+    function send(message) {
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    }
+
+    function handleMessage(message) {
+      if (message?.id === 1) {
+        if (message.error) {
+          finish(new Error("Codex app-server rejected initialization"));
+          return;
+        }
+        send({ method: "initialized" });
+        send({
+          id: 2,
+          method: "skills/list",
+          params: { cwds: [workspacePath], forceReload: false },
+        });
+        return;
+      }
+      if (message?.id !== 2) return;
+      if (message.error) {
+        finish(new Error("Codex app-server could not list skills"));
+        return;
+      }
+      finish(null, Array.isArray(message.result?.data) ? message.result.data : []);
+    }
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      buffer += chunk;
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line) {
+          try {
+            handleMessage(JSON.parse(line));
+          } catch {}
+        }
+        newlineIndex = buffer.indexOf("\n");
+      }
+    });
+    child.stdin.on("error", (error) => finish(error));
+    child.once("error", (error) => finish(error));
+    child.once("exit", (code, signal) => {
+      if (!settled) {
+        finish(new Error(`Codex app-server exited before listing skills (${signal || code})`));
+      }
+    });
+    child.once("spawn", () => {
+      send({
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: { name: "codex-taskboard", version: "0.1.0" },
+          capabilities: { experimentalApi: true },
+        },
+      });
+    });
+  });
+
+  const unique = new Map();
+  for (const entry of entries) {
+    if (!Array.isArray(entry?.skills)) continue;
+    for (const skill of entry.skills) {
+      if (
+        !skill
+        || typeof skill !== "object"
+        || skill.enabled === false
+        || typeof skill.name !== "string"
+        || !skill.name.trim()
+      ) {
+        continue;
+      }
+      const id = skill.name.trim();
+      if (unique.has(id)) continue;
+      const displayName = typeof skill.interface?.displayName === "string"
+        ? skill.interface.displayName.trim()
+        : "";
+      unique.set(id, {
+        id,
+        label: displayName || id,
+        scope: ["user", "repo", "system", "admin"].includes(skill.scope)
+          ? skill.scope
+          : "user",
+      });
+    }
+  }
+  return [...unique.values()].sort((left, right) => left.label.localeCompare(right.label));
+}
+
+async function discoverMcpServers(codexExecutable) {
+  const result = await execFileAsync(codexExecutable, ["mcp", "list", "--json"], {
+    timeout: 8_000,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  const entries = JSON.parse(result.stdout);
+  if (!Array.isArray(entries)) throw new Error("Codex returned an invalid MCP server list");
+  return entries
+    .filter((entry) => (
+      entry
+      && typeof entry === "object"
+      && typeof entry.name === "string"
+      && entry.name.trim()
+      && entry.enabled !== false
+    ))
+    .map((entry) => ({
+      id: entry.name.trim(),
+      label: entry.name.trim(),
+      transport: typeof entry.transport?.type === "string"
+        ? entry.transport.type
+        : "unknown",
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+async function discoverWorkflowCapabilities(resolved, workspacePath) {
+  const [skills, mcpServers] = await Promise.all([
+    discoverSkills(resolved.codexExecutable, workspacePath),
+    discoverMcpServers(resolved.codexExecutable),
+  ]);
+  return { skills, mcpServers };
+}
+
 export function resolveServerOptions(options = {}) {
   const configuredDataDirectory = options.dataDirectory ?? process.env.CODEX_TASKBOARD_DATA_DIR;
   const dataDirectory = configuredDataDirectory
     ? path.resolve(configuredDataDirectory)
     : path.join(PROJECT_ROOT, ".data");
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   return {
     dataDirectory,
     databasePath: options.databasePath ?? path.join(dataDirectory, "taskboard.sqlite"),
     attachmentsDirectory: options.attachmentsDirectory ?? path.join(dataDirectory, "attachments"),
     staticDirectory: options.staticDirectory ?? path.join(PROJECT_ROOT, "dist", "web"),
     skillPath: options.skillPath ?? path.join(PROJECT_ROOT, "skills", "manage-taskboard", "SKILL.md"),
+    codexExecutable: options.codexExecutable ?? process.env.CODEX_EXECUTABLE ?? "codex",
     codexStatePath: options.codexStatePath
-      ?? path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), ".codex-global-state.json"),
+      ?? path.join(codexHome, ".codex-global-state.json"),
     codexProcessesPath: options.codexProcessesPath
-      ?? path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "process_manager", "chat_processes.json"),
+      ?? path.join(codexHome, "process_manager", "chat_processes.json"),
   };
 }
 
@@ -667,6 +965,14 @@ export function resolvePort(value = process.env.CODEX_TASKBOARD_PORT ?? "47823")
   return port;
 }
 
+export function resolveHost(value = process.env.CODEX_TASKBOARD_HOST ?? "0.0.0.0") {
+  const host = String(value).trim();
+  if (host !== "127.0.0.1" && host !== "0.0.0.0") {
+    throw new Error("CODEX_TASKBOARD_HOST must be 127.0.0.1 or 0.0.0.0");
+  }
+  return host;
+}
+
 export function createTaskboardServer(options = {}) {
   const resolved = resolveServerOptions(options);
   const database = new TaskboardDatabase(resolved.databasePath);
@@ -676,7 +982,7 @@ export function createTaskboardServer(options = {}) {
     response.setHeader("x-content-type-options", "nosniff");
     response.setHeader("referrer-policy", "no-referrer");
     try {
-      assertLoopbackRequest(request);
+      assertTrustedNetworkRequest(request);
       const url = new URL(request.url, "http://127.0.0.1");
       const pathname = url.pathname;
 
@@ -703,6 +1009,30 @@ export function createTaskboardServer(options = {}) {
         });
       }
 
+      if (pathname === "/api/workflow-capabilities") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        const unknownQuery = [...url.searchParams.keys()].filter((key) => key !== "workspacePath");
+        if (unknownQuery.length > 0) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", `Unknown query parameter: ${unknownQuery[0]}`);
+        }
+        const workspacePath = stringField(
+          url.searchParams.get("workspacePath") ?? null,
+          "workspacePath",
+          { nullable: true, maxLength: 4096 },
+        );
+        if (workspacePath?.includes("\0")) {
+          throw new ApiError(400, "INVALID_FIELD", "'workspacePath' cannot contain null bytes");
+        }
+        if (workspacePath && !path.isAbsolute(workspacePath)) {
+          throw new ApiError(400, "INVALID_FIELD", "'workspacePath' must be absolute");
+        }
+        return sendJson(
+          response,
+          200,
+          await discoverWorkflowCapabilities(resolved, workspacePath ?? PROJECT_ROOT),
+        );
+      }
+
       if (pathname === "/api/projects") {
         if (request.method === "GET") {
           if ([...url.searchParams.keys()].length > 0) {
@@ -716,6 +1046,33 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 201, { project });
         }
         return methodNotAllowed(response, ["GET", "POST"]);
+      }
+
+      const workflowWorkspaceRoute = pathname.match(/^\/api\/projects\/([^/]+)\/workflow-workspace$/);
+      if (workflowWorkspaceRoute) {
+        if ([...url.searchParams.keys()].length > 0) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Workflow workspace routes do not accept query parameters");
+        }
+        let projectId;
+        try {
+          projectId = decodeURIComponent(workflowWorkspaceRoute[1]);
+        } catch {
+          throw new ApiError(400, "INVALID_PATH", "Project id contains invalid encoding");
+        }
+        validateProjectId(projectId);
+        if (request.method === "GET") {
+          return sendJson(response, 200, { workflow: database.getWorkflowWorkspace(projectId) });
+        }
+        if (request.method === "PUT") {
+          const input = parseWorkflowWorkspaceSave(await readJson(request));
+          const workflow = database.saveWorkflowWorkspace(projectId, input.version, input.workspace);
+          events.emit("workflow.updated", {
+            projectId,
+            workflowVersion: workflow.version,
+          });
+          return sendJson(response, 200, { workflow });
+        }
+        return methodNotAllowed(response, ["GET", "PUT"]);
       }
 
       const developmentContextsRoute = pathname.match(/^\/api\/projects\/([^/]+)\/development-contexts$/);
@@ -766,7 +1123,10 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 200, { tasks: database.listTasks(parseTaskFilters(url.searchParams)) });
         }
         if (request.method === "POST") {
-          const task = database.createTask(parseTaskCreate(await readJson(request)));
+          const task = database.createTask({
+            ...parseTaskCreate(await readJson(request)),
+            actor: actorFromRequest(request),
+          });
           events.emit("task.created", { task });
           return sendJson(response, 201, { task });
         }
@@ -800,7 +1160,10 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 200, { comments: database.listComments(taskId) });
         }
         if (request.method === "POST") {
-          const comment = database.createComment(taskId, parseCommentCreate(await readJson(request)));
+          const comment = database.createComment(taskId, {
+            ...parseCommentCreate(await readJson(request)),
+            actor: actorFromRequest(request),
+          });
           const task = database.getTask(taskId);
           events.emit("comment.created", { comment, task });
           return sendJson(response, 201, { comment });
@@ -1062,8 +1425,8 @@ export function createTaskboardServer(options = {}) {
     server,
     options: resolved,
     async listen({ host = "127.0.0.1", port = resolvePort() } = {}) {
-      if (host !== "127.0.0.1") {
-        throw new Error("Taskboard server must bind to 127.0.0.1");
+      if (host !== "127.0.0.1" && host !== "0.0.0.0") {
+        throw new Error("Taskboard server must bind to 127.0.0.1 or 0.0.0.0");
       }
       await new Promise((resolve, reject) => {
         const onError = (error) => {

@@ -58,6 +58,7 @@ test("project list uses the default local service and adds schemaVersion", async
   });
   assert.equal(calls[0].url, "http://127.0.0.1:47823/api/projects");
   assert.equal(calls[0].init.method, "GET");
+  assert.equal(calls[0].init.headers["x-taskboard-client"], "taskctl");
 });
 
 test("CODEX_TASKBOARD_URL overrides the service origin", async () => {

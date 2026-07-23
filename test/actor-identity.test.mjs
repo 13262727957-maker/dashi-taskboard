@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "node:test";
+
+const typesSource = await readFile(new URL("../web/src/types.ts", import.meta.url), "utf8");
+const detailSource = await readFile(new URL("../web/src/components/TaskDetail.tsx", import.meta.url), "utf8");
+const apiSource = await readFile(new URL("../web/src/api.ts", import.meta.url), "utf8");
+const appSource = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
+const injectSource = await readFile(new URL("../inject/codex-taskboard.user.js", import.meta.url), "utf8");
+const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
+
+test("task and comment contracts expose persisted user or agent identities", () => {
+  assert.match(typesSource, /export type ActorType = "user" \| "agent"/);
+  assert.match(typesSource, /export interface ActorIdentity/);
+  assert.match(typesSource, /avatarUrl: string \| null/);
+  assert.match(typesSource, /creatorType: ActorType/);
+  assert.match(typesSource, /creatorId: string/);
+  assert.match(typesSource, /creatorName: string/);
+  assert.match(typesSource, /creatorAvatarUrl: string \| null/);
+  assert.match(typesSource, /authorType: ActorType/);
+  assert.match(typesSource, /authorId: string/);
+  assert.match(typesSource, /authorName: string/);
+  assert.match(typesSource, /authorAvatarUrl: string \| null/);
+});
+
+test("issue activity renders distinct avatars, IDs, and styles for users and agents", () => {
+  assert.match(detailSource, /function ActorAvatar/);
+  assert.match(detailSource, /actor-avatar-\$\{type\}/);
+  assert.match(detailSource, /type === "agent"/);
+  assert.match(detailSource, /src="\/codex-app-icon\.png"/);
+  assert.match(detailSource, /avatarUrl/);
+  assert.match(detailSource, /currentTask\.creatorType/);
+  assert.match(detailSource, /currentTask\.creatorId/);
+  assert.match(detailSource, /currentTask\.creatorAvatarUrl/);
+  assert.match(detailSource, /comment\.authorType/);
+  assert.match(detailSource, /comment\.authorId/);
+  assert.match(detailSource, /comment\.authorAvatarUrl/);
+  assert.match(detailSource, /currentUser\.name/);
+  assert.match(detailSource, /currentUser\.id/);
+  assert.match(detailSource, /className="actor-id"/);
+  assert.match(styles, /\.actor-avatar-agent/);
+  assert.match(styles, /\.actor-avatar-user/);
+  assert.match(styles, /\.actor-avatar-image/);
+  assert.doesNotMatch(styles, /\.comment-entry\.is-agent \.comment-card/);
+  assert.match(styles, /\.actor-id/);
+});
+
+test("Codex host identity is forwarded to user-authored taskboard mutations", () => {
+  assert.match(injectSource, /function readCodexUser\(\)/);
+  assert.match(injectSource, /cdn\.auth0\.com\/avatars/);
+  assert.match(injectSource, /user: readCodexUser\(\)/);
+  assert.match(typesSource, /user\?: ActorIdentity/);
+  assert.match(apiSource, /export function setCurrentUserActor/);
+  assert.match(apiSource, /X-Taskboard-User-Id/);
+  assert.match(apiSource, /X-Taskboard-User-Name/);
+  assert.match(apiSource, /X-Taskboard-User-Avatar/);
+  assert.match(appSource, /setCurrentUserActor\(payload\.user\)/);
+});

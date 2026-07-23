@@ -265,6 +265,7 @@ function createApiClient(overrides) {
           method,
           headers: {
             accept: "application/json",
+            "x-taskboard-client": "taskctl",
             ...(body === undefined ? {} : { "content-type": "application/json" }),
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
