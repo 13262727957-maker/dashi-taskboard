@@ -14,10 +14,25 @@ test("comment floors use Linear-style cards with the author inside the card", ()
   assert.doesNotMatch(styles, /\.activity-stream::before/);
   assert.match(
     styles,
-    /\.comment-card\s*\{[^}]*background:\s*var\(--surface-muted\);[^}]*box-shadow:\s*none;/s,
+    /\.comment-card\s*\{[^}]*border-radius:\s*8px;[^}]*background:\s*var\(--surface\);[^}]*box-shadow:\s*var\(--card-shadow\);/s,
   );
+  assert.match(styles, /\.comment-header \.comment-avatar\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;/s);
+});
+
+test("comment body renders document formatting at Linear typography", () => {
+  assert.match(
+    detailSource,
+    /comment\.body && <div className="comment-body"><DescriptionDocument value=\{comment\.body\} \/><\/div>/,
+  );
+  assert.match(styles, /\.comment-body\s*\{[^}]*font-size:\s*15px;[^}]*line-height:\s*24px;/s);
+  assert.match(styles, /\.comment-body \.issue-description-document\s*\{/);
 });
 
 test("comment composer aligns with the full comment floor width", () => {
   assert.match(styles, /\.comment-composer\s*\{[^}]*margin:\s*18px 8px 0;/s);
+  assert.match(
+    styles,
+    /\.comment-composer\s*\{[^}]*background:\s*var\(--surface\);[^}]*box-shadow:\s*var\(--card-shadow\);/s,
+  );
+  assert.match(styles, /\.composer-footer\s*\{[^}]*border-top:\s*var\(--border-hairline\) solid var\(--border\);/s);
 });

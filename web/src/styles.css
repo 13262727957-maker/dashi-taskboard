@@ -2775,34 +2775,36 @@ kbd {
   overflow: visible;
   border: var(--border-hairline) solid var(--border);
   border-radius: 8px;
-  background: var(--surface-muted);
-  box-shadow: none;
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
 }
 
 .comment-header {
   display: flex;
   align-items: center;
-  min-height: 42px;
-  gap: 7px;
-  padding: 9px 9px 2px 11px;
+  min-height: 20px;
+  gap: 6px;
+  padding: 14px 14px 0 16px;
 }
 
 .comment-header .comment-avatar {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border: 0;
 }
 
 .comment-header strong {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 560;
+  line-height: 20px;
 }
 
 .comment-header time,
 .comment-header > span {
-  font-size: 10px;
+  font-size: 11px;
+  line-height: 20px;
 }
 
 .comment-header > span::before {
@@ -2907,24 +2909,72 @@ kbd {
 
 .comment-body {
   min-height: 30px;
-  padding: 5px 12px 13px;
+  padding: 10px 16px 16px;
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 15px;
+  line-height: 24px;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+}
+
+.comment-body .issue-description-document {
+  display: grid;
+  gap: 6px;
+}
+
+.comment-body .issue-description-document p,
+.comment-body .issue-description-document h2,
+.comment-body .issue-description-document h3,
+.comment-body .issue-description-document h4 {
+  margin: 0;
+}
+
+.comment-body .issue-description-document h2 {
+  margin-top: 12px;
+  font-size: 17px;
+  font-weight: 620;
+  line-height: 25px;
+}
+
+.comment-body .issue-description-document h3 {
+  margin-top: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.comment-body .issue-description-document h4 {
+  margin-top: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.comment-body .issue-description-document > :first-child {
+  margin-top: 0;
+}
+
+.comment-body .description-spacer {
+  height: 6px;
+}
+
+.comment-body .description-list-item {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.comment-body .description-list-item > p {
+  padding-left: 5px;
 }
 
 .comment-attachment-list {
   display: grid;
   gap: 5px;
   margin: 0;
-  padding: 4px 12px 12px;
+  padding: 2px 16px 16px;
   list-style: none;
 }
 
 .comment-conversation-link {
-  padding: 3px 12px 12px;
+  padding: 2px 16px 16px;
 }
 
 .comment-attachment-list li {
@@ -3011,7 +3061,7 @@ kbd {
 }
 
 .comment-edit-form {
-  padding: 5px 12px 12px;
+  padding: 10px 16px 16px;
 }
 
 .comment-edit-form textarea,
@@ -3057,7 +3107,8 @@ kbd {
   height: 84px;
   border: var(--border-hairline) solid var(--border);
   border-radius: 8px;
-  background: var(--surface-muted);
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
   animation: shimmer 1.5s linear infinite;
 }
 
@@ -3075,8 +3126,8 @@ kbd {
   overflow: hidden;
   border: var(--border-hairline) solid var(--border);
   border-radius: 8px;
-  background: var(--surface-muted);
-  box-shadow: none;
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
   transition: border-color 100ms ease, box-shadow 100ms ease;
 }
 
@@ -3088,25 +3139,28 @@ kbd {
 .composer-author {
   display: flex;
   align-items: center;
-  height: 38px;
-  gap: 7px;
-  padding: 8px 12px 2px;
+  min-height: 34px;
+  gap: 6px;
+  padding: 12px 16px 0;
 }
 
 .composer-author .comment-avatar {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border: 0;
 }
 
 .composer-author strong {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 560;
+  line-height: 20px;
 }
 
 .comment-composer > textarea {
-  min-height: 74px;
-  padding: 6px 12px 10px;
+  min-height: 82px;
+  padding: 10px 16px 14px;
+  font-size: 15px;
+  line-height: 24px;
 }
 
 .comment-composer > textarea::placeholder {
@@ -3115,7 +3169,7 @@ kbd {
 
 .comment-composer-files {
   margin: 0;
-  padding: 0 8px 8px;
+  padding: 0 12px 12px;
 }
 
 .composer-footer {
@@ -3124,8 +3178,8 @@ kbd {
   justify-content: space-between;
   min-height: 40px;
   gap: 10px;
-  padding: 4px 8px 8px 10px;
-  border-top: 0;
+  padding: 5px 10px;
+  border-top: var(--border-hairline) solid var(--border);
   color: var(--text-tertiary);
   font-size: 10px;
 }

@@ -770,7 +770,7 @@ export function TaskDetail({
                           </div>
                         </div>
                       ) : (
-                        comment.body && <div className="comment-body">{comment.body}</div>
+                        comment.body && <div className="comment-body"><DescriptionDocument value={comment.body} /></div>
                       )}
                       {comment.attachments.length > 0 && (
                         <ul className="comment-attachment-list" aria-label="评论附件">
