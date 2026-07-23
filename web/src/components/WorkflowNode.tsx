@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { LinearIcon, type LinearIconName } from "./LinearIcon";
 import { WorkflowMark } from "./WorkflowMark";
@@ -52,158 +53,125 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   gitWorktreePath?: string;
   acceptsChildren?: boolean;
   childCount?: number;
-  dropActive?: boolean;
+  stepNumber?: number;
+  configured?: boolean;
+  isTrigger?: boolean;
   dragShiftY?: number;
   dragActive?: boolean;
   settleActive?: boolean;
+  onDuplicate?: () => void;
+  onDelete?: () => void;
+  onAddChild?: () => void;
 }
 
 export type WorkflowCanvasNode = Node<WorkflowNodeData, "workflow">;
 
-export function WorkflowNodeDragPreview({
-  compact,
-  data,
+function StepMenu({
+  canDelete,
+  onDelete,
+  onDuplicate,
 }: {
-  compact: boolean;
-  data: WorkflowNodeData;
+  canDelete: boolean;
+  onDelete?: () => void;
+  onDuplicate?: () => void;
 }) {
-  if (compact) {
-    return (
-      <article className={`workflow-node-compact workflow-node-${data.tone}`}>
-        <span className="workflow-node-icon" aria-hidden="true">
-          <WorkflowMark
-            icon={data.icon}
-            logo={data.logo}
-            logoMonochrome={data.logoMonochrome}
-          />
-        </span>
-        <strong>{data.displayTitle ?? data.title}</strong>
-      </article>
-    );
-  }
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  if (data.acceptsChildren) {
-    return (
-      <article className="workflow-plan-container">
-        <header className="workflow-plan-container-header">
-          <span className="workflow-node-icon" aria-hidden="true">
-            <WorkflowMark
-              icon={data.icon}
-              logo={data.logo}
-              logoMonochrome={data.logoMonochrome}
-            />
-          </span>
-          <span className="workflow-node-heading">
-            <span>{data.eyebrow}</span>
-            <strong>{data.displayTitle ?? data.title}</strong>
-          </span>
-        </header>
-        <div className="workflow-plan-container-summary">
-          <p>{data.description}</p>
-        </div>
-        <div className="workflow-plan-drop-zone">
-          <LinearIcon name="plus" />
-          <span>拖入能力节点</span>
-        </div>
-        <footer className="workflow-plan-container-footer">
-          <span>从上到下执行</span>
-          <span>0 步</span>
-        </footer>
-      </article>
-    );
-  }
+  useEffect(() => {
+    if (!open) return;
+    function close(event: MouseEvent) {
+      if (menuRef.current?.contains(event.target as globalThis.Node)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
 
   return (
-    <article className={`workflow-node workflow-node-${data.tone}`}>
-      <header className="workflow-node-header">
-        <span className="workflow-node-icon" aria-hidden="true">
-          <WorkflowMark
-            icon={data.icon}
-            logo={data.logo}
-            logoMonochrome={data.logoMonochrome}
-          />
-        </span>
-        <span className="workflow-node-heading">
-          <span>{data.eyebrow}</span>
-          <strong>{data.displayTitle ?? data.title}</strong>
-        </span>
-      </header>
-      <div className="workflow-node-body">
-        <p>{data.description}</p>
-        <span>{data.meta}</span>
-      </div>
-      <footer className="workflow-node-footer">
-        <span className="workflow-node-state"><i aria-hidden="true" />已配置</span>
-        {data.outputLabel && <span>{data.outputLabel}</span>}
-      </footer>
-    </article>
+    <div className="workflow-step-menu" ref={menuRef}>
+      <button
+        className="workflow-step-menu-trigger"
+        type="button"
+        aria-label="步骤操作"
+        aria-expanded={open}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((current) => !current);
+        }}
+      >
+        <LinearIcon name="more" />
+      </button>
+      {open && (
+        <div className="workflow-step-menu-popover" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(event) => {
+              event.stopPropagation();
+              setOpen(false);
+              onDuplicate?.();
+            }}
+          >
+            <LinearIcon name="copy" />
+            <span>复制步骤</span>
+          </button>
+          {canDelete && (
+            <button
+              className="is-danger"
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                event.stopPropagation();
+                setOpen(false);
+                onDelete?.();
+              }}
+            >
+              <LinearIcon name="trash" />
+              <span>删除步骤</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
 export function WorkflowNode({ data, selected, isConnectable, parentId }: NodeProps<WorkflowCanvasNode>) {
-  if (data.acceptsChildren) {
+  if (data.kind === "sequence-end") {
     return (
-      <article className={`workflow-plan-container${selected ? " selected" : ""}${data.dropActive ? " is-drop-target" : ""}`}>
-        {data.inputLabel && (
-          <Handle
-            className="workflow-node-handle workflow-node-handle-input"
-            type="target"
-            position={Position.Left}
-            isConnectable={isConnectable}
-            aria-label={data.inputLabel}
-          />
-        )}
-        <header className="workflow-plan-container-header">
-          <span className="workflow-node-icon" aria-hidden="true">
-            <WorkflowMark
-              icon={data.icon}
-              logo={data.logo}
-              logoMonochrome={data.logoMonochrome}
-            />
-          </span>
-          <span className="workflow-node-heading">
-            <span>{data.eyebrow}</span>
-            <strong>{data.displayTitle ?? data.title}</strong>
-          </span>
-          <span className="workflow-node-menu" aria-hidden="true">
-            <LinearIcon name="more" />
-          </span>
-        </header>
-        <div className="workflow-plan-container-summary">
-          <p>{data.description}</p>
-        </div>
-        <div className="workflow-plan-drop-zone" aria-hidden="true">
-          {(data.childCount ?? 0) === 0 && (
-            <>
-              <LinearIcon name="plus" />
-              <span>拖入能力节点</span>
-            </>
-          )}
-        </div>
-        <footer className="workflow-plan-container-footer">
-          <span>从上到下执行</span>
-          <span>{data.childCount ?? 0} 步</span>
-        </footer>
-        {data.outputLabel && (
-          <Handle
-            className="workflow-node-handle workflow-node-handle-output"
-            type="source"
-            position={Position.Right}
-            isConnectable={isConnectable}
-            aria-label={data.outputLabel}
-          />
-        )}
-      </article>
+      <div className="workflow-sequence-end">
+        <Handle
+          className="workflow-sequence-handle workflow-sequence-handle-input"
+          type="target"
+          position={Position.Top}
+          isConnectable={false}
+        />
+        <button
+          type="button"
+          aria-label="在流程末尾添加步骤"
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onAddChild?.();
+          }}
+        >
+          <LinearIcon name="plus" />
+          <span>添加步骤</span>
+        </button>
+      </div>
     );
   }
 
   if (parentId) {
     return (
       <article
-        className={`workflow-node-compact workflow-node-${data.tone}${selected ? " selected" : ""}${data.dragShiftY ? " is-drag-shifted" : ""}${data.dragActive ? " is-dragging" : ""}${data.settleActive ? " is-settling" : ""}`}
+        className={`workflow-plan-item workflow-node-${data.tone}${selected ? " selected" : ""}${data.dragShiftY ? " is-drag-shifted" : ""}${data.dragActive ? " is-dragging" : ""}${data.settleActive ? " is-settling" : ""}`}
         style={data.dragShiftY ? { transform: `translate3d(0, ${data.dragShiftY}px, 0)` } : undefined}
       >
-        <span className="workflow-node-icon" aria-hidden="true">
+        <span className="workflow-plan-item-grip" aria-hidden="true">
+          <LinearIcon name="more" />
+        </span>
+        <span className="workflow-step-mark" aria-hidden="true">
           <WorkflowMark
             icon={data.icon}
             logo={data.logo}
@@ -216,49 +184,68 @@ export function WorkflowNode({ data, selected, isConnectable, parentId }: NodePr
   }
 
   return (
-    <article className={`workflow-node workflow-node-${data.tone}${selected ? " selected" : ""}`}>
-      {data.inputLabel && (
-        <Handle
-          className="workflow-node-handle workflow-node-handle-input"
-          type="target"
-          position={Position.Left}
-          isConnectable={isConnectable}
-          aria-label={data.inputLabel}
-        />
-      )}
-      <header className="workflow-node-header">
-        <span className="workflow-node-icon" aria-hidden="true">
+    <article
+      className={`workflow-step-card workflow-node-${data.tone}${selected ? " selected" : ""}${data.acceptsChildren ? " is-plan" : ""}${data.dragShiftY ? " is-drag-shifted" : ""}${data.dragActive ? " is-dragging" : ""}${data.settleActive ? " is-settling" : ""}`}
+      style={data.dragShiftY ? { transform: `translate3d(0, ${data.dragShiftY}px, 0)` } : undefined}
+    >
+      <Handle
+        className="workflow-sequence-handle workflow-sequence-handle-input"
+        type="target"
+        position={Position.Top}
+        isConnectable={isConnectable}
+        aria-label={data.inputLabel ?? "步骤输入"}
+      />
+      <div className="workflow-step-main">
+        <span className={`workflow-step-order${data.isTrigger ? " is-trigger" : ""}`}>
+          {data.isTrigger ? "触发" : data.stepNumber}
+        </span>
+        <span className="workflow-step-mark" aria-hidden="true">
           <WorkflowMark
             icon={data.icon}
             logo={data.logo}
             logoMonochrome={data.logoMonochrome}
           />
         </span>
-        <span className="workflow-node-heading">
-          <span>{data.eyebrow}</span>
+        <span className="workflow-step-copy">
           <strong>{data.displayTitle ?? data.title}</strong>
+          <small>{data.meta}</small>
         </span>
-        <span className="workflow-node-menu" aria-hidden="true">
-          <LinearIcon name="more" />
+        <span className={`workflow-step-state${data.configured ? " is-configured" : " needs-config"}`}>
+          <i aria-hidden="true" />
+          {data.configured ? "已配置" : "需要配置"}
         </span>
-      </header>
-      <div className="workflow-node-body">
-        <p>{data.description}</p>
-        <span>{data.meta}</span>
-      </div>
-      <footer className="workflow-node-footer">
-        <span className="workflow-node-state"><i aria-hidden="true" />已配置</span>
-        {data.outputLabel && <span>{data.outputLabel}</span>}
-      </footer>
-      {data.outputLabel && (
-        <Handle
-          className="workflow-node-handle workflow-node-handle-output"
-          type="source"
-          position={Position.Right}
-          isConnectable={isConnectable}
-          aria-label={data.outputLabel}
+        <StepMenu
+          canDelete={!data.isTrigger}
+          onDelete={data.onDelete}
+          onDuplicate={data.onDuplicate}
         />
+      </div>
+      {data.acceptsChildren && (
+        <div className="workflow-plan-list">
+          {(data.childCount ?? 0) === 0 && (
+            <p>执行计划中还没有步骤</p>
+          )}
+          <button
+            className="workflow-plan-add"
+            type="button"
+            aria-label="向执行计划添加步骤"
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onAddChild?.();
+            }}
+          >
+            <LinearIcon name="plus" />
+            <span>添加执行步骤</span>
+          </button>
+        </div>
       )}
+      <Handle
+        className="workflow-sequence-handle workflow-sequence-handle-output"
+        type="source"
+        position={Position.Bottom}
+        isConnectable={isConnectable}
+        aria-label={data.outputLabel ?? "步骤输出"}
+      />
     </article>
   );
 }
