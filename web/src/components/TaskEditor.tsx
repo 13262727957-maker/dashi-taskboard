@@ -4,6 +4,7 @@ import { ApiError } from "../api";
 import {
   TASK_PRIORITIES,
   TASK_STATUSES,
+  type ActorIdentity,
   type DevelopmentContext,
   type DevelopmentScan,
   type Recurrence,
@@ -13,6 +14,12 @@ import {
   type TaskStatus,
   type WorkflowOption,
 } from "../types";
+import {
+  CODEX_AGENT_ACTOR,
+  actorKey,
+  assigneeTargetForActor,
+} from "../actors";
+import { ActorAvatar } from "./ActorAvatar";
 import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
@@ -37,6 +44,7 @@ interface TaskEditorProps {
   initialStatus: TaskStatus;
   labels: string[];
   workflows: WorkflowOption[];
+  currentUser: ActorIdentity;
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
   onCancel: () => void;
@@ -93,6 +101,7 @@ export function TaskEditor({
   initialStatus,
   labels: availableLabels,
   workflows,
+  currentUser,
   developmentScan,
   developmentScanLoading,
   onCancel,
@@ -105,6 +114,7 @@ export function TaskEditor({
   const [description, setDescription] = useState(task?.description ?? "");
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? initialStatus);
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "none");
+  const [assignee, setAssignee] = useState<ActorIdentity>(task?.assignee ?? currentUser);
   const [selectedLabels, setSelectedLabels] = useState<string[]>(task?.labels ?? []);
   const [workflowId, setWorkflowId] = useState(task?.workflowId ?? "");
   const [developmentContext, setDevelopmentContext] = useState<DevelopmentContext | null>(task?.developmentContext ?? null);
@@ -126,6 +136,11 @@ export function TaskEditor({
   }, [developmentContext, developmentScan.contexts]);
 
   const workflowAvailable = !workflowId || workflows.some((workflow) => workflow.id === workflowId);
+  const assigneeOptions = [task?.assignee, currentUser, CODEX_AGENT_ACTOR]
+    .filter((actor): actor is ActorIdentity => actor !== undefined)
+    .filter((actor, index, actors) => (
+      actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
+    ));
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -151,12 +166,16 @@ export function TaskEditor({
     setSaving(true);
     setError(null);
     try {
+      const assigneeTarget = task && actorKey(assignee) === actorKey(task.assignee)
+        ? undefined
+        : assigneeTargetForActor(assignee, currentUser);
       await onSave({
         title: cleanTitle,
         description: description.trim(),
         status,
         priority,
         labels: selectedLabels,
+        ...(assigneeTarget ? { assigneeTarget } : {}),
         workflowId: workflowId || null,
         developmentContext,
         dueDate: dueDate || null,
@@ -243,6 +262,23 @@ export function TaskEditor({
               <span className="sr-only">优先级</span>
               <select value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
                 {TASK_PRIORITIES.map((value) => <option value={value} key={value}>{PRIORITY_LABELS[value]}</option>)}
+              </select>
+            </label>
+            <label className="property-control property-assignee">
+              <ActorAvatar actor={assignee} className="property-assignee-avatar" />
+              <select
+                aria-label="负责人"
+                value={actorKey(assignee)}
+                onChange={(event) => {
+                  const selected = assigneeOptions.find((actor) => actorKey(actor) === event.target.value);
+                  if (selected) setAssignee(selected);
+                }}
+              >
+                {assigneeOptions.map((actor) => (
+                  <option value={actorKey(actor)} key={actorKey(actor)}>
+                    {actor.id === currentUser.id ? `${actor.name}（我）` : actor.name}
+                  </option>
+                ))}
               </select>
             </label>
             <LabelPicker

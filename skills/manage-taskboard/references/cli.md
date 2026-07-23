@@ -46,6 +46,8 @@ taskctl issue create \
 
 Statuses are `backlog`, `todo`, `in_progress`, `in_review`, `blocked`, `done`, and `canceled`. Priorities are `none`, `urgent`, `high`, `medium`, and `low`.
 
+Issues created through `taskctl` are assigned to Codex Agent by default. Other CLI writes preserve the existing assignee.
+
 ## Update issues
 
 Read the issue immediately before a write and pass its `version` with `--if-version`.

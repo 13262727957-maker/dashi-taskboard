@@ -26,6 +26,10 @@ import {
   uploadAttachment,
   updateTask as updateTaskRequest,
 } from "./api";
+import {
+  actorForAssigneeTarget,
+  assigneeTargetForActor,
+} from "./actors";
 import { BoardColumn, STATUS_DETAILS } from "./components/BoardColumn";
 import { BoardSettingsMenu } from "./components/BoardSettingsMenu";
 import { HiddenColumns } from "./components/HiddenColumns";
@@ -673,10 +677,17 @@ export function App() {
     }
   }
 
-  async function restoreTaskDetails(snapshot: Task, changed: Task) {
+  async function restoreTaskDetails(
+    snapshot: Task,
+    changed: Task,
+    assigneeTarget = assigneeTargetForActor(snapshot.assignee, currentUser),
+  ) {
     const candidate = tasksRef.current.find((task) => task.id === changed.id);
     const current = candidate && candidate.version >= changed.version ? candidate : changed;
-    const restored = await updateTaskRequest(current, taskToDraft(snapshot));
+    const restored = await updateTaskRequest(current, {
+      ...taskToDraft(snapshot),
+      ...(assigneeTarget ? { assigneeTarget } : {}),
+    });
     setTasks((tasks) => sortTasks(tasks.map((task) => task.id === restored.id ? restored : task)));
   }
 
@@ -820,7 +831,13 @@ export function App() {
         });
       } else if (editor.task) {
         const previous = editor.task;
-        pushUndo(`${saved.identifier} 已更新。`, () => restoreTaskDetails(previous, saved));
+        const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
+        if (!draft.assigneeTarget || previousAssigneeTarget) {
+          pushUndo(
+            `${saved.identifier} 已更新。`,
+            () => restoreTaskDetails(previous, saved, previousAssigneeTarget),
+          );
+        }
       }
     } catch (error) {
       if (error instanceof ApiError && error.code === "VERSION_CONFLICT") {
@@ -922,9 +939,15 @@ export function App() {
 
   async function updateTaskProperties(task: Task, changes: Partial<TaskDraft>, message?: string): Promise<Task> {
     const previous = task;
+    const { assigneeTarget, ...taskChanges } = changes;
+    const optimisticAssignee = assigneeTarget
+      ? actorForAssigneeTarget(assigneeTarget, currentUser)
+      : task.assignee;
     setActionError(null);
     setTasks((current) => current.map((candidate) =>
-      candidate.id === task.id ? { ...candidate, ...changes } : candidate,
+      candidate.id === task.id
+        ? { ...candidate, ...taskChanges, assignee: optimisticAssignee }
+        : candidate,
     ));
 
     try {
@@ -932,7 +955,13 @@ export function App() {
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === updated.id ? updated : candidate,
       )));
-      pushUndo(message ?? `${task.identifier} 已更新。`, () => restoreTaskDetails(previous, updated));
+      const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
+      if (!assigneeTarget || previousAssigneeTarget) {
+        pushUndo(
+          message ?? `${task.identifier} 已更新。`,
+          () => restoreTaskDetails(previous, updated, previousAssigneeTarget),
+        );
+      }
       return updated;
     } catch (error) {
       setTasks((current) => sortTasks(current.map((candidate) =>
@@ -951,6 +980,7 @@ export function App() {
     try {
       const duplicated = await createTaskRequest(task.projectId, {
         ...taskToDraft(task),
+        assigneeTarget: assigneeTargetForActor(task.assignee, currentUser),
         developmentContext: null,
       });
       setTasks((current) => sortTasks([...current, duplicated]));
@@ -1591,6 +1621,7 @@ export function App() {
           initialStatus={editor.status}
           labels={availableLabels}
           workflows={workflowOptions}
+          currentUser={currentUser}
           developmentScan={developmentScan}
           developmentScanLoading={developmentScanLoading}
           onCancel={() => setEditor(null)}

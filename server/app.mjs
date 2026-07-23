@@ -31,6 +31,12 @@ const INLINE_ATTACHMENT_TYPES = new Set([
 ]);
 const PROJECT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const TRUSTED_EMBED_ORIGINS = new Set(["app://-"]);
+const CODEX_AGENT_ACTOR = {
+  type: "agent",
+  id: "codex-agent",
+  name: "Codex Agent",
+  avatarUrl: null,
+};
 const CONTENT_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
   [".html", "text/html; charset=utf-8"],
@@ -365,7 +371,7 @@ function requestHeader(request, name) {
 
 function actorFromRequest(request) {
   if (request.headers["x-taskboard-client"] === "taskctl") {
-    return { type: "agent", id: "codex-agent", name: "Codex Agent", avatarUrl: null };
+    return CODEX_AGENT_ACTOR;
   }
 
   const rawId = requestHeader(request, "x-taskboard-user-id");
@@ -407,6 +413,23 @@ function actorFromRequest(request) {
   return { type: "user", id, name, avatarUrl };
 }
 
+function parseAssigneeTarget(value) {
+  if (value === undefined) return undefined;
+  if (value !== "current-user" && value !== "codex-agent") {
+    throw new ApiError(400, "INVALID_FIELD", "'assigneeTarget' must be current-user or codex-agent");
+  }
+  return value;
+}
+
+function resolveAssignee(target, actor) {
+  if (target === undefined) return actor;
+  if (target === "codex-agent") return CODEX_AGENT_ACTOR;
+  if (actor.type !== "user") {
+    throw new ApiError(400, "INVALID_FIELD", "'current-user' requires a user request identity");
+  }
+  return actor;
+}
+
 function parseWorkflowId(value) {
   const workflowId = stringField(value, "workflowId", { nullable: true, maxLength: 128 });
   if (workflowId === "") {
@@ -419,7 +442,7 @@ function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId",
-    "workflowId", "developmentContext", "dueDate", "recurrence",
+    "assigneeTarget", "workflowId", "developmentContext", "dueDate", "recurrence",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -431,6 +454,7 @@ function parseTaskCreate(body) {
     labels: body.labels === undefined ? [] : parseLabels(body.labels),
     sortOrder: body.sortOrder === undefined ? undefined : parseSortOrder(body.sortOrder),
     threadId: parseThreadId(body.threadId),
+    assigneeTarget: parseAssigneeTarget(body.assigneeTarget),
     workflowId: parseWorkflowId(body.workflowId ?? null),
     developmentContext: parseDevelopmentContext(body.developmentContext ?? null),
     dueDate: parseDueDate(body.dueDate ?? null),
@@ -446,10 +470,11 @@ function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "version", "title", "description", "status", "priority", "labels", "threadId",
-    "workflowId", "developmentContext", "dueDate", "recurrence",
+    "assigneeTarget", "workflowId", "developmentContext", "dueDate", "recurrence",
   ]));
   const version = parseVersion(body.version);
   const threadId = parseThreadId(body.threadId);
+  const assigneeTarget = parseAssigneeTarget(body.assigneeTarget);
   const changes = {};
   if (body.title !== undefined) changes.title = stringField(body.title, "title", { required: true, maxLength: 240 });
   if (body.description !== undefined) changes.description = stringField(body.description, "description", { maxLength: 100_000 });
@@ -463,10 +488,10 @@ function parseTaskPatch(body) {
   if (changes.recurrence && body.dueDate === null) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
   }
-  if (Object.keys(changes).length === 0) {
+  if (Object.keys(changes).length === 0 && assigneeTarget === undefined) {
     throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one task field");
   }
-  return { version, changes, threadId };
+  return { version, changes, threadId, assigneeTarget };
 }
 
 function parseMove(body) {
@@ -1123,9 +1148,12 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 200, { tasks: database.listTasks(parseTaskFilters(url.searchParams)) });
         }
         if (request.method === "POST") {
+          const actor = actorFromRequest(request);
+          const { assigneeTarget, ...input } = parseTaskCreate(await readJson(request));
           const task = database.createTask({
-            ...parseTaskCreate(await readJson(request)),
-            actor: actorFromRequest(request),
+            ...input,
+            actor,
+            assignee: resolveAssignee(assigneeTarget, actor),
           });
           events.emit("task.created", { task });
           return sendJson(response, 201, { task });
@@ -1372,7 +1400,10 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 200, { task });
         }
         if (!action && request.method === "PATCH") {
-          const { version, changes, threadId } = parseTaskPatch(await readJson(request));
+          const { version, changes, threadId, assigneeTarget } = parseTaskPatch(await readJson(request));
+          if (assigneeTarget !== undefined) {
+            changes.assignee = resolveAssignee(assigneeTarget, actorFromRequest(request));
+          }
           const task = database.updateTask(id, version, changes, threadId);
           events.emit("task.updated", { task });
           return sendJson(response, 200, { task });

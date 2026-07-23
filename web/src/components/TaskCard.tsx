@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react";
 import { TASK_STATUSES, type Task, type TaskPriority, type TaskStatus } from "../types";
+import { ActorAvatar } from "./ActorAvatar";
 import { LinearIcon, LinearPriorityIcon } from "./LinearIcon";
 
 const PRIORITY_LABELS: Record<TaskPriority, string> = {
@@ -82,6 +83,7 @@ export function TaskCard({
 
       <div className="card-topline">
         <span className="task-identifier">{task.identifier}</span>
+        <ActorAvatar actor={task.assignee} className="card-assignee-avatar" />
         <div className="card-actions" aria-label="移动议题">
           <button
             className="icon-button compact"

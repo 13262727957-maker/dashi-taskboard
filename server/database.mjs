@@ -38,6 +38,12 @@ function taskFromRow(row) {
     creatorId: row.creator_id,
     creatorName: row.creator_name,
     creatorAvatarUrl: row.creator_avatar_url,
+    assignee: {
+      type: row.assignee_type,
+      id: row.assignee_id,
+      name: row.assignee_name,
+      avatarUrl: row.assignee_avatar_url,
+    },
     workflowId: row.workflow_id,
     developmentContext,
     dueDate: row.due_date,
@@ -141,6 +147,10 @@ export class TaskboardDatabase {
         creator_id TEXT NOT NULL DEFAULT 'local-user',
         creator_name TEXT NOT NULL DEFAULT '本地用户',
         creator_avatar_url TEXT,
+        assignee_type TEXT NOT NULL DEFAULT 'user' CHECK (assignee_type IN ('user', 'agent')),
+        assignee_id TEXT NOT NULL DEFAULT 'local-user',
+        assignee_name TEXT NOT NULL DEFAULT '本地用户',
+        assignee_avatar_url TEXT,
         workflow_id TEXT,
         git_branch TEXT,
         worktree_path TEXT,
@@ -254,6 +264,26 @@ export class TaskboardDatabase {
       SET creator_type = 'agent', creator_id = 'codex-agent', creator_name = 'Codex Agent'
       WHERE thread_id IS NOT NULL AND version = 1 AND creator_id = 'local-user'
     `);
+    const identityTaskColumns = this.database.prepare("PRAGMA table_info(tasks)").all();
+    const assigneeMigrations = [
+      ["assignee_type", "TEXT CHECK (assignee_type IN ('user', 'agent'))", "creator_type"],
+      ["assignee_id", "TEXT", "creator_id"],
+      ["assignee_name", "TEXT", "creator_name"],
+      ["assignee_avatar_url", "TEXT", "creator_avatar_url"],
+    ].filter(([column]) => !identityTaskColumns.some((current) => current.name === column));
+    if (assigneeMigrations.length > 0) {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        for (const [column, definition, source] of assigneeMigrations) {
+          this.database.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${definition}`);
+          this.database.exec(`UPDATE tasks SET ${column} = ${source}`);
+        }
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS tasks_project_status_sort
         ON tasks(project_id, archived_at, status, sort_order, created_at)
@@ -577,10 +607,11 @@ export class TaskboardDatabase {
         INSERT INTO tasks (
           id, identifier, project_id, title, description, status, priority, labels,
           sort_order, thread_id, creator_type, creator_id, creator_name, creator_avatar_url,
+          assignee_type, assignee_id, assignee_name, assignee_avatar_url,
           workflow_id, git_branch, worktree_path, worktree_branch,
           due_date, recurrence_interval, recurrence_unit,
           archived_at, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       `).run(
         id,
         identifier,
@@ -596,6 +627,10 @@ export class TaskboardDatabase {
         input.actor.id,
         input.actor.name,
         input.actor.avatarUrl,
+        input.assignee.type,
+        input.assignee.id,
+        input.assignee.name,
+        input.assignee.avatarUrl,
         input.workflowId,
         input.developmentContext?.type === "branch" ? input.developmentContext.branch : null,
         input.developmentContext?.type === "worktree" ? input.developmentContext.path : null,
@@ -647,6 +682,16 @@ export class TaskboardDatabase {
       if (key === "recurrence") {
         assignments.push("recurrence_interval = ?", "recurrence_unit = ?");
         values.push(value?.interval ?? null, value?.unit ?? null);
+        continue;
+      }
+      if (key === "assignee") {
+        assignments.push(
+          "assignee_type = ?",
+          "assignee_id = ?",
+          "assignee_name = ?",
+          "assignee_avatar_url = ?",
+        );
+        values.push(value.type, value.id, value.name, value.avatarUrl);
         continue;
       }
       assignments.push(`${columns[key]} = ?`);

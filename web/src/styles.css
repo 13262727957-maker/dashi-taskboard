@@ -1980,6 +1980,18 @@ kbd {
   transition: opacity 100ms ease, transform 100ms ease;
 }
 
+.card-assignee-avatar {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  border-width: 1px;
+  font-size: 7px;
+}
+
+.card-assignee-avatar + .card-actions {
+  margin-left: 3px;
+}
+
 .task-card:hover .card-actions,
 .task-card:focus-within .card-actions,
 .task-card.is-context-open .card-actions {
@@ -2847,7 +2859,7 @@ kbd {
   padding: 8px;
 }
 
-.comment-avatar {
+.actor-avatar {
   z-index: 1;
   display: grid;
   place-items: center;
@@ -3396,6 +3408,13 @@ kbd {
   width: 16px;
   height: 16px;
   color: var(--text-tertiary);
+}
+
+.detail-assignee-avatar {
+  width: 16px;
+  height: 16px;
+  border-width: 1px;
+  font-size: 7px;
 }
 
 .detail-property-icon svg {
@@ -5248,6 +5267,13 @@ kbd {
 .property-control:hover {
   background: var(--surface-hover);
   color: var(--text-primary);
+}
+
+.property-assignee-avatar {
+  width: 14px;
+  height: 14px;
+  border-width: 1px;
+  font-size: 7px;
 }
 
 .property-control svg {

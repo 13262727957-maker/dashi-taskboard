@@ -315,10 +315,20 @@ test("existing task and comment thread attribution remains content-specific", as
   assert.equal(result.body.task.creatorType, "agent");
   assert.equal(result.body.task.creatorId, "codex-agent");
   assert.equal(result.body.task.creatorName, "Codex Agent");
+  assert.deepEqual(result.body.task.assignee, {
+    type: "agent",
+    id: "codex-agent",
+    name: "Codex Agent",
+    avatarUrl: null,
+  });
   assert.equal(Object.hasOwn(result.body.task, "linkedThreadId"), false);
   const columns = runningApps.at(-1).app.database.database.prepare("PRAGMA table_info(tasks)").all();
   assert.equal(columns.some((column) => column.name === "thread_id"), true);
   assert.equal(columns.some((column) => column.name === "workflow_id"), true);
+  assert.equal(columns.some((column) => column.name === "assignee_type"), true);
+  assert.equal(columns.some((column) => column.name === "assignee_id"), true);
+  assert.equal(columns.some((column) => column.name === "assignee_name"), true);
+  assert.equal(columns.some((column) => column.name === "assignee_avatar_url"), true);
   assert.equal(columns.some((column) => column.name === "linked_thread_id"), false);
   assert.equal(result.body.task.workflowId, null);
   const taskThreads = runningApps.at(-1).app.database.database.prepare(`
@@ -859,6 +869,12 @@ test("taskctl issue creation and comments use the Codex Agent identity", async (
   assert.equal(task.creatorId, "codex-agent");
   assert.equal(task.creatorName, "Codex Agent");
   assert.equal(task.creatorAvatarUrl, null);
+  assert.deepEqual(task.assignee, {
+    type: "agent",
+    id: "codex-agent",
+    name: "Codex Agent",
+    avatarUrl: null,
+  });
 
   const createCommentResult = await request(baseUrl, `/api/tasks/${task.id}/comments`, {
     method: "POST",
@@ -892,6 +908,66 @@ test("Codex-hosted user mutations persist the current account identity and avata
   assert.equal(task.creatorId, "jadon-bao");
   assert.equal(task.creatorName, "jadon bao");
   assert.equal(task.creatorAvatarUrl, "https://cdn.auth0.com/avatars/jb.png");
+  assert.deepEqual(task.assignee, {
+    type: "user",
+    id: "jadon-bao",
+    name: "jadon bao",
+    avatarUrl: "https://cdn.auth0.com/avatars/jb.png",
+  });
+
+  const assignedToCodexResult = await request(baseUrl, `/api/tasks/${task.id}`, {
+    method: "PATCH",
+    headers: userHeaders,
+    body: {
+      version: task.version,
+      assigneeTarget: "codex-agent",
+    },
+  });
+  assert.equal(assignedToCodexResult.response.status, 200);
+  assert.deepEqual(assignedToCodexResult.body.task.assignee, {
+    type: "agent",
+    id: "codex-agent",
+    name: "Codex Agent",
+    avatarUrl: null,
+  });
+
+  const assignedToUserResult = await request(baseUrl, `/api/tasks/${task.id}`, {
+    method: "PATCH",
+    headers: userHeaders,
+    body: {
+      version: assignedToCodexResult.body.task.version,
+      assigneeTarget: "current-user",
+    },
+  });
+  assert.equal(assignedToUserResult.response.status, 200);
+  assert.deepEqual(assignedToUserResult.body.task.assignee, {
+    type: "user",
+    id: "jadon-bao",
+    name: "jadon bao",
+    avatarUrl: "https://cdn.auth0.com/avatars/jb.png",
+  });
+
+  const updatedByCodexResult = await request(baseUrl, `/api/tasks/${task.id}`, {
+    method: "PATCH",
+    headers: { "x-taskboard-client": "taskctl" },
+    body: {
+      version: assignedToUserResult.body.task.version,
+      title: "Updated through taskctl",
+    },
+  });
+  assert.equal(updatedByCodexResult.response.status, 200);
+  assert.deepEqual(updatedByCodexResult.body.task.assignee, assignedToUserResult.body.task.assignee);
+
+  const invalidAssigneeResult = await request(baseUrl, `/api/tasks/${task.id}`, {
+    method: "PATCH",
+    headers: userHeaders,
+    body: {
+      version: updatedByCodexResult.body.task.version,
+      assigneeTarget: { type: "agent" },
+    },
+  });
+  assert.equal(invalidAssigneeResult.response.status, 400);
+  assert.equal(invalidAssigneeResult.body.error.code, "INVALID_FIELD");
 
   const createCommentResult = await request(baseUrl, `/api/tasks/${task.id}/comments`, {
     method: "POST",

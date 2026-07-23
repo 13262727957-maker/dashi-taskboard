@@ -12,6 +12,7 @@ export const TASK_PRIORITIES = ["none", "urgent", "high", "medium", "low"] as co
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type ActorType = "user" | "agent";
+export type AssigneeTarget = "current-user" | "codex-agent";
 
 export interface ActorIdentity {
   type: ActorType;
@@ -91,6 +92,7 @@ export interface Task {
   creatorId: string;
   creatorName: string;
   creatorAvatarUrl: string | null;
+  assignee: ActorIdentity;
   workflowId: string | null;
   developmentContext: DevelopmentContext | null;
   dueDate: string | null;
@@ -143,6 +145,7 @@ export interface TaskDraft {
   status: TaskStatus;
   priority: TaskPriority;
   labels: string[];
+  assigneeTarget?: AssigneeTarget;
   workflowId: string | null;
   developmentContext: DevelopmentContext | null;
   dueDate: string | null;

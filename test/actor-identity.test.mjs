@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 const typesSource = await readFile(new URL("../web/src/types.ts", import.meta.url), "utf8");
 const detailSource = await readFile(new URL("../web/src/components/TaskDetail.tsx", import.meta.url), "utf8");
+const avatarSource = await readFile(new URL("../web/src/components/ActorAvatar.tsx", import.meta.url), "utf8");
 const apiSource = await readFile(new URL("../web/src/api.ts", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
 const injectSource = await readFile(new URL("../inject/codex-taskboard.user.js", import.meta.url), "utf8");
@@ -24,12 +25,12 @@ test("task and comment contracts expose persisted user or agent identities", () 
 });
 
 test("issue activity renders distinct avatars, IDs, and styles for users and agents", () => {
-  assert.match(detailSource, /function ActorAvatar/);
-  assert.match(detailSource, /actor-avatar-\$\{type\}/);
-  assert.match(detailSource, /type === "agent"/);
-  assert.match(detailSource, /className="actor-avatar-image actor-avatar-agent-image"/);
-  assert.match(detailSource, /src="\/codex-agent-logo\.png"/);
-  assert.match(detailSource, /avatarUrl/);
+  assert.match(avatarSource, /function ActorAvatar/);
+  assert.match(avatarSource, /actor-avatar-\$\{actor\.type\}/);
+  assert.match(avatarSource, /actor\.type === "agent"/);
+  assert.match(avatarSource, /className="actor-avatar-image actor-avatar-agent-image"/);
+  assert.match(avatarSource, /src="\/codex-agent-logo\.png"/);
+  assert.match(avatarSource, /actor\.avatarUrl/);
   assert.match(detailSource, /currentTask\.creatorType/);
   assert.match(detailSource, /currentTask\.creatorId/);
   assert.match(detailSource, /currentTask\.creatorAvatarUrl/);

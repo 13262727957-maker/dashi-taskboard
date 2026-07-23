@@ -11,6 +11,7 @@ Use `taskctl` for every project, issue, and comment operation. Read [references/
 
 1. Inspect the relevant project and issue before changing them.
 2. Create or update issues with the CLI; consume its JSON output.
+   Issues created through `taskctl` are assigned to Codex Agent by default. Later CLI updates do not change the assignee.
 3. Let `taskctl` attribute every issue or comment mutation to the current Codex conversation through `CODEX_THREAD_ID`. Outside Codex, pass the exact conversation id with `--thread-id`.
 4. Set the issue status to `in_progress` before starting implementation.
 5. Include `--if-version <version>` on every concurrent update, using the version returned by the latest read.

@@ -16,7 +16,6 @@ import {
 import { TASK_STATUSES } from "../types";
 import type {
   ActorIdentity,
-  ActorType,
   Attachment,
   Comment,
   DevelopmentContext,
@@ -28,6 +27,12 @@ import type {
   TaskStatus,
   WorkflowOption,
 } from "../types";
+import {
+  CODEX_AGENT_ACTOR,
+  actorKey,
+  assigneeTargetForActor,
+} from "../actors";
+import { ActorAvatar } from "./ActorAvatar";
 import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
@@ -145,30 +150,6 @@ function ConversationLink({
       <span className="conversation-divider" aria-hidden="true" />
       <span className="conversation-thread-id">{threadId}</span>
     </button>
-  );
-}
-
-function ActorAvatar({
-  type,
-  name,
-  avatarUrl,
-}: {
-  type: ActorType;
-  name: string;
-  avatarUrl: string | null;
-}) {
-  return (
-    <div className={`comment-avatar actor-avatar-${type}`} aria-hidden="true">
-      {type === "agent" ? (
-        <img
-          className="actor-avatar-image actor-avatar-agent-image"
-          src="/codex-agent-logo.png"
-          alt=""
-        />
-      ) : avatarUrl ? (
-        <img className="actor-avatar-image" src={avatarUrl} alt="" referrerPolicy="no-referrer" />
-      ) : name.slice(0, 1)}
-    </div>
   );
 }
 
@@ -508,6 +489,10 @@ export function TaskDetail({
   ) {
     developmentOptions.unshift(currentTask.developmentContext);
   }
+  const assigneeOptions = [currentTask.assignee, currentUser, CODEX_AGENT_ACTOR]
+    .filter((actor, index, actors) => (
+      actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
+    ));
 
   return (
     <section className="issue-detail" aria-label={`${task.identifier} 议题详情`}>
@@ -662,9 +647,13 @@ export function TaskDetail({
               <div className="activity-stream">
                 <div className={`activity-entry activity-created is-${currentTask.creatorType}`}>
                   <ActorAvatar
-                    type={currentTask.creatorType}
-                    name={currentTask.creatorName}
-                    avatarUrl={currentTask.creatorAvatarUrl}
+                    className="comment-avatar"
+                    actor={{
+                      type: currentTask.creatorType,
+                      id: currentTask.creatorId,
+                      name: currentTask.creatorName,
+                      avatarUrl: currentTask.creatorAvatarUrl,
+                    }}
                   />
                   <p>
                     <strong>{currentTask.creatorName}</strong>
@@ -685,9 +674,13 @@ export function TaskDetail({
                     <div className="comment-card">
                       <header className="comment-header">
                         <ActorAvatar
-                          type={comment.authorType}
-                          name={comment.authorName}
-                          avatarUrl={comment.authorAvatarUrl}
+                          className="comment-avatar"
+                          actor={{
+                            type: comment.authorType,
+                            id: comment.authorId,
+                            name: comment.authorName,
+                            avatarUrl: comment.authorAvatarUrl,
+                          }}
                         />
                         <strong>{comment.authorName}</strong>
                         <span className="actor-id">@{comment.authorId}</span>
@@ -797,9 +790,8 @@ export function TaskDetail({
               <form className="comment-composer" onSubmit={(event) => { event.preventDefault(); void submitComment(); }}>
                 <div className="composer-author">
                   <ActorAvatar
-                    type="user"
-                    name={currentUser.name}
-                    avatarUrl={currentUser.avatarUrl}
+                    className="comment-avatar"
+                    actor={currentUser}
                   />
                   <strong>{currentUser.name}</strong>
                   <span className="actor-id">@{currentUser.id}</span>
@@ -893,6 +885,28 @@ export function TaskDetail({
               >
                 {(Object.keys(PRIORITY_DETAILS) as TaskPriority[]).map((priority) => (
                   <option value={priority} key={priority}>{PRIORITY_DETAILS[priority].label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="detail-property-row assignee-property">
+              <ActorAvatar actor={currentTask.assignee} className="detail-assignee-avatar" />
+              <span className="detail-property-label">负责人</span>
+              <select
+                aria-label="负责人"
+                value={actorKey(currentTask.assignee)}
+                disabled={savingProperty === "assignee"}
+                onChange={(event) => {
+                  const selected = assigneeOptions.find((actor) => actorKey(actor) === event.target.value);
+                  const assigneeTarget = selected
+                    ? assigneeTargetForActor(selected, currentUser)
+                    : undefined;
+                  if (assigneeTarget) void saveTask({ assigneeTarget: assigneeTarget }, "assignee");
+                }}
+              >
+                {assigneeOptions.map((actor) => (
+                  <option value={actorKey(actor)} key={actorKey(actor)}>
+                    {actor.id === currentUser.id ? `${actor.name}（我）` : actor.name}
+                  </option>
                 ))}
               </select>
             </label>
