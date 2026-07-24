@@ -4,6 +4,7 @@ dist/
 .wrangler/
 .dev.vars*
 .tmp/
+cloud-migration-exports/
 .playwright-cli/
 *.log
 .DS_Store
