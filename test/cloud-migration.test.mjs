@@ -5,6 +5,7 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
+  readFile,
   rm,
   stat,
   writeFile,
@@ -1128,6 +1129,9 @@ test("one-time Wrangler adapter migrates and verifies local persistence without 
   await runMigration("import", bundleDirectory, persistTo);
   await runMigration("verify", bundleDirectory, persistTo);
 
+  const configuredDatabaseId = JSON.parse(
+    await readFile(wranglerConfig, "utf8"),
+  ).d1_databases[0].database_id;
   const miniflare = new Miniflare({
     modules: true,
     scriptPath: path.join(projectRoot, "cloud", "src", "index.mjs"),
@@ -1137,7 +1141,7 @@ test("one-time Wrangler adapter migrates and verifies local persistence without 
       TASKBOARD_ENVIRONMENT: "production",
       TASKBOARD_SHARED_SECRET: "migration-test-secret",
     },
-    d1Databases: { DB: "DB" },
+    d1Databases: { DB: configuredDatabaseId },
     r2Buckets: { ATTACHMENTS: "codex-taskboard-attachments" },
     defaultPersistRoot: path.join(persistTo, "v3"),
     d1Persist: path.join(persistTo, "v3", "d1"),
