@@ -6,6 +6,8 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import {
   ApiError,
@@ -13,6 +15,7 @@ import {
   archiveTask as archiveTaskRequest,
   createProject as createProjectRequest,
   createTask as createTaskRequest,
+  getTaskboardRevision,
   getWorkflowWorkspace,
   getTaskboardMetadata,
   listDevelopmentContexts,
@@ -56,6 +59,7 @@ import {
   type IssueRelationType,
   type Project,
   type Task,
+  type TaskboardMetadata,
   type TaskDraft,
   type TaskStatus,
   type WorkflowOption,
@@ -65,6 +69,9 @@ import {
   readLegacyWorkflowWorkspace,
   workflowOptionsFromWorkspace,
 } from "./workflowStore";
+// The poller stays in ESM JavaScript so its lifecycle can be tested directly with node:test.
+// @ts-expect-error The module's option contract is enforced by its focused node tests.
+import { createRevisionPoller, getRevisionPollingInterval } from "./revisionPolling.mjs";
 
 type ConnectionState = "connecting" | "live" | "reconnecting";
 type Theme = "light" | "dark";
@@ -219,6 +226,119 @@ function taskToDraft(task: Task): TaskDraft {
   };
 }
 
+interface LocalRealtimeSyncProps {
+  selectedProjectId: string;
+  detailTaskId: string | null;
+  refreshProjectList: () => Promise<void>;
+  refreshTasks: (
+    projectId: string,
+    options?: { quiet?: boolean; signal?: AbortSignal },
+  ) => Promise<void>;
+  refreshWorkflowOptions: (projectId: string, signal?: AbortSignal) => Promise<void>;
+  setConnection: Dispatch<SetStateAction<ConnectionState>>;
+  setCommentsRevision: Dispatch<SetStateAction<number>>;
+  setAttachmentsRevision: Dispatch<SetStateAction<number>>;
+}
+
+function LocalRealtimeSync({
+  selectedProjectId,
+  detailTaskId,
+  refreshProjectList,
+  refreshTasks,
+  refreshWorkflowOptions,
+  setConnection,
+  setCommentsRevision,
+  setAttachmentsRevision,
+}: LocalRealtimeSyncProps) {
+  useEffect(() => {
+    const source = new EventSource("/api/events");
+    let refreshTimer: number | undefined;
+    let refreshProjectsPending = false;
+    let refreshTasksPending = false;
+
+    const scheduleRefresh = (options: { projects?: boolean; tasks?: boolean }) => {
+      refreshProjectsPending ||= options.projects === true;
+      refreshTasksPending ||= options.tasks === true;
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(() => {
+        if (refreshProjectsPending) void refreshProjectList();
+        if (refreshTasksPending && selectedProjectId) {
+          void refreshTasks(selectedProjectId, { quiet: true });
+        }
+        refreshProjectsPending = false;
+        refreshTasksPending = false;
+      }, 120);
+    };
+
+    const handleEvent = (event: Event) => {
+      const message = event as MessageEvent<string>;
+      let payload: { projectId?: string; taskId?: string } = {};
+      try {
+        payload = JSON.parse(message.data) as { projectId?: string; taskId?: string };
+      } catch {
+        // A malformed event should not interrupt later updates.
+      }
+      const affectsSelectedProject = Boolean(selectedProjectId)
+        && (!payload.projectId || payload.projectId === selectedProjectId);
+      if (event.type === "project.created") {
+        scheduleRefresh({ projects: true });
+        return;
+      }
+      if (event.type.startsWith("task.")) {
+        scheduleRefresh({ projects: true, tasks: affectsSelectedProject });
+        return;
+      }
+      if (!affectsSelectedProject) return;
+      if (event.type === "workflow.updated") {
+        if (selectedProjectId) void refreshWorkflowOptions(selectedProjectId);
+        return;
+      }
+      if (event.type.startsWith("comment.")) {
+        if (!detailTaskId || !payload.taskId || payload.taskId === detailTaskId) {
+          setCommentsRevision((current) => current + 1);
+        }
+        scheduleRefresh({ tasks: true });
+        return;
+      }
+      if (event.type.startsWith("attachment.")) {
+        if (!detailTaskId || !payload.taskId || payload.taskId === detailTaskId) {
+          setAttachmentsRevision((current) => current + 1);
+          setCommentsRevision((current) => current + 1);
+        }
+      }
+    };
+
+    EVENT_NAMES.forEach((name) => source.addEventListener(name, handleEvent));
+    source.onopen = () => {
+      setConnection("live");
+      scheduleRefresh({ projects: true, tasks: Boolean(selectedProjectId) });
+      if (selectedProjectId) void refreshWorkflowOptions(selectedProjectId);
+      if (detailTaskId) {
+        setCommentsRevision((current) => current + 1);
+        setAttachmentsRevision((current) => current + 1);
+      }
+    };
+    source.onerror = () => setConnection("reconnecting");
+
+    return () => {
+      window.clearTimeout(refreshTimer);
+      EVENT_NAMES.forEach((name) => source.removeEventListener(name, handleEvent));
+      source.close();
+    };
+  }, [
+    detailTaskId,
+    refreshProjectList,
+    refreshTasks,
+    refreshWorkflowOptions,
+    selectedProjectId,
+    setAttachmentsRevision,
+    setCommentsRevision,
+    setConnection,
+  ]);
+
+  return null;
+}
+
 export function App() {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const embedded = query.get("host") === "codex";
@@ -228,6 +348,7 @@ export function App() {
   const [developmentScan, setDevelopmentScan] = useState<DevelopmentScan>({ workspacePath: null, contexts: [] });
   const [developmentScanLoading, setDevelopmentScanLoading] = useState(false);
   const [manageTaskboardSkillPath, setManageTaskboardSkillPath] = useState("");
+  const [taskboardMetadata, setTaskboardMetadata] = useState<TaskboardMetadata | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -267,6 +388,10 @@ export function App() {
   const undoStackRef = useRef<UndoOperation[]>([]);
   const undoInFlightRef = useRef(false);
   const dragRegionRef = useRef<HTMLDivElement>(null);
+  const selectedProjectIdRef = useRef(selectedProjectId);
+  selectedProjectIdRef.current = selectedProjectId;
+
+  const revisionPollingInterval = getRevisionPollingInterval(taskboardMetadata);
 
   const setAnnouncement = useCallback((message: string) => {
     setUndoNotice(null);
@@ -479,7 +604,17 @@ export function App() {
         getTaskboardMetadata(signal),
         listDeviceWorkspaces(signal),
       ]);
-      setManageTaskboardSkillPath(metadata.manageTaskboardSkillPath);
+      setTaskboardMetadata((current) => (
+        current
+        && current.mode === metadata.mode
+        && current.realtime?.transport === metadata.realtime?.transport
+        && current.realtime?.intervalMs === metadata.realtime?.intervalMs
+        && current.manageTaskboardSkillPath === metadata.manageTaskboardSkillPath
+        && current.localCapabilities?.available === metadata.localCapabilities?.available
+          ? current
+          : metadata
+      ));
+      setManageTaskboardSkillPath(metadata.manageTaskboardSkillPath ?? "");
       setDeviceWorkspacePaths((current) => {
         const next = { ...current, ...workspaces };
         if (JSON.stringify(next) === JSON.stringify(current)) return current;
@@ -609,82 +744,43 @@ export function App() {
   ]);
 
   useEffect(() => {
-    const source = new EventSource("/api/events");
-    let refreshTimer: number | undefined;
-    let refreshProjectsPending = false;
-    let refreshTasksPending = false;
-
-    const scheduleRefresh = (options: { projects?: boolean; tasks?: boolean }) => {
-      refreshProjectsPending ||= options.projects === true;
-      refreshTasksPending ||= options.tasks === true;
-      window.clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(() => {
-        if (refreshProjectsPending) void refreshProjectList();
-        if (refreshTasksPending && selectedProjectId) {
-          void refreshTasks(selectedProjectId, { quiet: true });
+    if (revisionPollingInterval === null) return;
+    const controller = new AbortController();
+    setConnection("connecting");
+    const poller = createRevisionPoller({
+      intervalMs: revisionPollingInterval,
+      fetchRevision: async (since: number) => {
+        try {
+          const result = await getTaskboardRevision(since, controller.signal);
+          setConnection("live");
+          return result;
+        } catch (error) {
+          if (!controller.signal.aborted) setConnection("reconnecting");
+          throw error;
         }
-        refreshProjectsPending = false;
-        refreshTasksPending = false;
-      }, 120);
-    };
-
-    const handleEvent = (event: Event) => {
-      const message = event as MessageEvent<string>;
-      let payload: { projectId?: string; taskId?: string } = {};
-      try {
-        payload = JSON.parse(message.data) as { projectId?: string; taskId?: string };
-      } catch {
-        // A malformed event should not interrupt later updates.
-      }
-      const affectsSelectedProject = Boolean(selectedProjectId)
-        && (!payload.projectId || payload.projectId === selectedProjectId);
-      if (event.type === "project.created") {
-        scheduleRefresh({ projects: true });
-        return;
-      }
-      if (event.type.startsWith("task.")) {
-        scheduleRefresh({ projects: true, tasks: affectsSelectedProject });
-        return;
-      }
-      if (!affectsSelectedProject) return;
-      if (event.type === "workflow.updated") {
-        if (selectedProjectId) void refreshWorkflowOptions(selectedProjectId);
-        return;
-      }
-      if (event.type.startsWith("comment.")) {
-        if (!detailTaskId || !payload.taskId || payload.taskId === detailTaskId) {
-          setCommentsRevision((current) => current + 1);
+      },
+      onInvalidate: () => {
+        void refreshProjectList();
+        const projectId = selectedProjectIdRef.current;
+        if (projectId) {
+          void refreshTasks(projectId, { quiet: true });
+          void refreshWorkflowOptions(projectId).catch(() => {});
         }
-        scheduleRefresh({ tasks: true });
-        return;
-      }
-      if (event.type.startsWith("attachment.")) {
-        if (!detailTaskId || !payload.taskId || payload.taskId === detailTaskId) {
-          setAttachmentsRevision((current) => current + 1);
-          setCommentsRevision((current) => current + 1);
-        }
-        return;
-      }
-    };
-
-    EVENT_NAMES.forEach((name) => source.addEventListener(name, handleEvent));
-    source.onopen = () => {
-      setConnection("live");
-      scheduleRefresh({ projects: true, tasks: Boolean(selectedProjectId) });
-      if (selectedProjectId) void refreshWorkflowOptions(selectedProjectId);
-      if (detailTaskId) {
         setCommentsRevision((current) => current + 1);
         setAttachmentsRevision((current) => current + 1);
-      }
-    };
-    source.onerror = () => setConnection("reconnecting");
-
+      },
+    });
+    poller.start();
     return () => {
-      window.clearTimeout(refreshTimer);
-      EVENT_NAMES.forEach((name) => source.removeEventListener(name, handleEvent));
-      source.close();
+      controller.abort();
+      poller.stop();
     };
-  }, [detailTaskId, refreshProjectList, refreshTasks, refreshWorkflowOptions, selectedProjectId]);
+  }, [
+    revisionPollingInterval,
+    refreshProjectList,
+    refreshTasks,
+    refreshWorkflowOptions,
+  ]);
 
   function pushUndo(message: string, undo: () => Promise<void>, showNotice = true) {
     const operation = { id: ++undoSequenceRef.current, message, undo };
@@ -1220,6 +1316,18 @@ export function App() {
 
   return (
     <div className={`app-shell${embedded ? " embedded" : ""}`} style={appShellStyle}>
+      {taskboardMetadata && taskboardMetadata.mode !== "cloud" && (
+        <LocalRealtimeSync
+          selectedProjectId={selectedProjectId}
+          detailTaskId={detailTaskId}
+          refreshProjectList={refreshProjectList}
+          refreshTasks={refreshTasks}
+          refreshWorkflowOptions={refreshWorkflowOptions}
+          setConnection={setConnection}
+          setCommentsRevision={setCommentsRevision}
+          setAttachmentsRevision={setAttachmentsRevision}
+        />
+      )}
       {!embedded && (
         <aside className="app-nav" aria-label="Taskboard navigation">
           <div className="brand-row">

@@ -8,11 +8,24 @@
 taskctl context current [--cwd PATH] [--json]
 taskctl project list [--json]
 taskctl project create --name NAME [--id ID] [--workspace-path PATH] [--json]
+taskctl project map PROJECT_ID --workspace-path PATH [--json]
 ```
 
 Use `--workspace-path` to associate a project with a local repository. `context current` chooses the most specific project whose workspace contains the current directory, then falls back to the `local` project.
 
-Set `CODEX_TASKBOARD_URL` to override the default API origin, `http://127.0.0.1:47823`.
+Set `CODEX_TASKBOARD_URL` to override the default local API origin, `http://127.0.0.1:47823`.
+
+For a shared cloud board, keep `taskctl` pointed at the loopback companion and configure the upstream HTTPS origin through it:
+
+```bash
+taskctl cloud login --url HTTPS_ORIGIN --actor-name NAME [--json]
+taskctl cloud status [--json]
+taskctl project list [--json]
+taskctl project map PROJECT_ID --workspace-path /absolute/local/path [--json]
+taskctl cloud logout [--json]
+```
+
+`cloud login` reads the shared password from a private `Shared key:` prompt. The actor name is the display attribution sent through Basic Authentication. The companion stores its configuration with mode `0600`; project mappings stay on the current device and can differ between collaborators. In cloud mode, failed upstream writes fail rather than falling back to or double-writing the local SQLite database.
 
 Every issue or comment write must be attributed to a Codex conversation. In Codex, `taskctl` reads the current conversation from `CODEX_THREAD_ID`. Outside Codex, pass `--thread-id ID` explicitly. An explicit option takes precedence over the environment. Read commands do not require a conversation id.
 
