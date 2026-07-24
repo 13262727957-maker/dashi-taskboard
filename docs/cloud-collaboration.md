@@ -55,14 +55,14 @@ npx wrangler login
 npx wrangler whoami
 ```
 
-Provision the production D1 database and private R2 bucket using the exact names above. Keep any account or database IDs out of Git.
+Provision the production D1 database and private R2 bucket using the exact names above.
 
 ```bash
 npx wrangler d1 create codex-taskboard-db
 npx wrangler r2 bucket create codex-taskboard-attachments
 ```
 
-`wrangler.jsonc` contains one production configuration and identifies its bindings by these resource names without committing a real D1 ID. Wrangler local development creates persistent local equivalents under `.wrangler/`; those are local simulations, not additional Cloudflare environments.
+`wrangler.jsonc` contains one production configuration and identifies the D1 binding by its resource name and `database_id`. A D1 database ID is public metadata and does not grant access, so it can be committed. Wrangler local development creates persistent local equivalents under `.wrangler/`; those are local simulations, not additional Cloudflare environments.
 
 Apply the remote D1 migration and validate the deployment bundle:
 
@@ -78,7 +78,7 @@ npx wrangler secret put TASKBOARD_SHARED_SECRET
 npm run cloud:deploy
 ```
 
-These commands create or update Cloudflare resources. This repository does not contain a real account ID, D1 database ID, password, email address, or token, and cloning the repository does not mean the Worker has already been deployed.
+These commands create or update Cloudflare resources. This repository contains the production D1 database ID for the binding, but it does not contain the shared password or any API or OAuth token. Keep those credentials out of Git; cloning the repository does not grant access or mean the Worker has already been deployed.
 
 Give the other collaborator the deployed Worker HTTPS origin and shared password through a trusted channel. Never publish the password in the repository, an issue, or logs.
 
