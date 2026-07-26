@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -76,6 +78,11 @@ import {
 
 type ConnectionState = "connecting" | "live" | "reconnecting";
 type Theme = "light" | "dark";
+type BoardView = "issues" | "workflow";
+
+const WorkflowBoard = lazy(() => import("./components/WorkflowBoard").then((module) => ({
+  default: module.WorkflowBoard,
+})));
 
 interface EditorState {
   task: Task | null;
@@ -358,12 +365,14 @@ export function App() {
   const [filters, setFilters] = useState(readTaskFilters);
   const [showEmptyColumns, setShowEmptyColumns] = useState(readShowEmptyColumns);
   const [columnVisibilityByProject, setColumnVisibilityByProject] = useState(readColumnVisibilityByProject);
+  const [boardView, setBoardView] = useState<BoardView>("issues");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [detailTaskIdentifier, setDetailTaskIdentifier] = useState<string | null>(
     () => readIssueIdentifier(window.location.search),
   );
   const [commentsRevision, setCommentsRevision] = useState(0);
   const [attachmentsRevision, setAttachmentsRevision] = useState(0);
+  const [workflowRevision, setWorkflowRevision] = useState(0);
   const [workflowOptions, setWorkflowOptions] = useState<WorkflowOption[]>(DEFAULT_WORKFLOW_OPTIONS);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
@@ -718,6 +727,7 @@ export function App() {
       const routeProjectId = url.searchParams.get("project") ?? "";
       setDetailTaskIdentifier(readIssueIdentifier(url.search));
       if (routeProjectId === selectedProjectId) return;
+      setBoardView("issues");
       setSelectedProjectId(routeProjectId);
       if (routeProjectId) window.localStorage.setItem(LAST_PROJECT_KEY, routeProjectId);
       else window.localStorage.removeItem(LAST_PROJECT_KEY);
@@ -1019,6 +1029,7 @@ export function App() {
       }
       if (!affectsSelectedProject) return;
       if (event.type === "workflow.updated") {
+        setWorkflowRevision((current) => current + 1);
         if (selectedProjectId) void refreshWorkflowOptions(selectedProjectId);
         return;
       }
@@ -1119,11 +1130,12 @@ export function App() {
         && !event.metaKey
         && !event.ctrlKey
         && selectedProjectId
+        && boardView === "issues"
       ) {
         event.preventDefault();
         setEditor({ task: null, status: "backlog" });
       }
-      if (event.key === "/" && !detailTaskId && selectedProjectId) {
+      if (event.key === "/" && !detailTaskId && selectedProjectId && boardView === "issues") {
         event.preventDefault();
         document.getElementById("task-search")?.focus();
       }
@@ -1134,7 +1146,7 @@ export function App() {
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [contextMenu, detailTaskId, editor, projectMenuOpen, selectedProjectId]);
+  }, [boardView, contextMenu, detailTaskId, editor, projectMenuOpen, selectedProjectId]);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter(
@@ -1188,6 +1200,11 @@ export function App() {
       window.localStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
       return next;
     });
+  }
+
+  function selectBoardView(view: BoardView) {
+    closeContextMenu();
+    setBoardView(view);
   }
 
   async function saveEditor(draft: TaskDraft, attachments: File[]) {
@@ -1513,6 +1530,7 @@ export function App() {
     closeContextMenu();
     setProjectMenuOpen(false);
     setDetailTaskIdentifier(null);
+    setBoardView("issues");
     setSelectedProjectId(projectId);
     window.localStorage.setItem(LAST_PROJECT_KEY, projectId);
     setSearch("");
@@ -1766,7 +1784,7 @@ export function App() {
                 onChange={(options) => void saveProjectAutomation(options)}
               />
             )}
-            {selectedProjectId && (
+            {selectedProjectId && boardView === "issues" && (
               <button
                 className="icon-button header-create-button"
                 type="button"
@@ -1785,11 +1803,24 @@ export function App() {
 
         {selectedProjectId && !detailTask && <div className="board-toolbar">
           <div className="view-tabs" aria-label="看板视图">
-            <span className="view-tab active" aria-current="page">
+            <button
+              className={`view-tab${boardView === "issues" ? " active" : ""}`}
+              type="button"
+              aria-pressed={boardView === "issues"}
+              onClick={() => selectBoardView("issues")}
+            >
               议题看板
-            </span>
+            </button>
+            <button
+              className={`view-tab${boardView === "workflow" ? " active" : ""}`}
+              type="button"
+              aria-pressed={boardView === "workflow"}
+              onClick={() => selectBoardView("workflow")}
+            >
+              节点模式
+            </button>
           </div>
-          <div className="toolbar-tools">
+          {boardView === "issues" && <div className="toolbar-tools">
             <label className={`search-field${search ? " has-value" : ""}`} title="搜索议题 (/)" >
               <LinearIcon className="search-icon" name="search" />
               <span className="sr-only">搜索议题</span>
@@ -1824,7 +1855,7 @@ export function App() {
                 <LinearIcon name="close" />
               </button>
             )}
-          </div>
+          </div>}
         </div>}
 
         {(loadError || actionError) && (
@@ -1948,6 +1979,21 @@ export function App() {
             onError={setActionError}
             onAnnounce={setAnnouncement}
           />
+        ) : boardView === "workflow" ? (
+          <Suspense fallback={<div className="workflow-board-loading">正在打开节点模式…</div>}>
+            <WorkflowBoard
+              key={selectedProject?.id ?? "local"}
+              projectId={selectedProject?.id ?? "local"}
+              projectName={selectedProject?.name ?? "当前项目"}
+              workspacePath={
+                selectedDeviceWorkspacePath
+                ?? developmentScan.workspacePath
+                ?? hostContext?.workspacePath
+              }
+              revision={workflowRevision}
+              onWorkflowsChange={setWorkflowOptions}
+            />
+          </Suspense>
         ) : tasksLoading && !hasLoadedTasks ? (
           <div className="loading-board" aria-label="Loading issues" aria-busy="true">
             {TASK_STATUSES.map((status) => (

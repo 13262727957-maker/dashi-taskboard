@@ -200,11 +200,11 @@ export function ProjectAutomationMenu({
         ref={triggerRef}
         type="button"
         className={`project-automation-trigger no-drag ${status === "ACTIVE" ? "is-active" : "is-paused"}`}
-        aria-label={status === "ACTIVE" ? "已开启自动认领" : "自动认领未开启"}
+        aria-label={status === "ACTIVE" ? "自动认领" : "无自动化"}
         aria-busy={pending}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={status === "ACTIVE" ? "已开启自动认领" : "自动认领未开启"}
+        title={status === "ACTIVE" ? "自动认领" : "无自动化"}
         onClick={() => {
           if (!open) {
             setPosition((current) => ({ ...current, ready: false }));
@@ -214,7 +214,7 @@ export function ProjectAutomationMenu({
         }}
       >
         <LinearIcon name={status === "ACTIVE" ? "play" : "pause"} />
-        <span>{status === "ACTIVE" ? "已开启自动认领" : "自动认领未开启"}</span>
+        <span>{status === "ACTIVE" ? "自动认领" : "无自动化"}</span>
       </button>
       {menu}
     </>

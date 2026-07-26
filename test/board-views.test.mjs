@@ -16,19 +16,25 @@ const serverSource = await readFile(new URL("../server/app.mjs", import.meta.url
 const styles = await readFile(new URL("../web/src/components/workflow.css", import.meta.url), "utf8");
 const globalStyles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 
-test("the taskboard exposes only the issue board and cannot retain a hidden workflow view", () => {
-  assert.match(
-    appSource,
-    /<div className="view-tabs" aria-label="看板视图">[\s\S]*?<span className="view-tab active" aria-current="page">[\s\S]*?议题看板[\s\S]*?<\/span>[\s\S]*?<\/div>/,
-  );
-  assert.doesNotMatch(appSource, />\s*流程看板\s*</);
-  assert.doesNotMatch(appSource, /type BoardView|useState<BoardView>|setBoardView|selectBoardView/);
+test("the taskboard defaults to issues and exposes issue and node mode tabs", () => {
+  assert.match(appSource, /type BoardView = "issues" \| "workflow"/);
+  assert.match(appSource, /useState<BoardView>\("issues"\)/);
+  assert.match(appSource, />\s*议题看板\s*<\/button>/);
+  assert.match(appSource, />\s*节点模式\s*<\/button>/);
+  assert.match(appSource, /aria-pressed=\{boardView === "issues"\}/);
+  assert.match(appSource, /aria-pressed=\{boardView === "workflow"\}/);
+  assert.match(appSource, /onClick=\{\(\) => selectBoardView\("issues"\)\}/);
+  assert.match(appSource, /onClick=\{\(\) => selectBoardView\("workflow"\)\}/);
+  assert.match(appSource, /function changeProject[\s\S]*?setBoardView\("issues"\)/);
   assert.doesNotMatch(appSource, /<span>活跃<\/span>|<span>积压事项<\/span>|所有议题|add-view/);
 });
 
-test("the issue board stays mounted while the workflow editor implementation remains intact", () => {
-  assert.match(appSource, /<div className="toolbar-tools">/);
-  assert.doesNotMatch(appSource, /lazy\(\(\) => import\("\.\/components\/WorkflowBoard"\)|<WorkflowBoard/);
+test("node mode lazy-loads WorkflowBoard while issue-only controls remain isolated", () => {
+  assert.match(appSource, /lazy\(\(\) => import\("\.\/components\/WorkflowBoard"\)/);
+  assert.match(appSource, /boardView === "issues" && <div className="toolbar-tools">/);
+  assert.match(appSource, /boardView === "workflow" \? \([\s\S]*?<Suspense[\s\S]*?<WorkflowBoard/);
+  assert.match(appSource, /projectId=\{selectedProject\?\.id \?\? "local"\}/);
+  assert.match(appSource, /onWorkflowsChange=\{setWorkflowOptions\}/);
   assert.match(workflowSource, /export function WorkflowBoard\(/);
   assert.match(workflowSource, /from "@xyflow\/react"/);
   assert.match(workflowSource, /aria-label="流程编排区"/);
@@ -157,6 +163,9 @@ test("workflow deletion preserves inactive state, selects the right active neigh
 
 test("workflow edits persist per project and continue to synchronize through the shared service", () => {
   assert.match(workflowSource, /export function WorkflowBoard\(/);
+  assert.match(appSource, /const \[workflowRevision, setWorkflowRevision\] = useState\(0\)/);
+  assert.match(appSource, /event\.type === "workflow\.updated"[\s\S]*?setWorkflowRevision\(\(current\) => current \+ 1\)/);
+  assert.match(appSource, /<WorkflowBoard[\s\S]*?revision=\{workflowRevision\}/);
   assert.match(databaseSource, /CREATE TABLE IF NOT EXISTS workflow_workspaces/);
   assert.match(databaseSource, /saveWorkflowWorkspace\(projectId, expectedVersion, workspace\)/);
   assert.match(serverSource, /\/workflow-workspace/);
@@ -178,7 +187,8 @@ test("issue workflow choices read the shared service workspace without loading R
   assert.match(appSource, /getWorkflowWorkspace<unknown>\(projectId, signal\)/);
   assert.match(appSource, /event\.type === "workflow\.updated"/);
   assert.match(appSource, /refreshWorkflowOptions\(selectedProjectId\)/);
-  assert.doesNotMatch(appSource, /WorkflowBoard|@xyflow\/react/);
+  assert.match(appSource, /const WorkflowBoard = lazy/);
+  assert.doesNotMatch(appSource, /import \{ WorkflowBoard \} from|from "@xyflow\/react"/);
   assert.doesNotMatch(appSource, /from "\.\/components\/WorkflowBoard".*workflowStorageKey/);
 });
 

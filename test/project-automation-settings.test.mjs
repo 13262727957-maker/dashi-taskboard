@@ -58,8 +58,9 @@ test("the project navigation automation menu owns the icon, fields, and accessib
   assert.match(menuSource, /status === "ACTIVE" \? "play" : "pause"/);
   assert.doesNotMatch(menuSource, /statusStarted|statusTodo/);
   assert.match(menuSource, /aria-busy=\{pending/);
-  assert.match(menuSource, /已开启自动认领/);
-  assert.match(menuSource, /自动认领未开启/);
+  assert.match(menuSource, /自动认领/);
+  assert.match(menuSource, /无自动化/);
+  assert.doesNotMatch(menuSource, /已开启自动认领|自动认领未开启/);
   assert.match(menuSource, /自动认领开关/);
   assert.match(menuSource, /5, 10, 15, 30, 60/);
   assert.match(menuSource, /AUTOMATION_MODELS\.map/);
