@@ -6,6 +6,10 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { resolvePort } from "../server/app.mjs";
+import {
+  parseTaskboardAutomationHostRequest,
+  reconcileTaskboardAutomation,
+} from "../shared/taskboard-automation.mjs";
 
 const injectorPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(injectorPath), "..");
@@ -15,6 +19,12 @@ const taskboardHealthUrl = `${taskboardOrigin}/health`;
 const taskboardPageUrl = `${taskboardOrigin}/?host=codex`;
 const hostBindingName = "__codexTaskboardHostV1";
 const hostHeartbeatName = "__codexTaskboardHostHeartbeatV1";
+const codexAutomationMethods = new Set([
+  "list-automations",
+  "automation-create",
+  "automation-update",
+]);
+let codexAutomationRequestSequence = 0;
 
 function parseArgs(argv) {
   const options = {
@@ -398,6 +408,9 @@ function parseHostRequest(payload) {
       return null;
     }
     if (request.action === "ensure") return request;
+    if (request.action === "automation") {
+      return parseTaskboardAutomationHostRequest(request);
+    }
     if (
       request.action === "prefill-task-composer"
       && typeof request.instruction === "string"
@@ -417,6 +430,92 @@ function parseHostRequest(payload) {
     return null;
   } catch (_) {
     return null;
+  }
+}
+
+async function requestCodexAutomationViaCdp(cdp, executionContextId, method, params) {
+  if (!codexAutomationMethods.has(method)) {
+    throw new Error(`Unsupported Codex automation method: ${method}`);
+  }
+  const requestId = [
+    "taskboard-automation",
+    process.pid,
+    Date.now().toString(36),
+    (++codexAutomationRequestSequence).toString(36),
+  ].join("-");
+  const evaluation = await cdp.send("Runtime.evaluate", {
+    expression: `(() => new Promise((resolve) => {
+      const method = ${JSON.stringify(method)};
+      const params = ${JSON.stringify(params)};
+      const requestId = ${JSON.stringify(requestId)};
+      const bridge = window.electronBridge;
+      if (!bridge || typeof bridge.sendMessageFromView !== "function") {
+        resolve({ ok: false, error: "当前 Codex 版本没有提供原生自动任务能力" });
+        return;
+      }
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        window.removeEventListener("message", onMessage);
+        resolve(result);
+      };
+      const onMessage = (event) => {
+        const message = event.data;
+        if (
+          !message
+          || typeof message !== "object"
+          || message.type !== "fetch-response"
+          || message.requestId !== requestId
+        ) return;
+        finish({
+          ok: true,
+          responseType: message.responseType,
+          status: message.status,
+          bodyJsonString: message.bodyJsonString,
+        });
+      };
+      const timeout = window.setTimeout(
+        () => finish({ ok: false, error: "Codex 自动任务接口没有响应" }),
+        10_000,
+      );
+      window.addEventListener("message", onMessage);
+      Promise.resolve(bridge.sendMessageFromView({
+        type: "fetch",
+        requestId,
+        method: "POST",
+        url: \`vscode://codex/${method}\`,
+        body: JSON.stringify(params),
+      })).catch((error) => {
+        finish({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }))()`,
+    contextId: executionContextId,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  if (evaluation.exceptionDetails) {
+    throw new Error(
+      evaluation.exceptionDetails.exception?.description
+      || "Codex automation request failed",
+    );
+  }
+  const response = evaluation.result.value;
+  if (!response?.ok) throw new Error(response?.error || "Codex automation request failed");
+  if (!Number.isInteger(response.status) || response.status < 200 || response.status >= 300) {
+    throw new Error(`Codex automation request returned HTTP ${response.status}`);
+  }
+  if (typeof response.bodyJsonString !== "string" || response.bodyJsonString.length === 0) {
+    return {};
+  }
+  try {
+    return JSON.parse(response.bodyJsonString);
+  } catch {
+    throw new Error("Codex automation request returned invalid JSON");
   }
 }
 
@@ -570,9 +669,22 @@ async function installTaskboardHostBinding(cdp, supervisor) {
     const request = parseHostRequest(params.payload);
     if (!request) return;
     try {
-      const result = request.action === "ensure"
-        ? await supervisor.ensure({ force: true })
-        : await prefillTaskComposerViaCdp(cdp, params.executionContextId, request);
+      let result;
+      if (request.action === "ensure") {
+        result = await supervisor.ensure({ force: true });
+      } else if (request.action === "automation") {
+        result = await reconcileTaskboardAutomation(
+          request,
+          (method, body) => requestCodexAutomationViaCdp(
+            cdp,
+            params.executionContextId,
+            method,
+            body,
+          ),
+        );
+      } else {
+        result = await prefillTaskComposerViaCdp(cdp, params.executionContextId, request);
+      }
       await sendHostResponse(cdp, params.executionContextId, {
         id: request.id,
         ok: true,

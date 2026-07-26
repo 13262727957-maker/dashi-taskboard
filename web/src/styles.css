@@ -1187,6 +1187,10 @@ kbd {
   padding: 18px 16px 14px;
 }
 
+.board-settings-section + .board-settings-section {
+  border-top: var(--border-hairline) solid var(--border);
+}
+
 .board-settings-section h2 {
   margin: 0 0 12px;
   color: var(--text-primary);
@@ -1204,6 +1208,31 @@ kbd {
   font-weight: 500;
 }
 
+.board-setting-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.board-setting-copy small,
+.board-setting-note {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.board-setting-note,
+.board-setting-error {
+  margin: 7px 42px 0 0;
+}
+
+.board-setting-error {
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .board-setting-switch {
   position: relative;
   width: 34px;
@@ -1214,6 +1243,11 @@ kbd {
   outline: 0;
   background: color-mix(in srgb, var(--text-tertiary) 34%, transparent);
   transition: background-color 120ms ease;
+}
+
+.board-setting-switch:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .board-setting-switch > span:first-child {

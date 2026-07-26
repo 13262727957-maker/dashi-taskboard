@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.6.5";
+  const VERSION = "0.6.6";
   const SENTINEL_KEY = "__codexTaskboardInjection__";
   const DEFAULT_TASKBOARD_URL = "http://127.0.0.1:47823/?host=codex";
   const ENTRY_ID = "codex-taskboard-entry";
@@ -94,6 +94,16 @@
       return url;
     } catch (_) {
       return new URL(DEFAULT_TASKBOARD_URL);
+    }
+  }
+
+  function isLocalTaskboardOrigin(origin) {
+    try {
+      const { protocol, hostname } = new URL(origin);
+      return (protocol === "http:" || protocol === "https:")
+        && (hostname === "127.0.0.1" || hostname === "localhost");
+    } catch (_) {
+      return false;
     }
   }
 
@@ -716,6 +726,51 @@
     }
   }
 
+  async function handleAutomationRequest(payload) {
+    const requestId = typeof payload?.requestId === "string" ? payload.requestId : "";
+    if (!requestId) return;
+    if (!isLocalTaskboardOrigin(frameOrigin)) {
+      postToFrame({
+        type: "taskboard:automation-response",
+        payload: { requestId, ok: false, error: "仅本地任务面板可用" },
+      });
+      return;
+    }
+    try {
+      const response = await requestHost("automation", {
+        requestId,
+        operation: payload.operation,
+        taskboardProjectId: payload.taskboardProjectId,
+        codexProjectId: payload.codexProjectId,
+        projectName: payload.projectName,
+        workspacePath: payload.workspacePath,
+        skillPath: payload.skillPath,
+        ...(payload.automationId === undefined ? {} : { automationId: payload.automationId }),
+        intervalMinutes: payload.intervalMinutes,
+      });
+      postToFrame({
+        type: "taskboard:automation-response",
+        payload: response.error
+          ? { requestId, ok: false, error: response.error }
+          : {
+              requestId,
+              ok: true,
+              item: response.item,
+              items: response.items,
+            },
+      });
+    } catch (error) {
+      postToFrame({
+        type: "taskboard:automation-response",
+        payload: {
+          requestId,
+          ok: false,
+          error: error instanceof Error ? error.message : "Codex 自动任务操作失败",
+        },
+      });
+    }
+  }
+
   function onFrameMessage(event) {
     if (!frame || event.source !== frame.contentWindow || event.origin !== frameOrigin) return;
     const message = event.data;
@@ -741,6 +796,10 @@
     }
     if (message.type === "taskboard:expand-sidebar") {
       expandNativeSidebar();
+      return;
+    }
+    if (message.type === "taskboard:automation-request") {
+      void handleAutomationRequest(message.payload);
       return;
     }
     if (message.type === "taskboard:create-thread") void createThreadForTask(message.payload);
@@ -942,7 +1001,7 @@
       }, HOST_REQUEST_TIMEOUT_MS);
       hostRequests.set(id, { resolve, reject, timeout });
       try {
-        binding(JSON.stringify({ id, action, ...payload }));
+        binding(JSON.stringify({ ...payload, id, action }));
       } catch (error) {
         window.clearTimeout(timeout);
         hostRequests.delete(id);

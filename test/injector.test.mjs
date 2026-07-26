@@ -37,6 +37,24 @@ test("the CDP bridge accepts only service ensure and native Skill composer prefi
   assert.match(source, /__codexTaskboardHostHeartbeatV1/);
 });
 
+test("the CDP bridge exposes only the fixed Taskboard automation operations", () => {
+  assert.match(source, /parseTaskboardAutomationHostRequest/);
+  assert.match(source, /reconcileTaskboardAutomation/);
+  assert.match(source, /request\.action === "automation"/);
+  assert.match(source, /function requestCodexAutomationViaCdp/);
+  assert.match(source, /new Set\(\[\s*"list-automations",\s*"automation-create",\s*"automation-update",\s*\]\)/);
+  assert.match(source, /bridge\.sendMessageFromView\(\{\s*type: "fetch",\s*requestId,/);
+  assert.match(source, /method: "POST"/);
+  assert.match(source, /vscode:\/\/codex\/\$\{method\}/);
+  assert.match(source, /body: JSON\.stringify\(params\)/);
+  assert.match(source, /message\.type !== "fetch-response"/);
+  assert.match(source, /message\.responseType/);
+  assert.match(source, /message\.status/);
+  assert.match(source, /message\.bodyJsonString/);
+  assert.doesNotMatch(source, /automation-delete/);
+  assert.doesNotMatch(source, /automations\.toml/);
+});
+
 test("the package injection command remains resident for tab-triggered recovery", () => {
   assert.match(packageJson.scripts["codex:inject"], /--watch/);
   assert.match(packageJson.scripts["codex:daemon"], /--daemon --open/);

@@ -148,6 +148,31 @@ test("iframe messages require both the exact origin and source window", () => {
   assert.match(source, /postMessage\(message, frameOrigin\)/);
 });
 
+test("the iframe automation contract is forwarded through the fixed host binding", () => {
+  assert.match(source, /message\.type === "taskboard:automation-request"/);
+  assert.match(source, /function handleAutomationRequest\(payload\)/);
+  assert.match(source, /requestHost\("automation", \{/);
+  assert.match(source, /operation: payload\.operation/);
+  assert.match(source, /taskboardProjectId: payload\.taskboardProjectId/);
+  assert.match(source, /codexProjectId: payload\.codexProjectId/);
+  assert.match(source, /workspacePath: payload\.workspacePath/);
+  assert.match(source, /skillPath: payload\.skillPath/);
+  assert.match(source, /type: "taskboard:automation-response"/);
+  assert.match(source, /requestId,\s*ok: true,\s*item: response\.item/);
+  assert.match(source, /items: response\.items/);
+  assert.match(source, /requestId,\s*ok: false,\s*error:/);
+  assert.match(source, /binding\(JSON\.stringify\(\{ \.\.\.payload, id, action \}\)\)/);
+});
+
+test("only a loopback Taskboard iframe can request native automation", () => {
+  assert.match(source, /function isLocalTaskboardOrigin\(origin\)/);
+  assert.match(source, /hostname === "127\.0\.0\.1" \|\| hostname === "localhost"/);
+  assert.match(
+    source,
+    /if \(!isLocalTaskboardOrigin\(frameOrigin\)\) \{\s*postToFrame\(\{\s*type: "taskboard:automation-response"/,
+  );
+});
+
 test("issues open an unsent native Codex composer in the exact workspace with a Skill mention", () => {
   assert.match(source, /function createThreadForTask\(payload\)/);
   assert.match(source, /\[data-app-action-sidebar-select-project\]/);
