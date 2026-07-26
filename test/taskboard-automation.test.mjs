@@ -133,17 +133,20 @@ test("the automation host request accepts only whitelisted project automation op
     null,
   );
   const allEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
-  for (const model of AUTOMATION_MODELS) {
-    for (const effort of allEfforts) {
-      assert.equal(
-        parseTaskboardAutomationHostRequest({
-          ...baseRequest,
-          model: model.slug,
-          reasoningEffort: effort,
-        }) !== null,
-        model.efforts.includes(effort),
-        `${model.slug}/${effort}`,
-      );
+  for (const intervalMinutes of [5, 10, 15, 30, 60]) {
+    for (const model of AUTOMATION_MODELS) {
+      for (const effort of allEfforts) {
+        assert.equal(
+          parseTaskboardAutomationHostRequest({
+            ...baseRequest,
+            intervalMinutes,
+            model: model.slug,
+            reasoningEffort: effort,
+          }) !== null,
+          model.efforts.includes(effort),
+          `${intervalMinutes}m/${model.slug}/${effort}`,
+        );
+      }
     }
   }
   assert.equal(isSupportedModelEffort("gpt-5.6-luna", "max"), true);

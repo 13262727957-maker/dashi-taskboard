@@ -75,14 +75,23 @@ test("the project navigation automation menu owns the icon, fields, and accessib
   assert.match(appSource, /仅本地任务面板可用/);
 });
 
-test("automation status uses Codex-native play and pause icon assets", () => {
-  assert.match(iconSource, /play:\s*\{\s*viewBox: "0 0 24 24",\s*content: <polygon[^>]*points="6 3 20 12 6 21 6 3"[^>]*\/>/s);
-  assert.match(iconSource, /pause:\s*\{\s*viewBox: "0 0 24 24",[\s\S]*?<rect x="14" y="4" width="4" height="16" rx="1" \/>[\s\S]*?<rect x="6" y="4" width="4" height="16" rx="1" \/>/s);
+test("automation status uses the verified Linear play and pause icon assets", () => {
+  assert.match(
+    iconSource,
+    /play:\s*\{\s*content: <path d="m5\.604 2\.41 7\.23 4\.502a1\.375 1\.375 0 0 1-.02 2\.345L5\.585 13\.6a1\.375 1\.375 0 0 1-2\.083-1\.18V3\.576A1\.375 1\.375 0 0 1 5\.604 2\.41Z" \/>,\s*\}/s,
+  );
+  assert.match(
+    iconSource,
+    /pause:\s*\{\s*content: <path d="M3\.5 3\.5a1 1 0 0 1 1-1H6a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4\.5a1 1 0 0 1-1-1v-9ZM9 3\.5a1 1 0 0 1 1-1h1\.5a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10a1 1 0 0 1-1-1v-9Z" \/>,\s*\}/s,
+  );
 });
 
-test("automation play and pause retain Codex Lucide stroke presentation locally", () => {
-  assert.match(iconSource, /play:[\s\S]*?<polygon[^>]*fill="none"[^>]*stroke="currentColor"[^>]*strokeWidth=\{2\}[^>]*strokeLinecap="round"[^>]*strokeLinejoin="round"/);
-  assert.match(iconSource, /pause:[\s\S]*?<g fill="none" stroke="currentColor" strokeWidth=\{2\} strokeLinecap="round" strokeLinejoin="round">/);
+test("automation play and pause retain Linear's 16px filled presentation", () => {
+  const playAndPause = iconSource.slice(
+    iconSource.indexOf("pause:"),
+    iconSource.indexOf("priority:"),
+  );
+  assert.doesNotMatch(playAndPause, /viewBox: "0 0 24 24"|strokeWidth|strokeLinecap|strokeLinejoin/);
 });
 
 test("the automation menu reuses the Linear switch and keeps form focus chrome suppressed", () => {

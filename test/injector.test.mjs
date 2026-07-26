@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 const source = await readFile(new URL("../scripts/codex-injector.mjs", import.meta.url), "utf8");
+const runtimeSource = await readFile(
+  new URL("../scripts/codex-injector-runtime.mjs", import.meta.url),
+  "utf8",
+);
 const packageJson = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
 );
@@ -18,10 +22,10 @@ test("the resident injector supervises the fixed local Taskboard service", () =>
 
 test("the CDP bridge accepts only service ensure and native Skill composer prefill actions", () => {
   assert.match(source, /const hostBindingName = "__codexTaskboardHostV1"/);
-  assert.match(source, /request\.action === "ensure"/);
-  assert.match(source, /request\.action === "prefill-task-composer"/);
-  assert.match(source, /request\.instruction\.length <= 1_024/);
-  assert.match(source, /request\.skillPath\.length <= 1_024/);
+  assert.match(runtimeSource, /request\.action === "ensure"/);
+  assert.match(runtimeSource, /request\.action === "prefill-task-composer"/);
+  assert.match(runtimeSource, /request\.instruction\.length <= 1_024/);
+  assert.match(runtimeSource, /request\.skillPath\.length <= 1_024/);
   assert.match(source, /function prefillTaskComposerViaCdp/);
   assert.match(source, /cdp\.send\("Input\.insertText", \{ text: "\$" \}\)/);
   assert.match(source, /data-composer-overlay-floating-ui/);
@@ -30,7 +34,7 @@ test("the CDP bridge accepts only service ensure and native Skill composer prefi
   assert.match(source, /skill-mention-path/);
   assert.match(source, /cdp\.send\("Input\.insertText", \{ text: instruction \}\)/);
   assert.match(source, /Runtime\.bindingCalled/);
-  assert.match(source, /params\.executionContextId/);
+  assert.match(runtimeSource, /params\.executionContextId/);
   assert.match(source, /hostResponse/);
   assert.match(source, /if \(keepAlive\) await installTaskboardHostBinding/);
   assert.match(source, /publishHostHeartbeat/);
@@ -40,7 +44,7 @@ test("the CDP bridge accepts only service ensure and native Skill composer prefi
 test("the CDP bridge exposes only the fixed Taskboard automation operations", () => {
   assert.match(source, /parseTaskboardAutomationHostRequest/);
   assert.match(source, /reconcileTaskboardAutomation/);
-  assert.match(source, /request\.action === "automation"/);
+  assert.match(runtimeSource, /request\.action === "automation"/);
   assert.match(source, /function requestCodexAutomationViaCdp/);
   assert.match(source, /new Set\(\[\s*"list-automations",\s*"automation-create",\s*"automation-update",\s*\]\)/);
   assert.match(source, /bridge\.sendMessageFromView\(\{\s*type: "fetch",\s*requestId,/);
@@ -73,6 +77,7 @@ test("a completed web build refreshes an already-open Codex iframe", () => {
   assert.match(source, /--remote-debugging-port=/);
   assert.match(source, /taskboard\.reloadFrame\(\)/);
   assert.match(source, /__codex_taskboard_refresh/);
+  assert.match(source, /await restartResidentInjectorForRefresh\(port\)/);
 });
 
 test("the injected iframe follows the configured local service port", () => {

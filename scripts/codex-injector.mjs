@@ -10,6 +10,10 @@ import {
   parseTaskboardAutomationHostRequest,
   reconcileTaskboardAutomation,
 } from "../shared/taskboard-automation.mjs";
+import {
+  handleHostBindingPayload,
+  restartResidentInjector,
+} from "./codex-injector-runtime.mjs";
 
 const injectorPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(injectorPath), "..");
@@ -35,6 +39,7 @@ function parseArgs(argv) {
     open: false,
     refresh: false,
     refreshIfRunning: false,
+    attachExisting: false,
     daemon: false,
     screenshot: null,
     appPath: "/Applications/ChatGPT.app",
@@ -47,6 +52,7 @@ function parseArgs(argv) {
     else if (arg === "--open") options.open = true;
     else if (arg === "--refresh") options.refresh = true;
     else if (arg === "--refresh-if-running") options.refreshIfRunning = true;
+    else if (arg === "--attach-existing") options.attachExisting = true;
     else if (arg === "--daemon") options.daemon = true;
     else if (arg === "--port") {
       options.port = Number(argv[++index]);
@@ -316,11 +322,12 @@ function residentInjectorPid(port) {
   return null;
 }
 
-function startResidentInjector(port, shouldOpen) {
+function startResidentInjector(port, shouldOpen, attachExisting = false) {
   const existingPid = residentInjectorPid(port);
   if (existingPid) return { pid: existingPid, started: false };
   const args = [injectorPath, "--watch", "--port", String(port)];
   if (shouldOpen) args.push("--open");
+  if (attachExisting) args.push("--attach-existing");
   const child = spawn(process.execPath, args, {
     cwd: projectRoot,
     detached: true,
@@ -328,6 +335,55 @@ function startResidentInjector(port, shouldOpen) {
   });
   child.unref();
   return { pid: child.pid, started: true };
+}
+
+async function stopResidentInjector(pid) {
+  process.kill(pid, "SIGTERM");
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } catch {
+      return;
+    }
+  }
+  throw new Error(`Timed out stopping resident Taskboard injector ${pid}`);
+}
+
+async function waitForResidentInjectorReady(port, pid, startedAt) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      const targets = await codexTargets(port);
+      for (const target of targets) {
+        const cdp = new CdpConnection(target.webSocketDebuggerUrl);
+        await cdp.open();
+        try {
+          const heartbeat = await cdp.send("Runtime.evaluate", {
+            expression: `Number(window[${JSON.stringify(hostHeartbeatName)}])`,
+            returnByValue: true,
+          });
+          if (heartbeat.result.value >= startedAt) return;
+        } finally {
+          cdp.close();
+        }
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for resident Taskboard injector ${pid}`);
+}
+
+async function restartResidentInjectorForRefresh(port) {
+  const startedAt = Date.now();
+  return restartResidentInjector(port, {
+    findResident: residentInjectorPid,
+    stopResident: stopResidentInjector,
+    startResident: (targetPort) => startResidentInjector(targetPort, false, true),
+    waitUntilReady: (targetPort, pid) => waitForResidentInjectorReady(targetPort, pid, startedAt),
+  });
 }
 
 async function refreshTaskboardFrames(port) {
@@ -394,43 +450,6 @@ async function waitForFrame(cdp, expectedUrl, timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return false;
-}
-
-function parseHostRequest(payload) {
-  if (typeof payload !== "string" || payload.length > 4_096) return null;
-  try {
-    const request = JSON.parse(payload);
-    if (
-      !request
-      || typeof request.id !== "string"
-      || !/^[a-z0-9-]{1,80}$/i.test(request.id)
-    ) {
-      return null;
-    }
-    if (request.action === "ensure") return request;
-    if (request.action === "automation") {
-      return parseTaskboardAutomationHostRequest(request);
-    }
-    if (
-      request.action === "prefill-task-composer"
-      && typeof request.instruction === "string"
-      && request.instruction.length > 0
-      && request.instruction.length <= 1_024
-      && typeof request.skillName === "string"
-      && /^[a-z0-9][a-z0-9-]{0,79}$/i.test(request.skillName)
-      && typeof request.skillDisplayName === "string"
-      && request.skillDisplayName.length > 0
-      && request.skillDisplayName.length <= 120
-      && typeof request.skillPath === "string"
-      && request.skillPath.length > 0
-      && request.skillPath.length <= 1_024
-    ) {
-      return request;
-    }
-    return null;
-  } catch (_) {
-    return null;
-  }
 }
 
 async function requestCodexAutomationViaCdp(cdp, executionContextId, method, params) {
@@ -666,37 +685,27 @@ async function sendHostResponse(cdp, executionContextId, response) {
 async function installTaskboardHostBinding(cdp, supervisor) {
   cdp.on("Runtime.bindingCalled", async (params) => {
     if (params.name !== hostBindingName) return;
-    const request = parseHostRequest(params.payload);
-    if (!request) return;
-    try {
-      let result;
-      if (request.action === "ensure") {
-        result = await supervisor.ensure({ force: true });
-      } else if (request.action === "automation") {
-        result = await reconcileTaskboardAutomation(
+    await handleHostBindingPayload(params, {
+      parseAutomationRequest: parseTaskboardAutomationHostRequest,
+      ensure: () => supervisor.ensure({ force: true }),
+      runAutomation: (request, executionContextId) => (
+        reconcileTaskboardAutomation(
           request,
           (method, body) => requestCodexAutomationViaCdp(
             cdp,
-            params.executionContextId,
+            executionContextId,
             method,
             body,
           ),
-        );
-      } else {
-        result = await prefillTaskComposerViaCdp(cdp, params.executionContextId, request);
-      }
-      await sendHostResponse(cdp, params.executionContextId, {
-        id: request.id,
-        ok: true,
-        ...result,
-      });
-    } catch (error) {
-      await sendHostResponse(cdp, params.executionContextId, {
-        id: request.id,
-        ok: false,
-        error: error.message,
-      });
-    }
+        )
+      ),
+      prefill: (request, executionContextId) => (
+        prefillTaskComposerViaCdp(cdp, executionContextId, request)
+      ),
+      sendResponse: (executionContextId, response) => (
+        sendHostResponse(cdp, executionContextId, response)
+      ),
+    });
   });
   await cdp.send("Runtime.addBinding", { name: hostBindingName });
 }
@@ -735,7 +744,15 @@ async function waitForInjectionStatus(cdp, shouldOpen, timeoutMs) {
   return status;
 }
 
-async function injectTarget(target, source, shouldOpen, screenshotPath, keepAlive, supervisor) {
+async function injectTarget(
+  target,
+  source,
+  shouldOpen,
+  screenshotPath,
+  keepAlive,
+  supervisor,
+  attachExisting,
+) {
   const cdp = new CdpConnection(target.webSocketDebuggerUrl);
   let retained = false;
   await cdp.open();
@@ -744,6 +761,17 @@ async function injectTarget(target, source, shouldOpen, screenshotPath, keepAliv
     await cdp.send("Page.setBypassCSP", { enabled: true });
     await cdp.send("Runtime.enable");
     if (keepAlive) await installTaskboardHostBinding(cdp, supervisor);
+    if (keepAlive && attachExisting) {
+      const status = await readInjectionStatus(cdp);
+      if (status.version) {
+        await publishHostHeartbeat(cdp);
+        retained = true;
+        return {
+          result: { ...status, cspBypassed: true, frameLoaded: Boolean(status.frameUrl) },
+          connection: cdp,
+        };
+      }
+    }
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
       source: `${source}\n//# sourceURL=codex-taskboard.user.js`,
     });
@@ -801,6 +829,7 @@ async function injectAll(
   injectedTargets,
   keepAlive,
   supervisor,
+  attachExisting,
 ) {
   const targets = await codexTargets(port);
   if (targets.length === 0) throw new Error("No Codex renderer target found");
@@ -824,6 +853,7 @@ async function injectAll(
       firstTarget ? screenshotPath : null,
       keepAlive,
       supervisor,
+      attachExisting,
     );
     if (connection) injectedTargets.set(target.id, connection);
     results.push({ targetId: target.id, title: target.title, url: target.url, ...result });
@@ -860,6 +890,7 @@ async function main() {
     const refreshed = [];
     for (const port of ports) {
       if (!(await isReachable(`http://127.0.0.1:${port}/json/version`))) continue;
+      if (options.refreshIfRunning) await restartResidentInjectorForRefresh(port);
       const results = await refreshTaskboardFrames(port);
       refreshed.push(...results.map((result) => ({ port, ...result })));
     }
@@ -912,6 +943,7 @@ ${userScript}`;
       injectedTargets,
       options.watch,
       supervisor,
+      options.attachExisting,
     );
     console.log(JSON.stringify({ injected: firstResults }, null, 2));
 
@@ -949,6 +981,7 @@ ${userScript}`;
           injectedTargets,
           true,
           supervisor,
+          options.attachExisting,
         );
         if (results.length > 0) console.log(JSON.stringify({ injected: results }, null, 2));
       } catch (error) {
