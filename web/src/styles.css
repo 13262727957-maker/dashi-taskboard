@@ -1184,15 +1184,19 @@ kbd {
 }
 
 .project-automation-trigger {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  height: 28px;
+  padding: 0 8px;
   border: 0;
   border-radius: 5px;
   background: transparent;
   color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .project-automation-trigger:hover,
@@ -1239,8 +1243,7 @@ kbd {
 
 .project-automation-menu-heading,
 .project-automation-switch,
-.project-automation-field,
-.project-automation-actions {
+.project-automation-field {
   display: flex;
   align-items: center;
 }
@@ -1298,32 +1301,6 @@ kbd {
 
 .project-automation-error {
   color: var(--danger);
-}
-
-.project-automation-actions {
-  justify-content: flex-end;
-  gap: 7px;
-  margin-top: 14px;
-}
-
-.project-automation-actions button {
-  height: 26px;
-  padding: 0 10px;
-  border: var(--border-hairline) solid var(--border);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.project-automation-actions button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: white;
-}
-
-.project-automation-actions button:disabled {
-  opacity: 0.45;
 }
 
 :root[data-theme="dark"] .board-settings-menu {

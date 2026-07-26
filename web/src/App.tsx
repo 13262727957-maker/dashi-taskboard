@@ -8,6 +8,13 @@ import {
   type CSSProperties,
 } from "react";
 import {
+  isAutomationModel,
+  isAutomationReasoningEffort,
+  isSupportedModelEffort,
+  type AutomationModel,
+  type AutomationReasoningEffort,
+} from "../../shared/taskboard-automation-options.mjs";
+import {
   ApiError,
   addTaskRelation,
   archiveTask as archiveTaskRequest,
@@ -103,8 +110,6 @@ interface UndoNotice {
 type ColumnVisibilityByProject = Record<string, Partial<Record<TaskStatus, boolean>>>;
 type ProjectAutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationIntervalMinutes = 5 | 10 | 15 | 30 | 60;
-type AutomationModel = "gpt-5.5" | "gpt-5.4";
-type AutomationReasoningEffort = "medium" | "high" | "xhigh";
 
 interface ProjectAutomationRecord {
   automationId?: string;
@@ -219,13 +224,16 @@ function readProjectAutomations(): ProjectAutomations {
     for (const [projectId, record] of Object.entries(value)) {
       if (!record || typeof record !== "object" || Array.isArray(record)) continue;
       const candidate = record as Partial<ProjectAutomationRecord>;
+      const model = candidate.model ?? "gpt-5.5";
+      const reasoningEffort = candidate.reasoningEffort ?? "high";
       if (
         (candidate.automationId !== undefined && typeof candidate.automationId !== "string")
         || typeof candidate.codexProjectId !== "string"
         || (candidate.status !== "ACTIVE" && candidate.status !== "PAUSED")
         || !isAutomationIntervalMinutes(candidate.intervalMinutes ?? 5)
-        || !isAutomationModel(candidate.model ?? "gpt-5.5")
-        || !isAutomationReasoningEffort(candidate.reasoningEffort ?? "high")
+        || !isAutomationModel(model)
+        || !isAutomationReasoningEffort(reasoningEffort)
+        || !isSupportedModelEffort(model, reasoningEffort)
         || (candidate.status === "ACTIVE" && !candidate.automationId)
       ) continue;
       result[projectId] = {
@@ -233,8 +241,8 @@ function readProjectAutomations(): ProjectAutomations {
         codexProjectId: candidate.codexProjectId,
         status: candidate.status,
         intervalMinutes: candidate.intervalMinutes ?? 5,
-        model: candidate.model ?? "gpt-5.5",
-        reasoningEffort: candidate.reasoningEffort ?? "high",
+        model,
+        reasoningEffort,
       };
     }
     return result;
@@ -245,14 +253,6 @@ function readProjectAutomations(): ProjectAutomations {
 
 function isAutomationIntervalMinutes(value: unknown): value is AutomationIntervalMinutes {
   return value === 5 || value === 10 || value === 15 || value === 30 || value === 60;
-}
-
-function isAutomationModel(value: unknown): value is AutomationModel {
-  return value === "gpt-5.5" || value === "gpt-5.4";
-}
-
-function isAutomationReasoningEffort(value: unknown): value is AutomationReasoningEffort {
-  return value === "medium" || value === "high" || value === "xhigh";
 }
 
 function intervalMinutesFromRrule(value: string): AutomationIntervalMinutes | null {
@@ -300,6 +300,7 @@ function isAutomationHostItem(value: unknown): value is AutomationHostItem {
     && (item.status === "ACTIVE" || item.status === "PAUSED")
     && isAutomationModel(item.model)
     && isAutomationReasoningEffort(item.reasoningEffort)
+    && isSupportedModelEffort(item.model, item.reasoningEffort)
     && typeof item.rrule === "string"
     && intervalMinutesFromRrule(item.rrule) !== null
   );
@@ -1762,7 +1763,7 @@ export function App() {
                 error={automationError}
                 unavailableReason={automationProjectContext.unavailableReason}
                 onOpen={() => void reconcileProjectAutomation()}
-                onSave={(options) => void saveProjectAutomation(options)}
+                onChange={(options) => void saveProjectAutomation(options)}
               />
             )}
             {selectedProjectId && (

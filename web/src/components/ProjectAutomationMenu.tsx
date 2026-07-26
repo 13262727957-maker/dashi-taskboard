@@ -1,17 +1,22 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  AUTOMATION_MODELS,
+  getAutomationModel,
+  withAutomationModel,
+  type AutomationModel,
+  type AutomationReasoningEffort,
+} from "../../../shared/taskboard-automation-options.mjs";
 import { LinearIcon } from "./LinearIcon";
 
 type AutomationStatus = "ACTIVE" | "PAUSED";
 type IntervalMinutes = 5 | 10 | 15 | 30 | 60;
-type AutomationModel = "gpt-5.5" | "gpt-5.4";
-type ReasoningEffort = "medium" | "high" | "xhigh";
 
 interface AutomationOptions {
   status: AutomationStatus;
   intervalMinutes: IntervalMinutes;
   model: AutomationModel;
-  reasoningEffort: ReasoningEffort;
+  reasoningEffort: AutomationReasoningEffort;
 }
 
 interface ProjectAutomationMenuProps {
@@ -20,7 +25,7 @@ interface ProjectAutomationMenuProps {
   error: string | null;
   unavailableReason: string | null;
   onOpen: () => void;
-  onSave: (options: AutomationOptions) => void;
+  onChange: (options: AutomationOptions) => void;
 }
 
 const DEFAULT_OPTIONS: AutomationOptions = {
@@ -30,25 +35,43 @@ const DEFAULT_OPTIONS: AutomationOptions = {
   reasoningEffort: "high",
 };
 
+const EFFORT_LABELS: Record<AutomationReasoningEffort, string> = {
+  low: "轻度",
+  medium: "中",
+  high: "高",
+  xhigh: "极高 (xhigh)",
+  max: "最高",
+  ultra: "极高 (ultra)",
+};
+
 export function ProjectAutomationMenu({
   automation,
   pending,
   error,
   unavailableReason,
   onOpen,
-  onSave,
+  onChange,
 }: ProjectAutomationMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const wasPendingRef = useRef(pending);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
   const [draft, setDraft] = useState<AutomationOptions>(DEFAULT_OPTIONS);
   const status = automation?.status ?? "PAUSED";
+  const disabled = pending || Boolean(unavailableReason);
 
   useEffect(() => {
     if (!open) return;
     setDraft({ ...DEFAULT_OPTIONS, ...automation });
   }, [open]);
+
+  useEffect(() => {
+    if (wasPendingRef.current && !pending) {
+      setDraft({ ...DEFAULT_OPTIONS, ...automation });
+    }
+    wasPendingRef.current = pending;
+  }, [automation, pending]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current || !menuRef.current) return;
@@ -89,6 +112,12 @@ export function ProjectAutomationMenu({
     };
   }, [open]);
 
+  const submitChange = (next: AutomationOptions) => {
+    if (disabled) return;
+    setDraft(next);
+    onChange(next);
+  };
+
   const menu = open ? createPortal(
     <div
       ref={menuRef}
@@ -110,11 +139,11 @@ export function ProjectAutomationMenu({
           className={`board-setting-switch${draft.status === "ACTIVE" ? " is-on" : ""}`}
           role="switch"
           aria-checked={draft.status === "ACTIVE"}
-          disabled={pending}
-          onClick={() => setDraft((current) => ({
-            ...current,
-            status: current.status === "ACTIVE" ? "PAUSED" : "ACTIVE",
-          }))}
+          disabled={disabled}
+          onClick={() => submitChange({
+            ...draft,
+            status: draft.status === "ACTIVE" ? "PAUSED" : "ACTIVE",
+          })}
         >
           <span aria-hidden="true" />
         </button>
@@ -123,11 +152,11 @@ export function ProjectAutomationMenu({
         <span>间隔</span>
         <select
           value={draft.intervalMinutes}
-          disabled={pending}
-          onChange={(event) => setDraft((current) => ({
-            ...current,
+          disabled={disabled}
+          onChange={(event) => submitChange({
+            ...draft,
             intervalMinutes: Number(event.target.value) as IntervalMinutes,
-          }))}
+          })}
         >
           {[5, 10, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分钟</option>)}
         </select>
@@ -136,44 +165,31 @@ export function ProjectAutomationMenu({
         <span>模型</span>
         <select
           value={draft.model}
-          disabled={pending}
-          onChange={(event) => setDraft((current) => ({
-            ...current,
-            model: event.target.value as AutomationModel,
-          }))}
+          disabled={disabled}
+          onChange={(event) => submitChange(withAutomationModel(draft, event.target.value as AutomationModel))}
         >
-          <option value="gpt-5.5">gpt-5.5</option>
-          <option value="gpt-5.4">gpt-5.4</option>
+          {AUTOMATION_MODELS.map((model) => (
+            <option key={model.slug} value={model.slug}>{model.label}</option>
+          ))}
         </select>
       </label>
       <label className="project-automation-field">
         <span>推理强度</span>
         <select
           value={draft.reasoningEffort}
-          disabled={pending}
-          onChange={(event) => setDraft((current) => ({
-            ...current,
-            reasoningEffort: event.target.value as ReasoningEffort,
-          }))}
+          disabled={disabled}
+          onChange={(event) => submitChange({
+            ...draft,
+            reasoningEffort: event.target.value as AutomationReasoningEffort,
+          })}
         >
-          <option value="medium">中</option>
-          <option value="high">高</option>
-          <option value="xhigh">最高</option>
+          {getAutomationModel(draft.model).efforts.map((effort) => (
+            <option key={effort} value={effort}>{EFFORT_LABELS[effort]}</option>
+          ))}
         </select>
       </label>
       {unavailableReason && <p className="project-automation-note">{unavailableReason}</p>}
       {error && error !== unavailableReason && <p className="project-automation-error" role="alert">{error}</p>}
-      <div className="project-automation-actions">
-        <button type="button" onClick={() => setOpen(false)}>取消</button>
-        <button
-          type="button"
-          className="primary"
-          disabled={pending || Boolean(unavailableReason)}
-          onClick={() => onSave(draft)}
-        >
-          保存
-        </button>
-      </div>
     </div>,
     document.body,
   ) : null;
@@ -184,11 +200,11 @@ export function ProjectAutomationMenu({
         ref={triggerRef}
         type="button"
         className={`project-automation-trigger no-drag ${status === "ACTIVE" ? "is-active" : "is-paused"}`}
-        aria-label={status === "ACTIVE" ? "自动认领待办：运行中" : "自动认领待办：已暂停"}
+        aria-label={status === "ACTIVE" ? "已开启自动认领" : "自动认领未开启"}
         aria-busy={pending}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={status === "ACTIVE" ? "自动认领待办：运行中" : "自动认领待办：已暂停"}
+        title={status === "ACTIVE" ? "已开启自动认领" : "自动认领未开启"}
         onClick={() => {
           if (!open) {
             setPosition((current) => ({ ...current, ready: false }));
@@ -198,6 +214,7 @@ export function ProjectAutomationMenu({
         }}
       >
         <LinearIcon name={status === "ACTIVE" ? "play" : "pause"} />
+        <span>{status === "ACTIVE" ? "已开启自动认领" : "自动认领未开启"}</span>
       </button>
       {menu}
     </>

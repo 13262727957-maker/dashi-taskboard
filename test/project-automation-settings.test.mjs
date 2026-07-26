@@ -23,8 +23,7 @@ test("project automation state is device-local and scoped by taskboard project",
   assert.match(appSource, /automationId\?: string/);
   assert.match(appSource, /codexProjectId: string/);
   assert.match(appSource, /type AutomationIntervalMinutes = 5 \| 10 \| 15 \| 30 \| 60/);
-  assert.match(appSource, /type AutomationModel = "gpt-5\.5" \| "gpt-5\.4"/);
-  assert.match(appSource, /type AutomationReasoningEffort = "medium" \| "high" \| "xhigh"/);
+  assert.match(appSource, /DEFAULT_AUTOMATION_OPTIONS[\s\S]*?model: "gpt-5\.5"[\s\S]*?reasoningEffort: "high"/);
   assert.match(appSource, /localStorage\.getItem\(PROJECT_AUTOMATIONS_KEY\)/);
   assert.match(appSource, /localStorage\.setItem\(PROJECT_AUTOMATIONS_KEY, JSON\.stringify\(next\)\)/);
   assert.match(appSource, /projectAutomations\[selectedProjectId\]/);
@@ -59,14 +58,12 @@ test("the project navigation automation menu owns the icon, fields, and accessib
   assert.match(menuSource, /status === "ACTIVE" \? "play" : "pause"/);
   assert.doesNotMatch(menuSource, /statusStarted|statusTodo/);
   assert.match(menuSource, /aria-busy=\{pending/);
-  assert.match(menuSource, /运行中/);
-  assert.match(menuSource, /已暂停/);
+  assert.match(menuSource, /已开启自动认领/);
+  assert.match(menuSource, /自动认领未开启/);
   assert.match(menuSource, /自动认领开关/);
   assert.match(menuSource, /5, 10, 15, 30, 60/);
-  assert.match(menuSource, /gpt-5\.5/);
-  assert.match(menuSource, /gpt-5\.4/);
-  assert.match(menuSource, /medium.*中/);
-  assert.match(menuSource, /xhigh.*最高/);
+  assert.match(menuSource, /AUTOMATION_MODELS\.map/);
+  assert.match(menuSource, /EFFORT_LABELS\[effort\]/);
   assert.match(menuSource, /createPortal/);
   assert.match(menuSource, /window\.addEventListener\("resize"/);
   assert.match(menuSource, /window\.addEventListener\("scroll", closeFromViewportChange, true\)/);
@@ -81,8 +78,6 @@ test("the project navigation automation menu owns the icon, fields, and accessib
 test("automation status uses Codex-native play and pause icon assets", () => {
   assert.match(iconSource, /play:\s*\{\s*viewBox: "0 0 24 24",\s*content: <polygon[^>]*points="6 3 20 12 6 21 6 3"[^>]*\/>/s);
   assert.match(iconSource, /pause:\s*\{\s*viewBox: "0 0 24 24",[\s\S]*?<rect x="14" y="4" width="4" height="16" rx="1" \/>[\s\S]*?<rect x="6" y="4" width="4" height="16" rx="1" \/>/s);
-  assert.match(iconSource, /in_progress: "statusStarted"/);
-  assert.match(iconSource, /todo: "statusTodo"/);
 });
 
 test("automation play and pause retain Codex Lucide stroke presentation locally", () => {
@@ -99,9 +94,10 @@ test("the automation menu reuses the Linear switch and keeps form focus chrome s
   assert.doesNotMatch(styles, /\.project-automation-switch input:focus-visible/);
 });
 
-test("unavailable automation state has one notice, clears stale errors, and cannot save", () => {
+test("unavailable automation state has one notice, clears stale errors, and cannot change", () => {
   assert.match(menuSource, /error && error !== unavailableReason/);
-  assert.match(menuSource, /disabled=\{pending \|\| Boolean\(unavailableReason\)\}/);
+  assert.match(menuSource, /const disabled = pending \|\| Boolean\(unavailableReason\)/);
+  assert.equal(menuSource.match(/disabled=\{disabled\}/g)?.length, 4);
   const reconcileSource = appSource.slice(
     appSource.indexOf("const reconcileProjectAutomation"),
     appSource.indexOf("const saveProjectAutomation"),
@@ -111,6 +107,34 @@ test("unavailable automation state has one notice, clears stale errors, and cann
     /automationProjectContext\.unavailableReason[\s\S]*?\) \{\s*setAutomationError\(null\);\s*return;/,
   );
   assert.doesNotMatch(reconcileSource, /setAutomationError\(automationProjectContext\.unavailableReason/);
+});
+
+test("automation changes submit immediately with model-specific effort normalization", () => {
+  assert.match(menuSource, /onChange: \(options: AutomationOptions\) => void/);
+  assert.match(menuSource, /const disabled = pending \|\| Boolean\(unavailableReason\)/);
+  assert.match(menuSource, /const submitChange = \(next: AutomationOptions\) => \{[\s\S]*?setDraft\(next\);[\s\S]*?onChange\(next\);[\s\S]*?\}/);
+  assert.match(menuSource, /submitChange\(withAutomationModel\(draft, event\.target\.value as AutomationModel\)\)/);
+  assert.match(menuSource, /getAutomationModel\(draft\.model\)\.efforts\.map/);
+  assert.match(menuSource, /<option key=\{effort\} value=\{effort\}>\{EFFORT_LABELS\[effort\]\}<\/option>/);
+  assert.match(menuSource, /low: "轻度"/);
+  assert.match(menuSource, /xhigh: "极高 \(xhigh\)"/);
+  assert.match(menuSource, /max: "最高"/);
+  assert.match(menuSource, /ultra: "极高 \(ultra\)"/);
+  assert.doesNotMatch(menuSource, />取消</);
+  assert.doesNotMatch(menuSource, />保存</);
+  assert.doesNotMatch(menuSource, /project-automation-actions/);
+  assert.doesNotMatch(menuSource, /onSave/);
+  assert.doesNotMatch(styles, /\.project-automation-actions/);
+});
+
+test("pending completion reconciles the optimistic draft to confirmed host state", () => {
+  assert.match(menuSource, /const wasPendingRef = useRef\(pending\)/);
+  assert.match(
+    menuSource,
+    /if \(wasPendingRef\.current && !pending\) \{\s*setDraft\(\{ \.\.\.DEFAULT_OPTIONS, \.\.\.automation \}\);\s*\}/,
+  );
+  assert.match(menuSource, /wasPendingRef\.current = pending/);
+  assert.match(menuSource, /disabled=\{disabled\}/);
 });
 
 test("opening settings and changing projects reconcile with the host list", () => {

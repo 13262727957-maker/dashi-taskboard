@@ -8,6 +8,11 @@ import {
   parseTaskboardAutomationHostRequest,
   reconcileTaskboardAutomation,
 } from "../shared/taskboard-automation.mjs";
+import {
+  AUTOMATION_MODELS,
+  isSupportedModelEffort,
+  withAutomationModel,
+} from "../shared/taskboard-automation-options.mjs";
 
 const baseRequest = {
   id: "host-request-1",
@@ -23,6 +28,63 @@ const baseRequest = {
   model: "gpt-5.5",
   reasoningEffort: "high",
 };
+
+test("the automation model catalog matches Codex and normalizes unsupported efforts", () => {
+  assert.deepEqual(AUTOMATION_MODELS, [
+    {
+      label: "5.6 Sol",
+      slug: "gpt-5.6-sol",
+      defaultEffort: "low",
+      efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+    },
+    {
+      label: "5.6 Terra",
+      slug: "gpt-5.6-terra",
+      defaultEffort: "medium",
+      efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+    },
+    {
+      label: "5.6 Luna",
+      slug: "gpt-5.6-luna",
+      defaultEffort: "medium",
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+    },
+    {
+      label: "5.5",
+      slug: "gpt-5.5",
+      defaultEffort: "medium",
+      efforts: ["low", "medium", "high", "xhigh"],
+    },
+    {
+      label: "5.4",
+      slug: "gpt-5.4",
+      defaultEffort: "medium",
+      efforts: ["low", "medium", "high", "xhigh"],
+    },
+    {
+      label: "5.4 Mini",
+      slug: "gpt-5.4-mini",
+      defaultEffort: "medium",
+      efforts: ["low", "medium", "high", "xhigh"],
+    },
+  ]);
+
+  const current = {
+    status: "ACTIVE",
+    intervalMinutes: 5,
+    model: "gpt-5.6-sol",
+    reasoningEffort: "ultra",
+  };
+  assert.deepEqual(withAutomationModel(current, "gpt-5.6-terra"), {
+    ...current,
+    model: "gpt-5.6-terra",
+  });
+  assert.deepEqual(withAutomationModel(current, "gpt-5.6-luna"), {
+    ...current,
+    model: "gpt-5.6-luna",
+    reasoningEffort: "medium",
+  });
+});
 
 test("the automation host request accepts only whitelisted project automation options", () => {
   assert.deepEqual(parseTaskboardAutomationHostRequest(baseRequest), baseRequest);
@@ -47,8 +109,12 @@ test("the automation host request accepts only whitelisted project automation op
     null,
   );
   assert.equal(
-    parseTaskboardAutomationHostRequest({ ...baseRequest, model: "gpt-5.4" })?.model,
-    "gpt-5.4",
+    parseTaskboardAutomationHostRequest({
+      ...baseRequest,
+      model: "gpt-5.6-sol",
+      reasoningEffort: "ultra",
+    })?.reasoningEffort,
+    "ultra",
   );
   assert.equal(
     parseTaskboardAutomationHostRequest({ ...baseRequest, model: "gpt-future" }),
@@ -59,9 +125,29 @@ test("the automation host request accepts only whitelisted project automation op
     "xhigh",
   );
   assert.equal(
-    parseTaskboardAutomationHostRequest({ ...baseRequest, reasoningEffort: "low" }),
+    parseTaskboardAutomationHostRequest({
+      ...baseRequest,
+      model: "gpt-5.4",
+      reasoningEffort: "ultra",
+    }),
     null,
   );
+  const allEfforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
+  for (const model of AUTOMATION_MODELS) {
+    for (const effort of allEfforts) {
+      assert.equal(
+        parseTaskboardAutomationHostRequest({
+          ...baseRequest,
+          model: model.slug,
+          reasoningEffort: effort,
+        }) !== null,
+        model.efforts.includes(effort),
+        `${model.slug}/${effort}`,
+      );
+    }
+  }
+  assert.equal(isSupportedModelEffort("gpt-5.6-luna", "max"), true);
+  assert.equal(isSupportedModelEffort("gpt-5.6-luna", "ultra"), false);
   assert.equal(
     parseTaskboardAutomationHostRequest({ ...baseRequest, workspacePath: "relative/path" }),
     null,
@@ -315,6 +401,18 @@ test("pause never creates and list returns only sanitized matching project autom
       rrule: "RRULE:FREQ=MINUTELY;INTERVAL=5",
     }],
   });
+
+  const invalidPair = {
+    ...matching,
+    id: "invalid-pair",
+    model: "gpt-5.4",
+    reasoningEffort: "ultra",
+  };
+  const invalidListed = await reconcileTaskboardAutomation(
+    { ...baseRequest, operation: "list" },
+    async () => ({ items: [invalidPair] }),
+  );
+  assert.deepEqual(invalidListed, { items: [] });
 });
 
 test("pause is idempotent for an already paused matching automation", async () => {

@@ -1,9 +1,8 @@
 import path from "node:path";
+import { isSupportedModelEffort } from "./taskboard-automation-options.mjs";
 
 const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list"]);
 const INTERVAL_MINUTES = new Set([5, 10, 15, 30, 60]);
-const MODELS = new Set(["gpt-5.5", "gpt-5.4"]);
-const REASONING_EFFORTS = new Set(["medium", "high", "xhigh"]);
 const HOST_REQUEST_FIELDS = new Set([
   "id",
   "action",
@@ -30,8 +29,7 @@ export function parseTaskboardAutomationHostRequest(value) {
   if (!validText(value.codexProjectId, 256) || !validText(value.projectName, 200)) return null;
   if (!validAbsolutePath(value.workspacePath) || !validAbsolutePath(value.skillPath)) return null;
   if (!INTERVAL_MINUTES.has(value.intervalMinutes)) return null;
-  if (!MODELS.has(value.model)) return null;
-  if (!REASONING_EFFORTS.has(value.reasoningEffort)) return null;
+  if (!isSupportedModelEffort(value.model, value.reasoningEffort)) return null;
   if (value.automationId !== undefined && !validText(value.automationId, 256)) return null;
 
   return {
@@ -120,8 +118,7 @@ function sanitizeAutomation(item) {
   if (
     !validText(item?.id, 256)
     || (item.status !== "ACTIVE" && item.status !== "PAUSED")
-    || !MODELS.has(item.model)
-    || !REASONING_EFFORTS.has(item.reasoningEffort)
+    || !isSupportedModelEffort(item.model, item.reasoningEffort)
     || !validRrule(item.rrule)
   ) return null;
   return {
