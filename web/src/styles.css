@@ -1179,6 +1179,153 @@ kbd {
   animation: context-menu-in 90ms ease-out both;
 }
 
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.project-automation-trigger {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.project-automation-trigger:hover,
+.project-automation-trigger:focus-visible {
+  background: var(--surface-hover);
+}
+
+.project-automation-trigger:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.project-automation-trigger > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.project-automation-trigger.is-active,
+.project-automation-menu .is-active {
+  color: var(--success);
+}
+
+.project-automation-trigger.is-paused,
+.project-automation-menu .is-paused {
+  color: var(--text-tertiary);
+}
+
+.project-automation-menu {
+  position: fixed;
+  z-index: 1300;
+  width: min(304px, calc(100vw - 16px));
+  padding: 16px;
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.14), 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.035);
+  animation: context-menu-in 90ms ease-out both;
+}
+
+:root[data-theme="dark"] .project-automation-menu {
+  box-shadow: 0 20px 52px rgba(0, 0, 0, 0.56), 0 4px 14px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(255, 255, 255, 0.055);
+}
+
+.project-automation-menu-heading,
+.project-automation-switch,
+.project-automation-field,
+.project-automation-actions {
+  display: flex;
+  align-items: center;
+}
+
+.project-automation-menu-heading {
+  justify-content: space-between;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.project-automation-menu-heading > span {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.project-automation-switch,
+.project-automation-field {
+  justify-content: space-between;
+  min-height: 34px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.project-automation-switch .board-setting-switch {
+  flex: 0 0 auto;
+}
+
+.project-automation-field select {
+  min-width: 98px;
+  height: 26px;
+  padding: 0 6px;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: 5px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.project-automation-field select:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+
+.project-automation-note,
+.project-automation-error {
+  margin: 9px 0 0;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.project-automation-note {
+  color: var(--text-tertiary);
+}
+
+.project-automation-error {
+  color: var(--danger);
+}
+
+.project-automation-actions {
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.project-automation-actions button {
+  height: 26px;
+  padding: 0 10px;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.project-automation-actions button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+}
+
+.project-automation-actions button:disabled {
+  opacity: 0.45;
+}
+
 :root[data-theme="dark"] .board-settings-menu {
   box-shadow: 0 20px 52px rgba(0, 0, 0, 0.56), 0 4px 14px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(255, 255, 255, 0.055);
 }

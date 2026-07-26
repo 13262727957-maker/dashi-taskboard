@@ -747,6 +747,8 @@
         skillPath: payload.skillPath,
         ...(payload.automationId === undefined ? {} : { automationId: payload.automationId }),
         intervalMinutes: payload.intervalMinutes,
+        model: payload.model,
+        reasoningEffort: payload.reasoningEffort,
       });
       postToFrame({
         type: "taskboard:automation-response",

@@ -34,6 +34,7 @@ import { BoardColumn, STATUS_DETAILS } from "./components/BoardColumn";
 import { BoardSettingsMenu } from "./components/BoardSettingsMenu";
 import { HiddenColumns } from "./components/HiddenColumns";
 import { LinearIcon } from "./components/LinearIcon";
+import { ProjectAutomationMenu } from "./components/ProjectAutomationMenu";
 import { TaskContextMenu } from "./components/TaskContextMenu";
 import { TaskDetail } from "./components/TaskDetail";
 import { TaskEditor } from "./components/TaskEditor";
@@ -101,13 +102,17 @@ interface UndoNotice {
 
 type ColumnVisibilityByProject = Record<string, Partial<Record<TaskStatus, boolean>>>;
 type ProjectAutomationStatus = "ACTIVE" | "PAUSED";
-type AutomationOperation = "ensure-active" | "pause" | "list";
+type AutomationIntervalMinutes = 5 | 10 | 15 | 30 | 60;
+type AutomationModel = "gpt-5.5" | "gpt-5.4";
+type AutomationReasoningEffort = "medium" | "high" | "xhigh";
 
 interface ProjectAutomationRecord {
-  automationId: string;
+  automationId?: string;
   codexProjectId: string;
   status: ProjectAutomationStatus;
-  intervalMinutes: 5;
+  intervalMinutes: AutomationIntervalMinutes;
+  model: AutomationModel;
+  reasoningEffort: AutomationReasoningEffort;
 }
 
 type ProjectAutomations = Record<string, ProjectAutomationRecord>;
@@ -115,6 +120,9 @@ type ProjectAutomations = Record<string, ProjectAutomationRecord>;
 interface AutomationHostItem {
   id: string;
   status: ProjectAutomationStatus;
+  model: AutomationModel;
+  reasoningEffort: AutomationReasoningEffort;
+  rrule: string;
 }
 
 interface AutomationHostResponse {
@@ -144,6 +152,11 @@ const DEVICE_WORKSPACE_PATHS_KEY = "taskboard.deviceWorkspacePaths.v1";
 const SHOW_EMPTY_COLUMNS_KEY = "taskboard.showEmptyColumns.v1";
 const COLUMN_VISIBILITY_KEY = "taskboard.columnVisibility.v1";
 const PROJECT_AUTOMATIONS_KEY = "taskboard.projectAutomations.v1";
+const DEFAULT_AUTOMATION_OPTIONS = {
+  intervalMinutes: 5,
+  model: "gpt-5.5",
+  reasoningEffort: "high",
+} as const;
 
 const EVENT_NAMES = [
   "task.created",
@@ -207,17 +220,44 @@ function readProjectAutomations(): ProjectAutomations {
       if (!record || typeof record !== "object" || Array.isArray(record)) continue;
       const candidate = record as Partial<ProjectAutomationRecord>;
       if (
-        typeof candidate.automationId !== "string"
+        (candidate.automationId !== undefined && typeof candidate.automationId !== "string")
         || typeof candidate.codexProjectId !== "string"
         || (candidate.status !== "ACTIVE" && candidate.status !== "PAUSED")
-        || candidate.intervalMinutes !== 5
+        || !isAutomationIntervalMinutes(candidate.intervalMinutes ?? 5)
+        || !isAutomationModel(candidate.model ?? "gpt-5.5")
+        || !isAutomationReasoningEffort(candidate.reasoningEffort ?? "high")
+        || (candidate.status === "ACTIVE" && !candidate.automationId)
       ) continue;
-      result[projectId] = candidate as ProjectAutomationRecord;
+      result[projectId] = {
+        automationId: candidate.automationId,
+        codexProjectId: candidate.codexProjectId,
+        status: candidate.status,
+        intervalMinutes: candidate.intervalMinutes ?? 5,
+        model: candidate.model ?? "gpt-5.5",
+        reasoningEffort: candidate.reasoningEffort ?? "high",
+      };
     }
     return result;
   } catch {
     return {};
   }
+}
+
+function isAutomationIntervalMinutes(value: unknown): value is AutomationIntervalMinutes {
+  return value === 5 || value === 10 || value === 15 || value === 30 || value === 60;
+}
+
+function isAutomationModel(value: unknown): value is AutomationModel {
+  return value === "gpt-5.5" || value === "gpt-5.4";
+}
+
+function isAutomationReasoningEffort(value: unknown): value is AutomationReasoningEffort {
+  return value === "medium" || value === "high" || value === "xhigh";
+}
+
+function intervalMinutesFromRrule(value: string): AutomationIntervalMinutes | null {
+  const match = /^RRULE:FREQ=MINUTELY;INTERVAL=(5|10|15|30|60)$/.exec(value);
+  return match ? Number(match[1]) as AutomationIntervalMinutes : null;
 }
 
 function readColumnVisibilityByProject(): ColumnVisibilityByProject {
@@ -258,6 +298,10 @@ function isAutomationHostItem(value: unknown): value is AutomationHostItem {
   return (
     typeof item.id === "string"
     && (item.status === "ACTIVE" || item.status === "PAUSED")
+    && isAutomationModel(item.model)
+    && isAutomationReasoningEffort(item.reasoningEffort)
+    && typeof item.rrule === "string"
+    && intervalMinutesFromRrule(item.rrule) !== null
   );
 }
 
@@ -462,7 +506,7 @@ export function App() {
 
   const writeProjectAutomation = useCallback((
     projectId: string,
-    record: ProjectAutomationRecord | null,
+    record: ProjectAutomationRecord | null | undefined,
   ) => {
     setProjectAutomations((current) => {
       if (
@@ -470,6 +514,9 @@ export function App() {
         && current[projectId]?.automationId === record.automationId
         && current[projectId]?.codexProjectId === record.codexProjectId
         && current[projectId]?.status === record.status
+        && current[projectId]?.intervalMinutes === record.intervalMinutes
+        && current[projectId]?.model === record.model
+        && current[projectId]?.reasoningEffort === record.reasoningEffort
       ) {
         return current;
       }
@@ -483,6 +530,7 @@ export function App() {
 
   const sendAutomationRequest = useCallback((
     operation: "ensure-active" | "pause" | "list",
+    options: Pick<ProjectAutomationRecord, "intervalMinutes" | "model" | "reasoningEffort">,
     automationId?: string,
   ) => {
     if (
@@ -513,7 +561,9 @@ export function App() {
         workspacePath: automationProjectContext.workspacePath,
         skillPath: manageTaskboardSkillPath,
         ...(automationId ? { automationId } : {}),
-        intervalMinutes: 5,
+        intervalMinutes: options.intervalMinutes,
+        model: options.model,
+        reasoningEffort: options.reasoningEffort,
       },
     }, "*");
     return response;
@@ -525,32 +575,45 @@ export function App() {
   ]);
 
   const reconcileProjectAutomation = useCallback(async () => {
-    if (
-      !selectedProjectId
-      || automationProjectContext.unavailableReason
-      || !automationProjectContext.codexProjectId
-      || automationRequestInFlightRef.current
-    ) return;
+    if (automationProjectContext.unavailableReason) {
+      setAutomationError(null);
+      return;
+    }
+    if (!selectedProjectId || !automationProjectContext.codexProjectId || automationRequestInFlightRef.current) return;
     const stored = projectAutomations[selectedProjectId];
     automationRequestInFlightRef.current = true;
     setAutomationPending(true);
     setAutomationError(null);
     try {
-      const response = await sendAutomationRequest("list", stored?.automationId);
+      const options = stored ?? {
+        status: "PAUSED" as const,
+        ...DEFAULT_AUTOMATION_OPTIONS,
+      };
+      const response = await sendAutomationRequest("list", options, stored?.automationId);
       const items = Array.isArray(response.items)
         ? response.items.filter(isAutomationHostItem)
         : [];
       const item = items.find((item) => item.id === stored?.automationId)
         ?? (items.length === 1 ? items[0] : undefined);
       if (!item) {
-        if (stored) writeProjectAutomation(selectedProjectId, null);
+        if (stored) {
+          writeProjectAutomation(selectedProjectId, {
+            ...stored,
+            automationId: undefined,
+            status: "PAUSED",
+          });
+        }
         return;
       }
+      const intervalMinutes = intervalMinutesFromRrule(item.rrule);
+      if (!intervalMinutes) return;
       writeProjectAutomation(selectedProjectId, {
         automationId: item.id,
         codexProjectId: automationProjectContext.codexProjectId,
         status: item.status,
-        intervalMinutes: 5,
+        intervalMinutes,
+        model: item.model,
+        reasoningEffort: item.reasoningEffort,
       });
     } catch (error) {
       setAutomationError(error instanceof Error ? error.message : "无法读取自动化状态");
@@ -566,20 +629,39 @@ export function App() {
     writeProjectAutomation,
   ]);
 
-  const toggleProjectAutomation = useCallback(async () => {
+  const saveProjectAutomation = useCallback(async (options: {
+    status: ProjectAutomationStatus;
+    intervalMinutes: AutomationIntervalMinutes;
+    model: AutomationModel;
+    reasoningEffort: AutomationReasoningEffort;
+  }) => {
+    const stored = projectAutomations[selectedProjectId];
+    if (options.status === "PAUSED" && !stored?.automationId) {
+      if (!selectedProjectId || !automationProjectContext.codexProjectId) {
+        setAutomationError(automationProjectContext.unavailableReason ?? "无法读取项目自动化信息");
+        return;
+      }
+      writeProjectAutomation(selectedProjectId, {
+        automationId: undefined,
+        codexProjectId: automationProjectContext.codexProjectId,
+        ...options,
+      });
+      setAutomationError(null);
+      return;
+    }
     if (
       !selectedProjectId
       || automationProjectContext.unavailableReason
       || !automationProjectContext.codexProjectId
       || automationRequestInFlightRef.current
     ) return;
-    const stored = projectAutomations[selectedProjectId];
-    const operation: AutomationOperation = stored?.status === "ACTIVE" ? "pause" : "ensure-active";
+    const operation = options.status === "ACTIVE" ? "ensure-active" : "pause";
+    const previousRecord = stored;
     automationRequestInFlightRef.current = true;
     setAutomationPending(true);
     setAutomationError(null);
     try {
-      const response = await sendAutomationRequest(operation, stored?.automationId);
+      const response = await sendAutomationRequest(operation, options, stored?.automationId);
       if (!isAutomationHostItem(response.item)) {
         throw new Error("Codex 没有返回自动化状态");
       }
@@ -587,9 +669,12 @@ export function App() {
         automationId: response.item.id,
         codexProjectId: automationProjectContext.codexProjectId,
         status: response.item.status,
-        intervalMinutes: 5,
+        intervalMinutes: options.intervalMinutes,
+        model: options.model,
+        reasoningEffort: options.reasoningEffort,
       });
     } catch (error) {
+      writeProjectAutomation(selectedProjectId, previousRecord);
       setAutomationError(error instanceof Error ? error.message : "无法更新自动化");
     } finally {
       automationRequestInFlightRef.current = false;
@@ -1671,12 +1756,14 @@ export function App() {
 
           <div className="header-actions">
             {selectedProjectId && (
-              <span className={`toolbar-connection connection-${connection}`} title={connection}>
-                <span aria-hidden="true" />
-                <span className="sr-only">
-                  {connection === "live" ? "实时同步" : connection === "connecting" ? "正在连接" : "正在重新连接"}
-                </span>
-              </span>
+              <ProjectAutomationMenu
+                automation={selectedProjectAutomation}
+                pending={automationPending}
+                error={automationError}
+                unavailableReason={automationProjectContext.unavailableReason}
+                onOpen={() => void reconcileProjectAutomation()}
+                onSave={(options) => void saveProjectAutomation(options)}
+              />
             )}
             {selectedProjectId && (
               <button
@@ -1724,12 +1811,6 @@ export function App() {
             <BoardSettingsMenu
               showEmptyColumns={showEmptyColumns}
               onShowEmptyColumnsChange={updateShowEmptyColumns}
-              automationEnabled={selectedProjectAutomation?.status === "ACTIVE"}
-              automationPending={automationPending}
-              automationError={automationError}
-              automationUnavailableReason={automationProjectContext.unavailableReason}
-              onAutomationToggle={() => void toggleProjectAutomation()}
-              onOpen={() => void reconcileProjectAutomation()}
             />
             {(search || activeFilterCount > 0) && (
               <button

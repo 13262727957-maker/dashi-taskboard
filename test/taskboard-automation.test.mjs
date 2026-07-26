@@ -20,9 +20,11 @@ const baseRequest = {
   workspacePath: "/Users/example/Documents/ppt-skill",
   skillPath: "/Users/example/taskboard/skills/manage-taskboard/SKILL.md",
   intervalMinutes: 5,
+  model: "gpt-5.5",
+  reasoningEffort: "high",
 };
 
-test("the automation host request accepts only the fixed project contract", () => {
+test("the automation host request accepts only whitelisted project automation options", () => {
   assert.deepEqual(parseTaskboardAutomationHostRequest(baseRequest), baseRequest);
   assert.equal(
     parseTaskboardAutomationHostRequest({ ...baseRequest, operation: "delete" }),
@@ -36,8 +38,28 @@ test("the automation host request accepts only the fixed project contract", () =
     parseTaskboardAutomationHostRequest({ ...baseRequest, prompt: "arbitrary" }),
     null,
   );
-  assert.equal(
+  assert.deepEqual(
     parseTaskboardAutomationHostRequest({ ...baseRequest, intervalMinutes: 10 }),
+    { ...baseRequest, intervalMinutes: 10 },
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({ ...baseRequest, intervalMinutes: 7 }),
+    null,
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({ ...baseRequest, model: "gpt-5.4" })?.model,
+    "gpt-5.4",
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({ ...baseRequest, model: "gpt-future" }),
+    null,
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({ ...baseRequest, reasoningEffort: "xhigh" })?.reasoningEffort,
+    "xhigh",
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({ ...baseRequest, reasoningEffort: "low" }),
     null,
   );
   assert.equal(
@@ -59,6 +81,7 @@ test("the stable name and generated prompt are project-scoped and encode the cla
   );
   assert.match(prompt, /\[\$manage-taskboard\]\([^)]*\) e-taskboard /);
   assert.match(prompt, /PPT Skill/);
+  assert.match(prompt, /每 5 分钟检查/);
   assert.match(prompt, /ppt-skill/);
   assert.match(prompt, /\/Users\/example\/Documents\/ppt-skill/);
   assert.match(prompt, /每次仅处理一个 todo/);
@@ -72,7 +95,7 @@ test("the stable name and generated prompt are project-scoped and encode the cla
   assert.match(prompt, /已绑定.*branch.*worktree/);
 });
 
-test("the generated cron spec uses the fixed local Codex defaults", () => {
+test("the generated cron spec uses the selected whitelisted local Codex options", () => {
   assert.deepEqual(buildTaskboardAutomationSpec(baseRequest), {
     kind: "cron",
     name: "Taskboard 自动认领 · ppt-skill",
@@ -83,6 +106,18 @@ test("the generated cron spec uses the fixed local Codex defaults", () => {
     model: "gpt-5.5",
     reasoningEffort: "high",
     rrule: "RRULE:FREQ=MINUTELY;INTERVAL=5",
+  });
+  assert.deepEqual(buildTaskboardAutomationSpec({
+    ...baseRequest,
+    intervalMinutes: 30,
+    model: "gpt-5.4",
+    reasoningEffort: "medium",
+  }), {
+    ...buildTaskboardAutomationSpec(baseRequest),
+    prompt: buildTaskboardAutomationPrompt({ ...baseRequest, intervalMinutes: 30 }),
+    model: "gpt-5.4",
+    reasoningEffort: "medium",
+    rrule: "RRULE:FREQ=MINUTELY;INTERVAL=30",
   });
 });
 
@@ -212,7 +247,7 @@ test("ensure-active falls back to the stable name and otherwise creates", async 
   assert.equal(created.item.id, "created-1");
 });
 
-test("pause never creates and list returns only the matching project automations", async () => {
+test("pause never creates and list returns only sanitized matching project automations", async () => {
   const matching = {
     id: "matching",
     status: "ACTIVE",
@@ -271,7 +306,15 @@ test("pause never creates and list returns only the matching project automations
     { ...baseRequest, operation: "list" },
     async () => ({ items: [unrelated, matching] }),
   );
-  assert.deepEqual(listed, { items: [matching] });
+  assert.deepEqual(listed, {
+    items: [{
+      id: "matching",
+      status: "ACTIVE",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      rrule: "RRULE:FREQ=MINUTELY;INTERVAL=5",
+    }],
+  });
 });
 
 test("pause is idempotent for an already paused matching automation", async () => {

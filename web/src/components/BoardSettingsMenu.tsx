@@ -5,23 +5,11 @@ import { LinearIcon } from "./LinearIcon";
 interface BoardSettingsMenuProps {
   showEmptyColumns: boolean;
   onShowEmptyColumnsChange: (show: boolean) => void;
-  automationEnabled: boolean;
-  automationPending: boolean;
-  automationError: string | null;
-  automationUnavailableReason: string | null;
-  onAutomationToggle: () => void;
-  onOpen: () => void;
 }
 
 export function BoardSettingsMenu({
   showEmptyColumns,
   onShowEmptyColumnsChange,
-  automationEnabled,
-  automationPending,
-  automationError,
-  automationUnavailableReason,
-  onAutomationToggle,
-  onOpen,
 }: BoardSettingsMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -115,35 +103,6 @@ export function BoardSettingsMenu({
           </button>
         </div>
       </section>
-      <section
-        className="board-settings-section board-settings-automation"
-        aria-labelledby="board-automation-heading"
-      >
-        <h2 id="board-automation-heading">自动化</h2>
-        <div className="board-setting-row">
-          <span className="board-setting-copy">
-            <span>自动认领待办</span>
-            <small>每 5 分钟检查一次</small>
-          </span>
-          <button
-            type="button"
-            className={`board-setting-switch${automationEnabled ? " is-on" : ""}`}
-            role="switch"
-            aria-checked={automationEnabled}
-            aria-label={automationEnabled ? "暂停自动认领待办" : "启用自动认领待办"}
-            disabled={automationPending || Boolean(automationUnavailableReason)}
-            onClick={onAutomationToggle}
-          >
-            <span aria-hidden="true" />
-          </button>
-        </div>
-        {automationUnavailableReason && (
-          <p className="board-setting-note">{automationUnavailableReason}</p>
-        )}
-        {automationError && (
-          <p className="board-setting-error" role="alert">{automationError}</p>
-        )}
-      </section>
     </div>,
     document.body,
   ) : null;
@@ -161,7 +120,6 @@ export function BoardSettingsMenu({
         onClick={() => {
           if (!open) {
             setPosition((current) => ({ ...current, ready: false }));
-            onOpen();
           }
           setOpen((current) => !current);
         }}

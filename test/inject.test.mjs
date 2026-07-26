@@ -160,6 +160,8 @@ test("the iframe automation contract is forwarded through the fixed host binding
   assert.match(source, /codexProjectId: payload\.codexProjectId/);
   assert.match(source, /workspacePath: payload\.workspacePath/);
   assert.match(source, /skillPath: payload\.skillPath/);
+  assert.match(source, /model: payload\.model/);
+  assert.match(source, /reasoningEffort: payload\.reasoningEffort/);
   assert.match(source, /type: "taskboard:automation-response"/);
   assert.match(source, /requestId,\s*ok: true,\s*item: response\.item/);
   assert.match(source, /items: response\.items/);

@@ -1,6 +1,9 @@
 import path from "node:path";
 
 const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list"]);
+const INTERVAL_MINUTES = new Set([5, 10, 15, 30, 60]);
+const MODELS = new Set(["gpt-5.5", "gpt-5.4"]);
+const REASONING_EFFORTS = new Set(["medium", "high", "xhigh"]);
 const HOST_REQUEST_FIELDS = new Set([
   "id",
   "action",
@@ -13,6 +16,8 @@ const HOST_REQUEST_FIELDS = new Set([
   "skillPath",
   "automationId",
   "intervalMinutes",
+  "model",
+  "reasoningEffort",
 ]);
 
 export function parseTaskboardAutomationHostRequest(value) {
@@ -24,7 +29,9 @@ export function parseTaskboardAutomationHostRequest(value) {
   if (!validProjectId(value.taskboardProjectId)) return null;
   if (!validText(value.codexProjectId, 256) || !validText(value.projectName, 200)) return null;
   if (!validAbsolutePath(value.workspacePath) || !validAbsolutePath(value.skillPath)) return null;
-  if (value.intervalMinutes !== 5) return null;
+  if (!INTERVAL_MINUTES.has(value.intervalMinutes)) return null;
+  if (!MODELS.has(value.model)) return null;
+  if (!REASONING_EFFORTS.has(value.reasoningEffort)) return null;
   if (value.automationId !== undefined && !validText(value.automationId, 256)) return null;
 
   return {
@@ -38,7 +45,9 @@ export function parseTaskboardAutomationHostRequest(value) {
     workspacePath: value.workspacePath,
     skillPath: value.skillPath,
     ...(value.automationId === undefined ? {} : { automationId: value.automationId }),
-    intervalMinutes: 5,
+    intervalMinutes: value.intervalMinutes,
+    model: value.model,
+    reasoningEffort: value.reasoningEffort,
   };
 }
 
@@ -48,7 +57,7 @@ export function buildTaskboardAutomationName(request) {
 
 export function buildTaskboardAutomationPrompt(request) {
   return [
-    `[$manage-taskboard](${request.skillPath}) e-taskboard 每 5 分钟检查任务面板中的「${request.projectName}」项目（项目 ID：${request.taskboardProjectId}，项目目录：${request.workspacePath}）。`,
+    `[$manage-taskboard](${request.skillPath}) e-taskboard 每 ${request.intervalMinutes} 分钟检查任务面板中的「${request.projectName}」项目（项目 ID：${request.taskboardProjectId}，项目目录：${request.workspacePath}）。`,
     "每次仅处理一个 todo：先用 issue get 读取最新议题内容，并用 comment list 读取全部评论，确认是否包含已完成后被打回的返工要求。",
     "认领时使用最新 version 将议题移动到 in_progress；若发生版本冲突或最新状态已变化，立即跳过，避免多个 Agent 抢同一任务。",
     "若议题已绑定 branch 或 worktree，必须在该议题绑定的开发上下文执行，避免并行 Agent 修改同一工作目录。",
@@ -64,8 +73,8 @@ export function buildTaskboardAutomationSpec(request) {
     projectId: request.codexProjectId,
     executionEnvironment: "local",
     localEnvironmentConfigPath: null,
-    model: "gpt-5.5",
-    reasoningEffort: "high",
+    model: request.model,
+    reasoningEffort: request.reasoningEffort,
     rrule: `RRULE:FREQ=MINUTELY;INTERVAL=${request.intervalMinutes}`,
   };
 }
@@ -77,7 +86,7 @@ export async function reconcileTaskboardAutomation(request, rpc) {
   const matchingItems = items.filter((item) => item?.name === name);
 
   if (request.operation === "list") {
-    return { items: matchingItems };
+    return { items: matchingItems.map(sanitizeAutomation).filter(Boolean) };
   }
 
   const existing = (
@@ -105,6 +114,28 @@ export async function reconcileTaskboardAutomation(request, rpc) {
     });
   }
   return rpc("automation-create", spec);
+}
+
+function sanitizeAutomation(item) {
+  if (
+    !validText(item?.id, 256)
+    || (item.status !== "ACTIVE" && item.status !== "PAUSED")
+    || !MODELS.has(item.model)
+    || !REASONING_EFFORTS.has(item.reasoningEffort)
+    || !validRrule(item.rrule)
+  ) return null;
+  return {
+    id: item.id,
+    status: item.status,
+    model: item.model,
+    reasoningEffort: item.reasoningEffort,
+    rrule: item.rrule,
+  };
+}
+
+function validRrule(value) {
+  return typeof value === "string"
+    && /^RRULE:FREQ=MINUTELY;INTERVAL=(5|10|15|30|60)$/.test(value);
 }
 
 function automationMatchesSpec(item, spec, status) {
