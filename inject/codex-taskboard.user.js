@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.6.6";
+  const VERSION = "0.6.7";
   const SENTINEL_KEY = "__codexTaskboardInjection__";
   const DEFAULT_TASKBOARD_URL = "http://127.0.0.1:47823/?host=codex";
   const ENTRY_ID = "codex-taskboard-entry";
@@ -222,14 +222,14 @@
     const plugin = buttons.find((button) => buttonMatches(button, PLUGIN_LABELS));
     if (plugin && plugin.parentElement) {
       const siblings = Array.from(plugin.parentElement.children).filter((child) => child.tagName === "BUTTON");
-      if (siblings.length >= 4) return plugin;
+      if (siblings.length >= 3) return plugin;
     }
 
     const firstSection = scroll.querySelector("[data-app-action-sidebar-section]");
     const sectionTop = firstSection?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY;
     const groups = Array.from(scroll.querySelectorAll("div")).filter((element) => {
       const directButtons = Array.from(element.children).filter((child) => child.tagName === "BUTTON");
-      return directButtons.length >= 4 && element.getBoundingClientRect().top < sectionTop;
+      return directButtons.length >= 3 && element.getBoundingClientRect().top < sectionTop;
     });
     const group = groups.sort((left, right) => right.children.length - left.children.length)[0];
     return Array.from(group?.children || []).filter((child) => child.tagName === "BUTTON").at(-1) || null;

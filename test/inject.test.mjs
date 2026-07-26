@@ -9,6 +9,7 @@ const webApp = await readFile(new URL("../web/src/App.tsx", import.meta.url), "u
 
 test("injection is an idempotent IIFE guarded by a versioned sentinel", () => {
   assert.match(source, /^\(\(\) => \{/);
+  assert.match(source, /const VERSION = "0\.6\.7"/);
   assert.match(source, /const SENTINEL_KEY = "__codexTaskboardInjection__"/);
   assert.match(source, /previous\?\.version === VERSION/);
   assert.match(source, /previous\.refresh\(\);\s*return;/);
@@ -24,6 +25,8 @@ test("embedded page uses the local taskboard URL and supports a runtime override
 
 test("entry clones the native Plugins row and the page covers the complete Codex workspace", () => {
   assert.match(source, /const PLUGIN_LABELS = \["插件", "plugins"\]/);
+  assert.match(source, /if \(siblings\.length >= 3\) return plugin;/);
+  assert.match(source, /return directButtons\.length >= 3/);
   assert.match(source, /const button = reference\.cloneNode\(true\)/);
   assert.match(source, /reference\.after\(entry\)/);
   assert.match(source, /document\.querySelector\("\.app-shell-main-content-frame"\)/);
