@@ -65,6 +65,7 @@ const COMMAND_OPTIONS = new Map([
   ["issue move", new Set(["status", "thread-id", "if-version", "json"])],
   ["issue archive", new Set(["thread-id", "if-version", "json"])],
   ["issue restore", new Set(["thread-id", "if-version", "json"])],
+  ["issue relation", new Set(["type", "issue", "thread-id", "if-version", "json"])],
   ["comment list", new Set(["json"])],
   ["comment add", new Set(["body", "thread-id", "json"])],
   ["comment update", new Set(["body", "thread-id", "if-version", "json"])],
@@ -172,7 +173,7 @@ async function execute(parsed, overrides) {
   const allowedOptions = COMMAND_OPTIONS.get(command);
   if (!allowedOptions) {
     throw usageError(
-      "Expected one of: project list/create, issue list/get/create/update/move/archive/restore, comment list/add/update/delete, context current",
+      "Expected one of: project list/create, issue list/get/create/update/move/archive/restore/relation, comment list/add/update/delete, context current",
     );
   }
   validateOptions(parsed.options, allowedOptions);
@@ -215,6 +216,15 @@ async function execute(parsed, overrides) {
     case "issue restore":
       expectOperandCount(parsed, 1);
       return archiveIssue(api, parsed.operands[0], parsed.options, overrides, "restore");
+    case "issue relation":
+      expectOperandCount(parsed, 2);
+      return mutateIssueRelation(
+        api,
+        parsed.operands[0],
+        parsed.operands[1],
+        parsed.options,
+        overrides,
+      );
     case "comment list":
       expectOperandCount(parsed, 1);
       return api.request("GET", `${taskPath(parsed.operands[0])}/comments`);
@@ -377,6 +387,24 @@ async function archiveIssue(api, taskId, options, overrides, action) {
     threadId,
     version: await resolveVersion(api, taskId, options["if-version"]),
   });
+}
+
+async function mutateIssueRelation(api, action, taskId, options, overrides) {
+  if (action !== "add" && action !== "remove") {
+    throw usageError("issue relation action must be add or remove");
+  }
+  const type = requiredOption(options, "type");
+  if (!["parent", "blocks", "blocked_by", "related"].includes(type)) {
+    throw usageError("--type must be parent, blocks, blocked_by, or related");
+  }
+  const relatedTaskId = requiredOption(options, "issue");
+  const threadId = resolveThreadId(options, overrides);
+  const version = await resolveVersion(api, taskId, options["if-version"]);
+  return api.request(
+    action === "add" ? "POST" : "DELETE",
+    `${taskPath(taskId)}/relations/${type}/${encodeURIComponent(relatedTaskId)}`,
+    { threadId, version },
+  );
 }
 
 async function currentContext(api, options, overrides) {

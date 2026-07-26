@@ -20,10 +20,12 @@ import type {
   Comment,
   DevelopmentContext,
   DevelopmentScan,
+  IssueRelationType,
   Recurrence,
   Task,
   TaskDraft,
   TaskPriority,
+  TaskRelationSummary,
   TaskStatus,
   WorkflowOption,
 } from "../types";
@@ -36,6 +38,12 @@ import { ActorAvatar } from "./ActorAvatar";
 import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
+import {
+  IssueParentLink,
+  IssueRelationSidebar,
+  IssueSubIssues,
+  type RelationMutationResult,
+} from "./IssueRelations";
 
 const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 
@@ -49,6 +57,7 @@ const PRIORITY_DETAILS: Record<TaskPriority, { label: string; bars: number }> = 
 
 interface TaskDetailProps {
   task: Task;
+  tasks: Task[];
   currentUser: ActorIdentity;
   availableLabels: string[];
   workflows: WorkflowOption[];
@@ -57,6 +66,17 @@ interface TaskDetailProps {
   commentsRevision: number;
   attachmentsRevision: number;
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
+  onOpenTask: (task: TaskRelationSummary) => void;
+  onAddRelation: (
+    task: Task,
+    type: IssueRelationType,
+    relatedTaskId: string,
+  ) => Promise<RelationMutationResult>;
+  onRemoveRelation: (
+    task: Task,
+    type: IssueRelationType,
+    relatedTaskId: string,
+  ) => Promise<RelationMutationResult>;
   onOpenThread: (threadId: string) => void;
   onOpenInThread: (task: Task) => void;
   openingThread: boolean;
@@ -155,6 +175,7 @@ function ConversationLink({
 
 export function TaskDetail({
   task,
+  tasks,
   currentUser,
   availableLabels,
   workflows,
@@ -163,6 +184,9 @@ export function TaskDetail({
   commentsRevision,
   attachmentsRevision,
   onUpdate,
+  onOpenTask,
+  onAddRelation,
+  onRemoveRelation,
   onOpenThread,
   onOpenInThread,
   openingThread,
@@ -307,6 +331,25 @@ export function TaskDetail({
       return null;
     } finally {
       setSavingProperty(null);
+    }
+  }
+
+  async function applyRelationMutation(
+    mutation: () => Promise<RelationMutationResult>,
+  ): Promise<RelationMutationResult> {
+    onError(null);
+    try {
+      const result = await mutation();
+      const nextCurrent = result.task.id === currentTask.id
+        ? result.task
+        : result.relatedTask.id === currentTask.id
+          ? result.relatedTask
+          : null;
+      if (nextCurrent) setCurrentTask(nextCurrent);
+      return result;
+    } catch (error) {
+      onError(messageFor(error));
+      throw error;
     }
   }
 
@@ -515,6 +558,17 @@ export function TaskDetail({
                   onKeyDown={handleTitleKeyDown}
                   onBlur={() => void saveTitle()}
                 />
+                <IssueParentLink
+                  task={currentTask}
+                  tasks={tasks}
+                  onOpenTask={onOpenTask}
+                  onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
+                    () => onAddRelation(anchor, type, relatedTaskId),
+                  )}
+                  onRemoveRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
+                    () => onRemoveRelation(anchor, type, relatedTaskId),
+                  )}
+                />
                 {editingDescription ? (
                   <textarea
                     ref={descriptionRef}
@@ -563,6 +617,18 @@ export function TaskDetail({
                 )}
               </div>
             </article>
+
+            <IssueSubIssues
+              task={currentTask}
+              tasks={tasks}
+              onOpenTask={onOpenTask}
+              onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
+                () => onAddRelation(anchor, type, relatedTaskId),
+              )}
+              onRemoveRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
+                () => onRemoveRelation(anchor, type, relatedTaskId),
+              )}
+            />
 
             <section className="issue-attachments" aria-labelledby="attachments-heading">
               <header className="attachments-heading">
@@ -685,7 +751,9 @@ export function TaskDetail({
                         <strong>{comment.authorName}</strong>
                         <span className="actor-id">@{comment.authorId}</span>
                         <time title={exactTime(comment.createdAt)}>{relativeTime(comment.createdAt)}</time>
-                        {comment.version > 1 && <span title={`编辑于 ${exactTime(comment.updatedAt)}`}>已编辑</span>}
+                        {comment.version > 1 && (
+                          <span className="comment-edited" title={`编辑于 ${exactTime(comment.updatedAt)}`}>已编辑</span>
+                        )}
                         <div className="comment-actions" data-comment-menu-root={comment.id}>
                           <button
                             type="button"
@@ -720,6 +788,7 @@ export function TaskDetail({
                       {editingId === comment.id ? (
                         <div className="comment-edit-form">
                           <textarea
+                            className="comment-input"
                             autoFocus
                             value={editingBody}
                             rows={3}
@@ -797,6 +866,7 @@ export function TaskDetail({
                   <span className="actor-id">@{currentUser.id}</span>
                 </div>
                 <textarea
+                  className="comment-input"
                   ref={composerRef}
                   value={draft}
                   rows={4}
@@ -1006,6 +1076,17 @@ export function TaskDetail({
                 <option value="year">每年</option>
               </select>
             </label>
+            <IssueRelationSidebar
+              task={currentTask}
+              tasks={tasks}
+              onOpenTask={onOpenTask}
+              onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
+                () => onAddRelation(anchor, type, relatedTaskId),
+              )}
+              onRemoveRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
+                () => onRemoveRelation(anchor, type, relatedTaskId),
+              )}
+            />
             <div className="detail-timestamps">
               <span>创建于 {exactTime(currentTask.createdAt)}</span>
               {currentTask.updatedAt !== currentTask.createdAt && <span>更新于 {exactTime(currentTask.updatedAt)}</span>}

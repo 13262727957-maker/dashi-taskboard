@@ -13,6 +13,7 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type ActorType = "user" | "agent";
 export type AssigneeTarget = "current-user" | "codex-agent";
+export type IssueRelationType = "parent" | "blocks" | "blocked_by" | "related";
 
 export interface ActorIdentity {
   type: ActorType;
@@ -77,6 +78,25 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface TaskRelationSummary {
+  id: string;
+  identifier: string;
+  projectId: string;
+  title: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignee: ActorIdentity;
+  archivedAt: string | null;
+}
+
+export interface TaskRelations {
+  parent: TaskRelationSummary | null;
+  subIssues: TaskRelationSummary[];
+  blockedBy: TaskRelationSummary[];
+  blocks: TaskRelationSummary[];
+  related: TaskRelationSummary[];
+}
+
 export interface Task {
   id: string;
   identifier: string;
@@ -98,6 +118,7 @@ export interface Task {
   dueDate: string | null;
   recurrence: Recurrence | null;
   archivedAt: string | null;
+  relations: TaskRelations;
   version: number;
   createdAt: string;
   updatedAt: string;

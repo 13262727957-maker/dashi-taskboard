@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LinearIcon } from "./LinearIcon";
-import { type PaletteItem } from "./workflowCatalog";
+import { WORKFLOW_GROUPS, type PaletteItem } from "./workflowCatalog";
 import { WorkflowMark } from "./WorkflowMark";
-
-const WORKFLOW_GROUPS = ["触发器", "Skill 和 MCP", "API", "第三方集成", "规划", "结果"] as const;
 
 interface WorkflowStepPickerProps {
   items: PaletteItem[];

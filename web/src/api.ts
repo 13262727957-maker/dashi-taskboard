@@ -3,6 +3,7 @@ import type {
   Attachment,
   Comment,
   DevelopmentScan,
+  IssueRelationType,
   Project,
   Task,
   TaskboardMetadata,
@@ -214,6 +215,36 @@ export async function restoreTask(task: Task, threadId?: string): Promise<Task> 
     },
   );
   return data.task;
+}
+
+export async function addTaskRelation(
+  task: Task,
+  type: IssueRelationType,
+  relatedTaskId: string,
+  threadId?: string,
+): Promise<{ task: Task; relatedTask: Task }> {
+  return request<{ task: Task; relatedTask: Task }>(
+    `/api/tasks/${encodeURIComponent(task.id)}/relations/${type}/${encodeURIComponent(relatedTaskId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ version: task.version, ...(threadId ? { threadId } : {}) }),
+    },
+  );
+}
+
+export async function removeTaskRelation(
+  task: Task,
+  type: IssueRelationType,
+  relatedTaskId: string,
+  threadId?: string,
+): Promise<{ task: Task; relatedTask: Task }> {
+  return request<{ task: Task; relatedTask: Task }>(
+    `/api/tasks/${encodeURIComponent(task.id)}/relations/${type}/${encodeURIComponent(relatedTaskId)}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ version: task.version, ...(threadId ? { threadId } : {}) }),
+    },
+  );
 }
 
 export async function listComments(taskId: string, signal?: AbortSignal): Promise<Comment[]> {

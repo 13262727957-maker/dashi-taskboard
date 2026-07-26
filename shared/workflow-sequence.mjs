@@ -90,6 +90,111 @@ export function workflowSequenceEdges(stepIds) {
   });
 }
 
+function conditionEdgeOutcome(edge) {
+  const outcome = edge.data?.conditionOutcome;
+  return outcome === "true" || outcome === "false" ? outcome : null;
+}
+
+function orderedConditionBranchIds(nodes, edges, conditionId, outcome) {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const branchEdges = edges.filter((edge) => (
+    edge.data?.conditionId === conditionId
+    && conditionEdgeOutcome(edge) === outcome
+    && nodeIds.has(edge.source)
+    && nodeIds.has(edge.target)
+  ));
+  const outgoing = new Map();
+  for (const edge of branchEdges) {
+    if (!outgoing.has(edge.source)) outgoing.set(edge.source, edge.target);
+  }
+  const ordered = [];
+  const visited = new Set([conditionId]);
+  let current = conditionId;
+  while (outgoing.has(current)) {
+    const next = outgoing.get(current);
+    if (visited.has(next)) break;
+    visited.add(next);
+    ordered.push(next);
+    current = next;
+  }
+  const branchNodeIds = new Set();
+  for (const edge of branchEdges) {
+    if (edge.source !== conditionId) branchNodeIds.add(edge.source);
+    if (edge.target !== conditionId) branchNodeIds.add(edge.target);
+  }
+  nodes
+    .filter((node) => branchNodeIds.has(node.id) && !visited.has(node.id))
+    .sort(compareNodes)
+    .forEach((node) => ordered.push(node.id));
+  return ordered;
+}
+
+export function workflowConditionEdges(trunkStepIds, conditionId, branches) {
+  const edges = workflowSequenceEdges(trunkStepIds);
+  for (const outcome of ["true", "false"]) {
+    const stepIds = branches[outcome] ?? [];
+    const branchSequence = [conditionId, ...stepIds];
+    for (let index = 1; index < branchSequence.length; index += 1) {
+      const source = branchSequence[index - 1];
+      const target = branchSequence[index];
+      edges.push({
+        id: `condition-${conditionId}-${outcome}-${source}-${target}`,
+        source,
+        target,
+        sourceHandle: source === conditionId ? `condition-${outcome}` : undefined,
+        data: {
+          conditionId,
+          conditionOutcome: outcome,
+        },
+      });
+    }
+  }
+  return edges;
+}
+
+export function normalizeWorkflowConditionBranches(nodes, edges) {
+  const persistedConditionEdge = edges.find((edge) => conditionEdgeOutcome(edge));
+  if (persistedConditionEdge) {
+    const conditionId = persistedConditionEdge.data.conditionId;
+    const branches = {
+      true: orderedConditionBranchIds(nodes, edges, conditionId, "true"),
+      false: orderedConditionBranchIds(nodes, edges, conditionId, "false"),
+    };
+    const branchNodeIds = new Set([...branches.true, ...branches.false]);
+    const trunkNodes = nodes.filter((node) => !node.parentId && !branchNodeIds.has(node.id));
+    const trunkEdges = edges.filter((edge) => !conditionEdgeOutcome(edge));
+    const trunkStepIds = orderedWorkflowStepIds(trunkNodes, trunkEdges);
+    return {
+      trunkStepIds,
+      conditionId,
+      branches,
+      migrated: false,
+    };
+  }
+
+  const linearStepIds = orderedWorkflowStepIds(nodes, edges);
+  const conditionIndex = linearStepIds.findIndex((id) => (
+    nodes.find((node) => node.id === id)?.data?.kind === "condition"
+  ));
+  if (conditionIndex < 0) {
+    return {
+      trunkStepIds: linearStepIds,
+      conditionId: null,
+      branches: { true: [], false: [] },
+      migrated: false,
+    };
+  }
+  return {
+    trunkStepIds: linearStepIds.slice(0, conditionIndex + 1),
+    conditionId: linearStepIds[conditionIndex],
+    branches: {
+      true: linearStepIds.slice(conditionIndex + 1),
+      false: [],
+    },
+    migrated: conditionIndex < linearStepIds.length - 1,
+  };
+}
+
 export function layoutWorkflowSteps(
   nodes,
   stepIds,

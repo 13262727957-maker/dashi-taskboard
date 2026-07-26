@@ -9,14 +9,18 @@ import klingLogo from "@lobehub/icons-static-svg/icons/kling-color.svg";
 import mcpLogo from "@lobehub/icons-static-svg/icons/mcp.svg";
 import midjourneyLogo from "@lobehub/icons-static-svg/icons/midjourney.svg";
 import vercelLogo from "@lobehub/icons-static-svg/icons/vercel.svg";
+import xLogo from "../assets/x-logo-black.png";
 import type { WorkflowCapabilities } from "../types";
 import type { WorkflowNodeData } from "./WorkflowNode";
+export { WORKFLOW_TRIGGER_KINDS, isWorkflowTriggerKind } from "../../../shared/workflow-control-flow.mjs";
 
 export type WorkflowGroup =
   | "触发器"
+  | "流程控制"
   | "Skill 和 MCP"
   | "API"
   | "第三方集成"
+  | "开发"
   | "规划"
   | "结果";
 
@@ -29,9 +33,11 @@ export interface PaletteItem {
 
 export const WORKFLOW_GROUPS: WorkflowGroup[] = [
   "触发器",
+  "流程控制",
   "Skill 和 MCP",
   "API",
   "第三方集成",
+  "开发",
   "规划",
   "结果",
 ];
@@ -65,6 +71,62 @@ export const ISSUE_PRIORITIES = [
   { value: "low", label: "低" },
 ] as const;
 
+export const CONDITION_FIELDS = [
+  {
+    value: "issue-status",
+    label: "议题状态",
+    operators: ["equals", "not-equals"],
+    defaultOperator: "equals",
+    defaultValue: "todo",
+  },
+  {
+    value: "issue-priority",
+    label: "议题优先级",
+    operators: ["equals", "not-equals"],
+    defaultOperator: "equals",
+    defaultValue: "none",
+  },
+  {
+    value: "issue-labels",
+    label: "议题标签",
+    operators: ["contains", "not-contains"],
+    defaultOperator: "contains",
+    defaultValue: "",
+  },
+  {
+    value: "upstream-output",
+    label: "上游节点输出",
+    operators: ["equals", "not-equals", "contains", "not-contains"],
+    defaultOperator: "equals",
+    defaultValue: "",
+  },
+] as const;
+
+export const CONDITION_OPERATORS = [
+  { value: "equals", label: "等于" },
+  { value: "not-equals", label: "不等于" },
+  { value: "contains", label: "包含" },
+  { value: "not-contains", label: "不包含" },
+] as const;
+
+export const FEISHU_MESSAGE_RECIPIENTS = [
+  { value: "self", label: "发送给自己" },
+  { value: "user", label: "发送给特定用户" },
+  { value: "chat", label: "发送到群聊" },
+] as const;
+
+export const CODE_RUNTIMES = [
+  { value: "shell", label: "Shell" },
+  { value: "javascript", label: "JavaScript" },
+  { value: "python", label: "Python" },
+] as const;
+
+export const TEST_SCOPES = [
+  { value: "related", label: "相关测试" },
+  { value: "all", label: "全部测试" },
+  { value: "custom", label: "自定义命令" },
+] as const;
+
 const FEISHU_LOGO = "https://p1-hera.feishucdn.com/tos-cn-i-jbbdkfciu3/84a9f036fe2b44f99b899fff4beeb963~tplv-jbbdkfciu3-image:0:0.image";
 const GIT_LOGO = "https://git-scm.com/images/logos/downloads/Git-Icon-1788C.svg";
 
@@ -83,6 +145,87 @@ export const PALETTE_ITEMS: PaletteItem[] = [
       tone: "issue",
       outputLabel: "议题",
       triggerStatus: "todo",
+    },
+  },
+  {
+    group: "触发器",
+    title: "RSS 订阅更新",
+    description: "RSS 订阅发布新内容时启动流程",
+    data: {
+      kind: "rss-trigger",
+      eyebrow: "RSS TRIGGER",
+      title: "RSS 订阅更新",
+      description: "指定的 RSS 订阅发布新内容时触发",
+      meta: "尚未设置 RSS 订阅地址",
+      icon: "recurrence",
+      tone: "issue",
+      outputLabel: "订阅条目",
+      rssFeedUrl: "",
+    },
+  },
+  {
+    group: "触发器",
+    title: "PR 提交",
+    description: "当前项目仓库提交 PR 时启动流程",
+    data: {
+      kind: "pull-request-submitted-trigger",
+      eyebrow: "PR TRIGGER",
+      title: "PR 提交",
+      description: "当前项目仓库提交新的 Pull Request 时触发",
+      meta: "当前项目仓库 · Pull Request",
+      icon: "branch",
+      tone: "issue",
+      outputLabel: "Pull Request",
+    },
+  },
+  {
+    group: "触发器",
+    title: "Issue 提交",
+    description: "当前项目仓库提交 Issue 时启动流程",
+    data: {
+      kind: "repository-issue-submitted-trigger",
+      eyebrow: "ISSUE TRIGGER",
+      title: "Issue 提交",
+      description: "当前项目仓库提交新的 Issue 时触发",
+      meta: "当前项目仓库 · Issue",
+      icon: "createIssue",
+      tone: "issue",
+      outputLabel: "Issue",
+    },
+  },
+  {
+    group: "触发器",
+    title: "Git 状态",
+    description: "当前项目的 Git 工作区状态变化时启动流程",
+    data: {
+      kind: "git-status-trigger",
+      eyebrow: "GIT TRIGGER",
+      title: "Git 状态",
+      description: "当前项目的 Git 工作区状态发生变化时触发",
+      meta: "当前项目 · Git 工作区",
+      icon: "branch",
+      logo: GIT_LOGO,
+      tone: "issue",
+      outputLabel: "Git 状态",
+    },
+  },
+  {
+    group: "流程控制",
+    title: "条件判断",
+    description: "根据判断结果进入对应路径",
+    data: {
+      kind: "condition",
+      eyebrow: "CONDITION",
+      title: "条件判断",
+      description: "根据判断结果进入对应路径",
+      meta: "配置一个判断规则",
+      icon: "filter",
+      tone: "planning",
+      inputLabel: "待判断数据",
+      outputLabel: "符合条件的数据",
+      conditionField: "issue-status",
+      conditionOperator: "equals",
+      conditionValue: "todo",
     },
   },
   {
@@ -264,6 +407,45 @@ export const PALETTE_ITEMS: PaletteItem[] = [
   },
   {
     group: "第三方集成",
+    title: "飞书消息",
+    description: "发送消息给自己、用户或群聊",
+    data: {
+      kind: "feishu-message",
+      eyebrow: "INTEGRATION",
+      title: "飞书消息",
+      description: "通过飞书开放平台发送消息",
+      meta: "飞书开放平台 · IM",
+      icon: "conversation",
+      logo: FEISHU_LOGO,
+      tone: "integration",
+      inputLabel: "消息内容",
+      outputLabel: "消息回执",
+      feishuRecipientType: "self",
+      feishuUserId: "",
+      feishuChatId: "",
+    },
+  },
+  {
+    group: "第三方集成",
+    title: "发布到 Twitter",
+    description: "将内容发布到 Twitter",
+    data: {
+      kind: "twitter-post",
+      eyebrow: "INTEGRATION",
+      title: "发布到 Twitter",
+      description: "将指定内容发布到 Twitter",
+      meta: "尚未填写发布内容",
+      icon: "send",
+      logo: xLogo,
+      logoMonochrome: true,
+      tone: "integration",
+      inputLabel: "发布内容",
+      outputLabel: "发布结果",
+      twitterPostContent: "",
+    },
+  },
+  {
+    group: "第三方集成",
     title: "OpenCLI",
     description: "调用网站适配器和登录态浏览器",
     data: {
@@ -347,6 +529,58 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     },
   },
   {
+    group: "开发",
+    title: "自定义代码",
+    description: "使用自定义脚本处理流程数据",
+    data: {
+      kind: "custom-code",
+      eyebrow: "CODE",
+      title: "自定义代码",
+      description: "在当前项目上下文中运行自定义代码",
+      meta: "运行环境 · Shell",
+      icon: "panel",
+      tone: "development",
+      inputLabel: "流程数据",
+      outputLabel: "代码输出",
+      codeRuntime: "shell",
+      codeContent: "",
+    },
+  },
+  {
+    group: "开发",
+    title: "写测试",
+    description: "根据当前议题和项目上下文编写测试",
+    data: {
+      kind: "write-tests",
+      eyebrow: "TEST",
+      title: "写测试",
+      description: "根据当前议题和项目上下文编写测试",
+      meta: "当前项目 · 测试",
+      icon: "write",
+      tone: "development",
+      inputLabel: "任务上下文",
+      outputLabel: "测试代码",
+    },
+  },
+  {
+    group: "开发",
+    title: "运行测试",
+    description: "运行相关测试、全部测试或自定义命令",
+    data: {
+      kind: "run-tests",
+      eyebrow: "TEST",
+      title: "运行测试",
+      description: "在当前项目中运行测试",
+      meta: "测试范围 · 相关测试",
+      icon: "check",
+      tone: "development",
+      inputLabel: "项目变更",
+      outputLabel: "测试结果",
+      testScope: "related",
+      testCommand: "",
+    },
+  },
+  {
     group: "规划",
     title: "基础规划",
     description: "拆解步骤、依赖和验收条件",
@@ -397,6 +631,27 @@ export const PALETTE_ITEMS: PaletteItem[] = [
       tone: "planning",
       inputLabel: "任务上下文",
       outputLabel: "执行计划",
+    },
+  },
+  {
+    group: "结果",
+    title: "添加 ISSUE",
+    description: "在当前项目中创建新议题",
+    data: {
+      kind: "issue-create",
+      eyebrow: "ISSUE ACTION",
+      title: "添加 ISSUE",
+      description: "在当前流程所属项目中创建议题",
+      meta: "待填写议题标题",
+      icon: "createIssue",
+      tone: "result",
+      inputLabel: "流程上下文",
+      outputLabel: "新议题",
+      createIssueTitle: "",
+      createIssueDescription: "",
+      createIssueStatus: "todo",
+      createIssuePriority: "none",
+      createIssueLabels: "",
     },
   },
   {
@@ -490,6 +745,25 @@ export function capabilityNodeMeta(
   capabilities: WorkflowCapabilities | null,
   failed: boolean,
 ): string {
+  if (data.kind === "issue-create") {
+    const status = optionLabel(ISSUE_STATUSES, data.createIssueStatus ?? "todo");
+    const priority = optionLabel(ISSUE_PRIORITIES, data.createIssuePriority ?? "none");
+    return `初始状态 · ${status} · 优先级 ${priority}`;
+  }
+  if (data.kind === "rss-trigger") {
+    const source = rssSourceLabel(data.rssFeedUrl);
+    return source ? `RSS · ${source}` : "尚未设置 RSS 订阅地址";
+  }
+  if (data.kind === "twitter-post") {
+    const content = data.twitterPostContent?.trim();
+    return content ? `发布内容 · ${twitterPostSummary(content)}` : "尚未填写发布内容";
+  }
+  if (data.kind === "custom-code") {
+    return `运行环境 · ${optionLabel(CODE_RUNTIMES, data.codeRuntime ?? "shell")}`;
+  }
+  if (data.kind === "run-tests") {
+    return `测试范围 · ${optionLabel(TEST_SCOPES, data.testScope ?? "related")}`;
+  }
   if (data.kind === "skill") {
     if (!capabilities) return "正在读取可用 Skill";
     if (failed) return "无法读取可用 Skill";
@@ -514,10 +788,65 @@ function formatActionTitle(title: string, actions: string[]): string {
   return `${title} · ${visibleActions}${remaining}`;
 }
 
+function rssSourceLabel(value: string | undefined): string {
+  const feedUrl = value?.trim();
+  if (!feedUrl) return "";
+  return feedUrl.replace(/^https?:\/\//i, "").split(/[/?#]/)[0] || feedUrl;
+}
+
+function twitterPostSummary(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 36 ? `${normalized.slice(0, 36)}…` : normalized;
+}
+
 export function workflowNodeDisplayTitle(data: WorkflowNodeData): string {
+  if (data.kind === "issue-create") {
+    const issueTitle = data.createIssueTitle?.trim();
+    return formatActionTitle(data.title, issueTitle ? [issueTitle] : []);
+  }
+  if (data.kind === "rss-trigger") {
+    const source = rssSourceLabel(data.rssFeedUrl);
+    return formatActionTitle(data.title, source ? [source] : []);
+  }
+  if (data.kind === "twitter-post") {
+    const content = data.twitterPostContent?.trim();
+    return formatActionTitle(data.title, content ? [twitterPostSummary(content)] : []);
+  }
+  if (data.kind === "condition") {
+    const field = CONDITION_FIELDS.find(
+      (option) => option.value === data.conditionField,
+    ) ?? CONDITION_FIELDS[0];
+    const operatorValue = field.operators.find(
+      (value) => value === data.conditionOperator,
+    ) ?? field.defaultOperator;
+    const value = data.conditionValue || field.defaultValue;
+    const valueLabel = field.value === "issue-status"
+      ? optionLabel(ISSUE_STATUSES, value)
+      : field.value === "issue-priority"
+        ? optionLabel(ISSUE_PRIORITIES, value)
+        : value;
+    return formatActionTitle(data.title, [
+      `${field.label} ${optionLabel(CONDITION_OPERATORS, operatorValue)} ${valueLabel || "未设置"}`,
+    ]);
+  }
+  if (data.kind === "feishu-message") {
+    return formatActionTitle(data.title, [
+      optionLabel(FEISHU_MESSAGE_RECIPIENTS, data.feishuRecipientType ?? "self"),
+    ]);
+  }
   if (data.kind === "git") {
     return formatActionTitle(data.title, [
       optionLabel(GIT_OPERATIONS, data.gitOperation ?? "commit"),
+    ]);
+  }
+  if (data.kind === "custom-code") {
+    return formatActionTitle(data.title, [
+      optionLabel(CODE_RUNTIMES, data.codeRuntime ?? "shell"),
+    ]);
+  }
+  if (data.kind === "run-tests") {
+    return formatActionTitle(data.title, [
+      optionLabel(TEST_SCOPES, data.testScope ?? "related"),
     ]);
   }
   if (data.kind === "issue-trigger") {
@@ -547,6 +876,40 @@ export function workflowNodeConfigured(
   capabilities: WorkflowCapabilities | null,
   failed: boolean,
 ): boolean {
+  if (data.kind === "issue-create") {
+    return Boolean(data.createIssueTitle?.trim());
+  }
+  if (data.kind === "rss-trigger") {
+    return Boolean(data.rssFeedUrl?.trim());
+  }
+  if (data.kind === "twitter-post") {
+    return Boolean(data.twitterPostContent?.trim());
+  }
+  if (data.kind === "condition") {
+    const field = CONDITION_FIELDS.find(
+      (option) => option.value === data.conditionField,
+    ) ?? CONDITION_FIELDS[0];
+    if (!field.operators.some((operator) => operator === data.conditionOperator)) return false;
+    if (field.value === "issue-status") {
+      return ISSUE_STATUSES.some((status) => status.value === data.conditionValue);
+    }
+    if (field.value === "issue-priority") {
+      return ISSUE_PRIORITIES.some((priority) => priority.value === data.conditionValue);
+    }
+    return Boolean(data.conditionValue?.trim());
+  }
+  if (data.kind === "feishu-message") {
+    if (data.feishuRecipientType === "user") return Boolean(data.feishuUserId?.trim());
+    if (data.feishuRecipientType === "chat") return Boolean(data.feishuChatId?.trim());
+    return true;
+  }
+  if (data.kind === "custom-code") {
+    return Boolean(data.codeContent?.trim());
+  }
+  if (data.kind === "run-tests") {
+    if (data.testScope === "custom") return Boolean(data.testCommand?.trim());
+    return true;
+  }
   if (data.kind === "skill") {
     return !failed
       && Boolean(data.selectedSkill)

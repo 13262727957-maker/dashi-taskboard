@@ -6,9 +6,14 @@ import {
   type WorkflowNodeData,
 } from "./WorkflowNode";
 import {
+  CODE_RUNTIMES,
+  CONDITION_FIELDS,
+  CONDITION_OPERATORS,
+  FEISHU_MESSAGE_RECIPIENTS,
   GIT_OPERATIONS,
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
+  TEST_SCOPES,
   selectedCapabilityValue,
   workflowNodeDisplayTitle,
 } from "./workflowCatalog";
@@ -35,6 +40,14 @@ export function WorkflowInspector({
 }: WorkflowInspectorProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("settings");
   const data = node.data;
+  const conditionField = data.conditionField ?? CONDITION_FIELDS[0].value;
+  const selectedConditionField = CONDITION_FIELDS.find(
+    (field) => field.value === conditionField,
+  ) ?? CONDITION_FIELDS[0];
+  const conditionOperator = selectedConditionField.operators.find(
+    (operator) => operator === data.conditionOperator,
+  ) ?? selectedConditionField.defaultOperator;
+  const conditionValue = data.conditionValue || selectedConditionField.defaultValue;
 
   return (
     <div className="workflow-inspector-content">
@@ -125,6 +138,66 @@ export function WorkflowInspector({
         </div>
       ) : (
         <div role="tabpanel" aria-label="配置">
+          {data.kind === "issue-create" && (
+            <div className="workflow-config-section">
+              <h2>创建议题</h2>
+              <label>
+                <span>标题</span>
+                <input
+                  aria-label="ISSUE 标题"
+                  type="text"
+                  value={data.createIssueTitle ?? ""}
+                  placeholder="输入议题标题"
+                  onChange={(event) => onChange({ createIssueTitle: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>描述</span>
+                <textarea
+                  aria-label="ISSUE 描述"
+                  rows={4}
+                  value={data.createIssueDescription ?? ""}
+                  placeholder="补充议题描述…"
+                  onChange={(event) => onChange({ createIssueDescription: event.target.value })}
+                />
+              </label>
+              <label>
+                <span>初始状态</span>
+                <select
+                  aria-label="ISSUE 初始状态"
+                  value={data.createIssueStatus ?? "todo"}
+                  onChange={(event) => onChange({ createIssueStatus: event.target.value })}
+                >
+                  {ISSUE_STATUSES.map((status) => (
+                    <option key={status.value} value={status.value}>{status.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>优先级</span>
+                <select
+                  aria-label="ISSUE 优先级"
+                  value={data.createIssuePriority ?? "none"}
+                  onChange={(event) => onChange({ createIssuePriority: event.target.value })}
+                >
+                  {ISSUE_PRIORITIES.map((priority) => (
+                    <option key={priority.value} value={priority.value}>{priority.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>标签</span>
+                <input
+                  aria-label="ISSUE 标签"
+                  type="text"
+                  value={data.createIssueLabels ?? ""}
+                  placeholder="多个标签用逗号分隔"
+                  onChange={(event) => onChange({ createIssueLabels: event.target.value })}
+                />
+              </label>
+            </div>
+          )}
+
           {data.kind === "skill" && (
             <div className="workflow-config-section">
               <h2>Skill</h2>
@@ -206,6 +279,168 @@ export function WorkflowInspector({
                     </option>
                   ))}
                 </select>
+              </label>
+            </div>
+          )}
+
+          {data.kind === "rss-trigger" && (
+            <div className="workflow-config-section">
+              <h2>RSS 订阅</h2>
+              <label>
+                <span>订阅地址</span>
+                <input
+                  aria-label="RSS 订阅地址"
+                  type="url"
+                  value={data.rssFeedUrl ?? ""}
+                  placeholder="https://example.com/feed.xml"
+                  onChange={(event) => onChange({ rssFeedUrl: event.target.value })}
+                />
+              </label>
+            </div>
+          )}
+
+          {data.kind === "condition" && (
+            <div className="workflow-config-section">
+              <h2>判断规则</h2>
+              <label>
+                <span>判断字段</span>
+                <select
+                  aria-label="判断字段"
+                  value={conditionField}
+                  onChange={(event) => {
+                    const selectedField = CONDITION_FIELDS.find(
+                      (field) => field.value === event.target.value,
+                    )!;
+                    onChange({
+                      conditionField: selectedField.value,
+                      conditionOperator: selectedField.defaultOperator,
+                      conditionValue: selectedField.defaultValue,
+                    });
+                  }}
+                >
+                  {CONDITION_FIELDS.map((field) => (
+                    <option key={field.value} value={field.value}>{field.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>运算符</span>
+                <select
+                  aria-label="运算符"
+                  value={conditionOperator}
+                  onChange={(event) => onChange({ conditionOperator: event.target.value })}
+                >
+                  {selectedConditionField.operators.map((operatorValue) => {
+                    const operator = CONDITION_OPERATORS.find(
+                      (option) => option.value === operatorValue,
+                    )!;
+                    return (
+                      <option key={operator.value} value={operator.value}>{operator.label}</option>
+                    );
+                  })}
+                </select>
+              </label>
+              {conditionField === "issue-status" && (
+                <label>
+                  <span>比较值</span>
+                  <select
+                    aria-label="比较值"
+                    value={conditionValue}
+                    onChange={(event) => onChange({ conditionValue: event.target.value })}
+                  >
+                    {ISSUE_STATUSES.map((status) => (
+                      <option key={status.value} value={status.value}>{status.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {conditionField === "issue-priority" && (
+                <label>
+                  <span>比较值</span>
+                  <select
+                    aria-label="比较值"
+                    value={conditionValue}
+                    onChange={(event) => onChange({ conditionValue: event.target.value })}
+                  >
+                    {ISSUE_PRIORITIES.map((priority) => (
+                      <option key={priority.value} value={priority.value}>{priority.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {(conditionField === "issue-labels" || conditionField === "upstream-output") && (
+                <label>
+                  <span>比较值</span>
+                  <input
+                    aria-label="比较值"
+                    type="text"
+                    value={conditionValue}
+                    placeholder="输入要比较的值"
+                    onChange={(event) => onChange({ conditionValue: event.target.value })}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
+          {data.kind === "feishu-message" && (
+            <div className="workflow-config-section">
+              <h2>飞书消息</h2>
+              <label>
+                <span>发送对象</span>
+                <select
+                  aria-label="飞书消息发送对象"
+                  value={data.feishuRecipientType ?? "self"}
+                  onChange={(event) => onChange({
+                    feishuRecipientType: event.target.value as WorkflowNodeData["feishuRecipientType"],
+                    feishuUserId: "",
+                    feishuChatId: "",
+                  })}
+                >
+                  {FEISHU_MESSAGE_RECIPIENTS.map((recipient) => (
+                    <option key={recipient.value} value={recipient.value}>{recipient.label}</option>
+                  ))}
+                </select>
+              </label>
+              {data.feishuRecipientType === "user" && (
+                <label>
+                  <span>用户 ID</span>
+                  <input
+                    aria-label="飞书用户"
+                    type="text"
+                    value={data.feishuUserId ?? ""}
+                    placeholder="open_id 或 user_id"
+                    onChange={(event) => onChange({ feishuUserId: event.target.value })}
+                  />
+                </label>
+              )}
+              {data.feishuRecipientType === "chat" && (
+                <label>
+                  <span>群聊 ID</span>
+                  <input
+                    aria-label="飞书群聊"
+                    type="text"
+                    value={data.feishuChatId ?? ""}
+                    placeholder="chat_id"
+                    onChange={(event) => onChange({ feishuChatId: event.target.value })}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
+          {data.kind === "twitter-post" && (
+            <div className="workflow-config-section">
+              <h2>发布到 Twitter</h2>
+              <label>
+                <span>发布内容</span>
+                <textarea
+                  aria-label="Twitter 发布内容"
+                  rows={6}
+                  value={data.twitterPostContent ?? ""}
+                  placeholder="输入要发布的内容…"
+                  onChange={(event) => onChange({ twitterPostContent: event.target.value })}
+                />
               </label>
             </div>
           )}
@@ -321,6 +556,64 @@ export function WorkflowInspector({
                     />
                   </label>
                 </>
+              )}
+            </div>
+          )}
+
+          {data.kind === "custom-code" && (
+            <div className="workflow-config-section">
+              <h2>自定义代码</h2>
+              <label>
+                <span>运行环境</span>
+                <select
+                  aria-label="代码运行环境"
+                  value={data.codeRuntime ?? "shell"}
+                  onChange={(event) => onChange({ codeRuntime: event.target.value as WorkflowNodeData["codeRuntime"] })}
+                >
+                  {CODE_RUNTIMES.map((runtime) => (
+                    <option key={runtime.value} value={runtime.value}>{runtime.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>代码内容</span>
+                <textarea
+                  aria-label="代码内容"
+                  rows={10}
+                  value={data.codeContent ?? ""}
+                  placeholder="输入要运行的代码…"
+                  onChange={(event) => onChange({ codeContent: event.target.value })}
+                />
+              </label>
+            </div>
+          )}
+
+          {data.kind === "run-tests" && (
+            <div className="workflow-config-section">
+              <h2>运行测试</h2>
+              <label>
+                <span>测试范围</span>
+                <select
+                  aria-label="测试范围"
+                  value={data.testScope ?? "related"}
+                  onChange={(event) => onChange({ testScope: event.target.value as WorkflowNodeData["testScope"] })}
+                >
+                  {TEST_SCOPES.map((scope) => (
+                    <option key={scope.value} value={scope.value}>{scope.label}</option>
+                  ))}
+                </select>
+              </label>
+              {data.testScope === "custom" && (
+                <label>
+                  <span>测试命令</span>
+                  <input
+                    aria-label="测试命令"
+                    type="text"
+                    value={data.testCommand ?? ""}
+                    placeholder="例如 npm test -- workflow"
+                    onChange={(event) => onChange({ testCommand: event.target.value })}
+                  />
+                </label>
               )}
             </div>
           )}

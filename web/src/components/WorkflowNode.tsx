@@ -8,6 +8,7 @@ export type WorkflowNodeTone =
   | "capability"
   | "api"
   | "integration"
+  | "development"
   | "planning"
   | "result";
 
@@ -44,6 +45,11 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   attachArtifacts?: boolean;
   recordConversation?: boolean;
   triggerStatus?: string;
+  createIssueTitle?: string;
+  createIssueDescription?: string;
+  createIssueStatus?: string;
+  createIssuePriority?: string;
+  createIssueLabels?: string;
   gitOperation?: string;
   gitCommitMessage?: string;
   gitStageAll?: boolean;
@@ -51,6 +57,18 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   gitBranchName?: string;
   gitBaseBranch?: string;
   gitWorktreePath?: string;
+  conditionField?: string;
+  conditionOperator?: string;
+  conditionValue?: string;
+  feishuRecipientType?: "self" | "user" | "chat";
+  feishuUserId?: string;
+  feishuChatId?: string;
+  twitterPostContent?: string;
+  rssFeedUrl?: string;
+  codeRuntime?: "shell" | "javascript" | "python";
+  codeContent?: string;
+  testScope?: "related" | "all" | "custom";
+  testCommand?: string;
   acceptsChildren?: boolean;
   childCount?: number;
   stepNumber?: number;
@@ -59,6 +77,7 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   dragShiftY?: number;
   dragActive?: boolean;
   settleActive?: boolean;
+  conditionOutcome?: "true" | "false";
   onDuplicate?: () => void;
   onDelete?: () => void;
   onAddChild?: () => void;
@@ -68,10 +87,12 @@ export type WorkflowCanvasNode = Node<WorkflowNodeData, "workflow">;
 
 function StepMenu({
   canDelete,
+  canDuplicate,
   onDelete,
   onDuplicate,
 }: {
   canDelete: boolean;
+  canDuplicate: boolean;
   onDelete?: () => void;
   onDuplicate?: () => void;
 }) {
@@ -88,8 +109,10 @@ function StepMenu({
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
 
+  if (!canDelete && !canDuplicate) return null;
+
   return (
-    <div className="workflow-step-menu" ref={menuRef}>
+    <div className="workflow-step-menu workflow-node-menu" ref={menuRef}>
       <button
         className="workflow-step-menu-trigger"
         type="button"
@@ -104,18 +127,20 @@ function StepMenu({
       </button>
       {open && (
         <div className="workflow-step-menu-popover" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={(event) => {
-              event.stopPropagation();
-              setOpen(false);
-              onDuplicate?.();
-            }}
-          >
-            <LinearIcon name="copy" />
-            <span>复制步骤</span>
-          </button>
+          {canDuplicate && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(event) => {
+                event.stopPropagation();
+                setOpen(false);
+                onDuplicate?.();
+              }}
+            >
+              <LinearIcon name="copy" />
+              <span>复制步骤</span>
+            </button>
+          )}
           {canDelete && (
             <button
               className="is-danger"
@@ -138,26 +163,24 @@ function StepMenu({
 }
 
 export function WorkflowNode({ data, selected, isConnectable, parentId }: NodeProps<WorkflowCanvasNode>) {
-  if (data.kind === "sequence-end") {
+  if (data.kind.startsWith("flow-")) {
+    const hasOutput = data.kind !== "flow-end";
     return (
-      <div className="workflow-sequence-end">
+      <div className={`workflow-flow-anchor workflow-${data.kind}`} aria-hidden="true">
         <Handle
           className="workflow-sequence-handle workflow-sequence-handle-input"
           type="target"
           position={Position.Top}
           isConnectable={false}
         />
-        <button
-          type="button"
-          aria-label="在流程末尾添加步骤"
-          onClick={(event) => {
-            event.stopPropagation();
-            data.onAddChild?.();
-          }}
-        >
-          <LinearIcon name="plus" />
-          <span>添加步骤</span>
-        </button>
+        {hasOutput && (
+          <Handle
+            className="workflow-sequence-handle workflow-sequence-handle-output"
+            type="source"
+            position={Position.Bottom}
+            isConnectable={false}
+          />
+        )}
       </div>
     );
   }
@@ -165,13 +188,10 @@ export function WorkflowNode({ data, selected, isConnectable, parentId }: NodePr
   if (parentId) {
     return (
       <article
-        className={`workflow-plan-item workflow-node-${data.tone}${selected ? " selected" : ""}${data.dragShiftY ? " is-drag-shifted" : ""}${data.dragActive ? " is-dragging" : ""}${data.settleActive ? " is-settling" : ""}`}
+        className={`workflow-node-compact workflow-node-${data.tone}${selected ? " selected" : ""}${data.dragShiftY ? " is-drag-shifted" : ""}${data.dragActive ? " is-dragging" : ""}${data.settleActive ? " is-settling" : ""}`}
         style={data.dragShiftY ? { transform: `translate3d(0, ${data.dragShiftY}px, 0)` } : undefined}
       >
-        <span className="workflow-plan-item-grip" aria-hidden="true">
-          <LinearIcon name="more" />
-        </span>
-        <span className="workflow-step-mark" aria-hidden="true">
+        <span className="workflow-node-icon" aria-hidden="true">
           <WorkflowMark
             icon={data.icon}
             logo={data.logo}
@@ -183,9 +203,73 @@ export function WorkflowNode({ data, selected, isConnectable, parentId }: NodePr
     );
   }
 
+  if (data.acceptsChildren) {
+    return (
+      <article
+        className={`workflow-plan-container${selected ? " selected" : ""}${data.dragShiftY ? " is-drag-shifted" : ""}${data.dragActive ? " is-dragging" : ""}${data.settleActive ? " is-settling" : ""}`}
+        style={data.dragShiftY ? { transform: `translate3d(0, ${data.dragShiftY}px, 0)` } : undefined}
+      >
+        <Handle
+          className="workflow-sequence-handle workflow-sequence-handle-input"
+          type="target"
+          position={Position.Top}
+          isConnectable={isConnectable}
+          aria-label={data.inputLabel ?? "步骤输入"}
+        />
+        <header className="workflow-plan-container-header">
+          <span className="workflow-node-icon" aria-hidden="true">
+            <WorkflowMark
+              icon={data.icon}
+              logo={data.logo}
+              logoMonochrome={data.logoMonochrome}
+            />
+          </span>
+          <span className="workflow-node-heading">
+            <span>{data.eyebrow}</span>
+            <strong>{data.displayTitle ?? data.title}</strong>
+          </span>
+          <StepMenu
+            canDelete={!data.isTrigger}
+            canDuplicate={!data.isTrigger && data.kind !== "condition"}
+            onDelete={data.onDelete}
+            onDuplicate={data.onDuplicate}
+          />
+        </header>
+        <div className="workflow-plan-container-summary">
+          <p>{data.description}</p>
+        </div>
+        <div className="workflow-plan-drop-zone">
+          {(data.childCount ?? 0) === 0 && <span>执行计划中还没有步骤</span>}
+        </div>
+        <footer className="workflow-plan-container-footer">
+          <span>从上到下执行 · {data.childCount ?? 0} 步</span>
+          <button
+            className="workflow-plan-add-inline"
+            type="button"
+            aria-label="向执行计划添加步骤"
+            onClick={(event) => {
+              event.stopPropagation();
+              data.onAddChild?.();
+            }}
+          >
+            <LinearIcon name="plus" />
+            <span>添加步骤</span>
+          </button>
+        </footer>
+        <Handle
+          className="workflow-sequence-handle workflow-sequence-handle-output"
+          type="source"
+          position={Position.Bottom}
+          isConnectable={isConnectable}
+          aria-label={data.outputLabel ?? "步骤输出"}
+        />
+      </article>
+    );
+  }
+
   return (
     <article
-      className={`workflow-step-card workflow-node-${data.tone}${selected ? " selected" : ""}${data.acceptsChildren ? " is-plan" : ""}${data.dragShiftY ? " is-drag-shifted" : ""}${data.dragActive ? " is-dragging" : ""}${data.settleActive ? " is-settling" : ""}`}
+      className={`workflow-node workflow-node-${data.tone}${selected ? " selected" : ""}${data.dragShiftY ? " is-drag-shifted" : ""}${data.dragActive ? " is-dragging" : ""}${data.settleActive ? " is-settling" : ""}`}
       style={data.dragShiftY ? { transform: `translate3d(0, ${data.dragShiftY}px, 0)` } : undefined}
     >
       <Handle
@@ -195,50 +279,36 @@ export function WorkflowNode({ data, selected, isConnectable, parentId }: NodePr
         isConnectable={isConnectable}
         aria-label={data.inputLabel ?? "步骤输入"}
       />
-      <div className="workflow-step-main">
-        <span className={`workflow-step-order${data.isTrigger ? " is-trigger" : ""}`}>
-          {data.isTrigger ? "触发" : data.stepNumber}
-        </span>
-        <span className="workflow-step-mark" aria-hidden="true">
+      <header className="workflow-node-header">
+        <span className="workflow-node-icon" aria-hidden="true">
           <WorkflowMark
             icon={data.icon}
             logo={data.logo}
             logoMonochrome={data.logoMonochrome}
           />
         </span>
-        <span className="workflow-step-copy">
+        <span className="workflow-node-heading">
+          <span>{data.eyebrow}</span>
           <strong>{data.displayTitle ?? data.title}</strong>
-          <small>{data.meta}</small>
-        </span>
-        <span className={`workflow-step-state${data.configured ? " is-configured" : " needs-config"}`}>
-          <i aria-hidden="true" />
-          {data.configured ? "已配置" : "需要配置"}
         </span>
         <StepMenu
           canDelete={!data.isTrigger}
+          canDuplicate={!data.isTrigger && data.kind !== "condition"}
           onDelete={data.onDelete}
           onDuplicate={data.onDuplicate}
         />
+      </header>
+      <div className="workflow-node-body">
+        <p>{data.description}</p>
+        <span>{data.meta}</span>
       </div>
-      {data.acceptsChildren && (
-        <div className="workflow-plan-list">
-          {(data.childCount ?? 0) === 0 && (
-            <p>执行计划中还没有步骤</p>
-          )}
-          <button
-            className="workflow-plan-add"
-            type="button"
-            aria-label="向执行计划添加步骤"
-            onClick={(event) => {
-              event.stopPropagation();
-              data.onAddChild?.();
-            }}
-          >
-            <LinearIcon name="plus" />
-            <span>添加执行步骤</span>
-          </button>
-        </div>
-      )}
+      <footer className="workflow-node-footer">
+        <span className={`workflow-node-state${data.configured ? " is-configured" : " needs-config"}`}>
+          <i aria-hidden="true" />
+          {data.configured ? "已配置" : "需要配置"}
+        </span>
+        <span>{data.isTrigger ? "触发步骤" : `步骤 ${data.stepNumber ?? ""}`}</span>
+      </footer>
       <Handle
         className="workflow-sequence-handle workflow-sequence-handle-output"
         type="source"

@@ -1,11 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   applyNodeChanges,
   Background,
@@ -22,12 +25,21 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./workflow.css";
 import {
-  insertWorkflowStep,
-  layoutWorkflowSteps,
-  orderedWorkflowStepIds,
-  reorderWorkflowStep,
-  workflowSequenceEdges,
-} from "../../../shared/workflow-sequence.mjs";
+  createWorkflowFlow,
+  deleteWorkflowNode,
+  deriveWorkflowLayout,
+  findWorkflowItem,
+  getWorkflowSequence,
+  insertWorkflowNode,
+  moveWorkflowNode,
+  normalizeWorkflowSnapshot,
+  serializeWorkflowSnapshot,
+  workflowNodeIds,
+} from "../../../shared/workflow-control-flow.mjs";
+import type {
+  WorkflowFlow,
+  WorkflowSequenceRef,
+} from "../../../shared/workflow-control-flow.mjs";
 import {
   ApiError,
   getWorkflowWorkspace,
@@ -53,6 +65,7 @@ import { WorkflowStepPicker } from "./WorkflowStepPicker";
 import {
   PALETTE_ITEMS,
   capabilityNodeMeta,
+  isWorkflowTriggerKind,
   paletteData,
   type PaletteItem,
   workflowNodeConfigured,
@@ -74,7 +87,14 @@ interface WorkflowTab {
 
 interface WorkflowSnapshot {
   nodes: WorkflowCanvasNode[];
-  edges: Edge[];
+  flow: WorkflowFlow;
+  selectedNodeId: string | null;
+}
+
+interface LegacyWorkflowSnapshot {
+  nodes: WorkflowCanvasNode[];
+  edges?: Edge[];
+  flow?: WorkflowFlow;
   selectedNodeId: string | null;
 }
 
@@ -82,16 +102,29 @@ interface WorkflowWorkspace {
   version: 1;
   tabs: WorkflowTab[];
   activeWorkflowId: string;
-  snapshots: Record<string, WorkflowSnapshot>;
+  snapshots: Record<string, LegacyWorkflowSnapshot>;
 }
 
-interface StepPickerTarget {
-  afterStepId: string | null;
-  parentId: string | null;
+type StepPickerTarget =
+  | {
+      kind: "sequence";
+      sequenceRef: WorkflowSequenceRef;
+      index: number;
+    }
+  | {
+      kind: "plan";
+      parentId: string;
+    };
+
+interface WorkflowTabMenu {
+  workflowId: string;
+  x: number;
+  y: number;
 }
 
 interface SequenceDragPreview {
   nodeId: string;
+  sequenceRef: WorkflowSequenceRef;
   sourceOrderIds: string[];
   sourceIndex: number;
   targetIndex: number;
@@ -105,23 +138,26 @@ interface PlanDragPreview {
   targetIndex: number;
 }
 
-const WORKFLOW_STEP_WIDTH = 360;
-const WORKFLOW_STEP_HEIGHT = 78;
+const WORKFLOW_STEP_WIDTH = 250;
+const WORKFLOW_STEP_HEIGHT = 138;
 const WORKFLOW_STEP_GAP = 58;
-const PLAN_ITEM_WIDTH = 300;
-const PLAN_ITEM_HEIGHT = 38;
-const PLAN_ITEM_GAP = 6;
+const PLAN_ITEM_WIDTH = 230;
+const PLAN_ITEM_HEIGHT = 34;
+const PLAN_ITEM_GAP = 4;
 const PLAN_LIST_TOP = 86;
-const PLAN_CONTAINER_BOTTOM = 50;
-const END_STEP_HEIGHT = 42;
-const END_STEP_ID = "__workflow-sequence-end__";
+const PLAN_CONTAINER_BOTTOM = 38;
+const END_STEP_HEIGHT = 1;
 const TOP_CENTER_ORIGIN: [number, number] = [0.5, 0];
 const TOP_LEFT_ORIGIN: [number, number] = [0, 0];
 const PAN_MOUSE_BUTTONS = [1, 2];
 const PRO_OPTIONS = { hideAttribution: true };
 const NODE_TYPES = { workflow: WorkflowNode } satisfies NodeTypes;
 const EDGE_TYPES = { workflowInsert: WorkflowInsertEdge } satisfies EdgeTypes;
-const NESTABLE_TONES = new Set(["capability", "api", "integration"]);
+const NESTABLE_TONES = new Set(["capability", "api", "integration", "development"]);
+
+function isVirtualWorkflowNodeId(nodeId: string) {
+  return nodeId.startsWith("__flow-");
+}
 
 function planItemPosition(index: number) {
   return {
@@ -132,9 +168,12 @@ function planItemPosition(index: number) {
 
 function planContainerHeight(childCount: number) {
   const listHeight = childCount === 0
-    ? 28
+    ? 0
     : childCount * PLAN_ITEM_HEIGHT + (childCount - 1) * PLAN_ITEM_GAP;
-  return PLAN_LIST_TOP + listHeight + PLAN_CONTAINER_BOTTOM;
+  return Math.max(
+    WORKFLOW_STEP_HEIGHT,
+    PLAN_LIST_TOP + listHeight + PLAN_CONTAINER_BOTTOM,
+  );
 }
 
 function layoutPlanChildren(
@@ -152,63 +191,66 @@ function layoutPlanChildren(
           style: { width: PLAN_ITEM_WIDTH, height: PLAN_ITEM_HEIGHT },
           initialWidth: PLAN_ITEM_WIDTH,
           initialHeight: PLAN_ITEM_HEIGHT,
+          measured: { width: PLAN_ITEM_WIDTH, height: PLAN_ITEM_HEIGHT },
           zIndex: 2,
         }
       : node
   ));
 }
 
-function layoutWorkflowSequence(
-  nodes: WorkflowCanvasNode[],
-  stepIds: string[],
-): WorkflowCanvasNode[] {
+function prepareWorkflowNodes(nodes: WorkflowCanvasNode[]): WorkflowCanvasNode[] {
   let next = nodes;
-  const heights: Record<string, number> = {};
-  for (const id of stepIds) {
-    const node = next.find((candidate) => candidate.id === id);
-    if (!node) continue;
+  for (const node of nodes) {
+    if (node.parentId) continue;
     if (node.data.acceptsChildren) {
       const childIds = next
-        .filter((candidate) => candidate.parentId === id)
+        .filter((candidate) => candidate.parentId === node.id)
         .sort((left, right) => left.position.y - right.position.y)
         .map((candidate) => candidate.id);
-      next = layoutPlanChildren(next, id, childIds);
-      heights[id] = planContainerHeight(childIds.length);
-    } else {
-      heights[id] = WORKFLOW_STEP_HEIGHT;
+      next = layoutPlanChildren(next, node.id, childIds);
+      const height = planContainerHeight(childIds.length);
+      next = next.map((candidate) => (
+        candidate.id === node.id
+          ? {
+              ...candidate,
+              style: { width: WORKFLOW_STEP_WIDTH, height },
+              initialWidth: WORKFLOW_STEP_WIDTH,
+              initialHeight: height,
+              measured: { width: WORKFLOW_STEP_WIDTH, height },
+            }
+          : candidate
+      ));
     }
   }
-  const laidOut = layoutWorkflowSteps(
-    next,
-    stepIds,
-    heights,
-    { top: 48, gap: WORKFLOW_STEP_GAP },
-  ) as WorkflowCanvasNode[];
-  return laidOut.map((node) => {
-    if (node.parentId) return node;
-    const height = heights[node.id] ?? WORKFLOW_STEP_HEIGHT;
+  return next;
+}
+
+function layoutWorkflowFlow(
+  nodes: WorkflowCanvasNode[],
+  flow: WorkflowFlow,
+): WorkflowCanvasNode[] {
+  const prepared = prepareWorkflowNodes(nodes);
+  const layout = deriveWorkflowLayout(flow, prepared);
+  return prepared.map((node) => {
+    if (node.parentId || !layout.positions[node.id]) return node;
+    const height = Number(node.style?.height ?? WORKFLOW_STEP_HEIGHT);
     return {
       ...node,
       origin: TOP_CENTER_ORIGIN,
+      position: layout.positions[node.id],
       style: { width: WORKFLOW_STEP_WIDTH, height },
       initialWidth: WORKFLOW_STEP_WIDTH,
       initialHeight: height,
+      measured: { width: WORKFLOW_STEP_WIDTH, height },
     };
   });
 }
 
-function sequenceEdges(stepIds: string[]): Edge[] {
-  return workflowSequenceEdges(stepIds).map((edge) => ({
-    ...edge,
-    type: "workflowInsert",
-  }));
-}
-
-function normalizeSnapshot(snapshot: WorkflowSnapshot): WorkflowSnapshot {
-  const stepIds = orderedWorkflowStepIds(snapshot.nodes, snapshot.edges);
+function normalizeSnapshot(snapshot: LegacyWorkflowSnapshot): WorkflowSnapshot {
+  const normalized = normalizeWorkflowSnapshot(snapshot);
   return {
-    nodes: layoutWorkflowSequence(snapshot.nodes, stepIds),
-    edges: sequenceEdges(stepIds),
+    nodes: layoutWorkflowFlow(normalized.nodes, normalized.flow),
+    flow: normalized.flow,
     selectedNodeId: null,
   };
 }
@@ -308,14 +350,12 @@ function initialNodes(): WorkflowCanvasNode[] {
       },
     },
   ];
-  return layoutWorkflowSequence(
-    nodes,
-    ["issue-trigger", "basic-planning", "codex-review", "issue-update"],
-  );
+  return nodes;
 }
 
 function createInitialWorkflowWorkspace() {
   const stepIds = ["issue-trigger", "basic-planning", "codex-review", "issue-update"];
+  const flow = createWorkflowFlow(stepIds);
   return {
     tabs: [{ id: INITIAL_WORKFLOW_ID, name: INITIAL_WORKFLOW_NAME }],
     activeWorkflowId: INITIAL_WORKFLOW_ID,
@@ -323,8 +363,8 @@ function createInitialWorkflowWorkspace() {
       [
         INITIAL_WORKFLOW_ID,
         {
-          nodes: initialNodes(),
-          edges: sequenceEdges(stepIds),
+          nodes: layoutWorkflowFlow(initialNodes(), flow),
+          flow,
           selectedNodeId: null,
         },
       ],
@@ -350,8 +390,8 @@ function parseWorkflowWorkspace(value: unknown) {
     if (
       !snapshot
       || !Array.isArray(snapshot.nodes)
-      || !Array.isArray(snapshot.edges)
-      || (snapshot.selectedNodeId !== null && typeof snapshot.selectedNodeId !== "string")
+      || (!Array.isArray(snapshot.edges) && snapshot.flow?.version !== 2)
+      || (snapshot.selectedNodeId != null && typeof snapshot.selectedNodeId !== "string")
     ) {
       return null;
     }
@@ -377,9 +417,7 @@ function serializeWorkflowWorkspace(
       return [
         tab.id,
         {
-          nodes: snapshot.nodes,
-          edges: snapshot.edges,
-          selectedNodeId: null,
+          ...serializeWorkflowSnapshot(snapshot.nodes, snapshot.flow, null),
         },
       ];
     })),
@@ -390,7 +428,7 @@ function workflowSignature(tab: WorkflowTab, snapshot: WorkflowSnapshot): string
   return JSON.stringify({
     name: tab.name,
     nodes: snapshot.nodes,
-    edges: snapshot.edges,
+    flow: snapshot.flow,
   });
 }
 
@@ -467,12 +505,13 @@ export function WorkflowBoard({
   );
   const initialSnapshot = initialWorkspace.snapshots.get(initialWorkspace.activeWorkflowId)!;
   const [nodes, setNodes] = useState<WorkflowCanvasNode[]>(initialSnapshot.nodes);
-  const [edges, setEdges] = useState<Edge[]>(initialSnapshot.edges);
+  const [flow, setFlow] = useState<WorkflowFlow>(initialSnapshot.flow);
   const [workflowTabs, setWorkflowTabs] = useState<WorkflowTab[]>(initialWorkspace.tabs);
   const [activeWorkflowId, setActiveWorkflowId] = useState(initialWorkspace.activeWorkflowId);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [renamingWorkflowId, setRenamingWorkflowId] = useState<string | null>(null);
   const [workflowNameDraft, setWorkflowNameDraft] = useState("");
+  const [workflowTabMenu, setWorkflowTabMenu] = useState<WorkflowTabMenu | null>(null);
   const [pickerTarget, setPickerTarget] = useState<StepPickerTarget | null>(null);
   const [rootDragPreview, setRootDragPreview] = useState<SequenceDragPreview | null>(null);
   const [planDragPreview, setPlanDragPreview] = useState<PlanDragPreview | null>(null);
@@ -483,6 +522,7 @@ export function WorkflowBoard({
   const [persistenceError, setPersistenceError] = useState("");
   const flowRef = useRef<ReactFlowInstance<WorkflowCanvasNode, Edge> | null>(null);
   const workflowNameInputRef = useRef<HTMLInputElement | null>(null);
+  const workflowTabMenuRef = useRef<HTMLDivElement | null>(null);
   const cancelWorkflowRenameRef = useRef(false);
   const workflowSnapshotsRef = useRef(initialWorkspace.snapshots);
   const remoteVersionRef = useRef(0);
@@ -493,10 +533,8 @@ export function WorkflowBoard({
   const rootDragSessionRef = useRef<SequenceDragPreview | null>(null);
   const planDragSessionRef = useRef<PlanDragPreview | null>(null);
 
-  const rootStepIds = useMemo(
-    () => orderedWorkflowStepIds(nodes, edges),
-    [edges, nodes],
-  );
+  const layout = useMemo(() => deriveWorkflowLayout(flow, nodes), [flow, nodes]);
+  const rootStepIds = flow.root.items.map((item) => item.nodeId);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
 
   const applyWorkspace = useCallback((workspace: ReturnType<typeof createInitialWorkflowWorkspace>) => {
@@ -506,9 +544,10 @@ export function WorkflowBoard({
     setWorkflowTabs(workspace.tabs);
     setActiveWorkflowId(workspace.activeWorkflowId);
     setNodes(snapshot.nodes);
-    setEdges(snapshot.edges);
+    setFlow(snapshot.flow);
     setSelectedNodeId(null);
     setRenamingWorkflowId(null);
+    setWorkflowTabMenu(null);
     onWorkflowsChange(workspace.tabs);
   }, [onWorkflowsChange]);
 
@@ -598,7 +637,7 @@ export function WorkflowBoard({
   useEffect(() => {
     workflowSnapshotsRef.current.set(activeWorkflowId, {
       nodes,
-      edges,
+      flow,
       selectedNodeId: null,
     });
     const workspace = serializeWorkflowWorkspace(
@@ -649,7 +688,7 @@ export function WorkflowBoard({
   }, [
     activeWorkflowId,
     applyWorkspace,
-    edges,
+    flow,
     hydrated,
     nodes,
     onWorkflowsChange,
@@ -684,19 +723,79 @@ export function WorkflowBoard({
     workflowNameInputRef.current?.select();
   }, [renamingWorkflowId]);
 
-  const commitSequence = useCallback((
+  useLayoutEffect(() => {
+    if (!workflowTabMenu) return;
+    const menu = workflowTabMenuRef.current;
+    if (!menu) return;
+    const rect = menu.getBoundingClientRect();
+    const x = Math.max(8, Math.min(workflowTabMenu.x, window.innerWidth - rect.width - 8));
+    const y = Math.max(8, Math.min(workflowTabMenu.y, window.innerHeight - rect.height - 8));
+    setWorkflowTabMenu((current) => (
+      current && (current.x !== x || current.y !== y)
+        ? { ...current, x, y }
+        : current
+    ));
+  }, [workflowTabMenu]);
+
+  useEffect(() => {
+    if (!workflowTabMenu) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    requestAnimationFrame(() => {
+      workflowTabMenuRef.current?.querySelector<HTMLButtonElement>(".context-menu-item:not(:disabled)")?.focus();
+    });
+
+    function closeWorkflowTabMenuFromOutside(event: PointerEvent) {
+      if (!workflowTabMenuRef.current?.contains(event.target as globalThis.Node)) {
+        setWorkflowTabMenu(null);
+      }
+    }
+    document.addEventListener("pointerdown", closeWorkflowTabMenuFromOutside);
+
+    function closeWorkflowTabMenuFromEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setWorkflowTabMenu(null);
+      }
+    }
+    document.addEventListener("keydown", closeWorkflowTabMenuFromEscape);
+
+    function closeWorkflowTabMenuFromViewportChange() {
+      setWorkflowTabMenu(null);
+    }
+    window.addEventListener("blur", closeWorkflowTabMenuFromViewportChange);
+    window.addEventListener("resize", closeWorkflowTabMenuFromViewportChange);
+    window.addEventListener("scroll", closeWorkflowTabMenuFromViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeWorkflowTabMenuFromOutside);
+      document.removeEventListener("keydown", closeWorkflowTabMenuFromEscape);
+      window.removeEventListener("blur", closeWorkflowTabMenuFromViewportChange);
+      window.removeEventListener("resize", closeWorkflowTabMenuFromViewportChange);
+      window.removeEventListener("scroll", closeWorkflowTabMenuFromViewportChange, true);
+      previousFocus?.focus({ preventScroll: true });
+    };
+  }, [workflowTabMenu?.workflowId]);
+
+  const commitFlow = useCallback((
     nextNodes: WorkflowCanvasNode[],
-    nextOrder: string[],
+    nextFlow: WorkflowFlow,
   ) => {
-    setNodes(layoutWorkflowSequence(nextNodes, nextOrder));
-    setEdges(sequenceEdges(nextOrder));
+    setNodes(layoutWorkflowFlow(nextNodes, nextFlow));
+    setFlow(nextFlow);
   }, []);
 
+  const commitNodes = useCallback((nextNodes: WorkflowCanvasNode[]) => {
+    commitFlow(nextNodes, flow);
+  }, [commitFlow, flow]);
+
   const openStepPicker = useCallback((
-    afterStepId: string | null,
-    parentId: string | null = null,
+    sequenceRef: WorkflowSequenceRef,
+    index: number,
   ) => {
-    setPickerTarget({ afterStepId, parentId });
+    setPickerTarget({ kind: "sequence", sequenceRef, index });
+  }, []);
+
+  const openPlanStepPicker = useCallback((parentId: string) => {
+    setPickerTarget({ kind: "plan", parentId });
   }, []);
 
   const updateSelectedNode = useCallback((changes: Partial<WorkflowNodeData>) => {
@@ -710,16 +809,28 @@ export function WorkflowBoard({
 
   const deleteNode = useCallback((nodeId: string) => {
     const node = nodes.find((candidate) => candidate.id === nodeId);
-    if (!node || node.data.kind === "issue-trigger") return;
-    const nextNodes = nodes.filter((candidate) => candidate.id !== nodeId && candidate.parentId !== nodeId);
-    const nextOrder = rootStepIds.filter((id) => id !== nodeId);
-    commitSequence(nextNodes, nextOrder);
-    setSelectedNodeId((current) => current === nodeId ? null : current);
-  }, [commitSequence, nodes, rootStepIds]);
+    if (!node || isWorkflowTriggerKind(node.data.kind)) return;
+    if (node.parentId) {
+      const nextNodes = nodes.filter((candidate) => candidate.id !== nodeId);
+      commitNodes(nextNodes);
+      setSelectedNodeId((current) => current === nodeId ? null : current);
+      return;
+    }
+    const deleted = deleteWorkflowNode(flow, nodeId);
+    const removedIds = new Set(deleted.removedNodeIds);
+    for (const candidate of nodes) {
+      if (candidate.parentId && removedIds.has(candidate.parentId)) {
+        removedIds.add(candidate.id);
+      }
+    }
+    const nextNodes = nodes.filter((candidate) => !removedIds.has(candidate.id));
+    commitFlow(nextNodes, deleted.flow);
+    setSelectedNodeId((current) => removedIds.has(current ?? "") ? null : current);
+  }, [commitFlow, commitNodes, flow, nodes]);
 
   const duplicateNode = useCallback((nodeId: string) => {
     const source = nodes.find((candidate) => candidate.id === nodeId);
-    if (!source) return;
+    if (!source || isWorkflowTriggerKind(source.data.kind) || source.data.kind === "condition") return;
     const duplicateId = `node-${crypto.randomUUID()}`;
     if (source.parentId) {
       const siblingIds = nodes
@@ -737,8 +848,10 @@ export function WorkflowBoard({
           data: { ...source.data, title: `${source.data.title} 副本` },
         },
       ];
-      commitSequence(layoutPlanChildren(nextNodes, source.parentId, siblingIds), rootStepIds);
+      commitNodes(layoutPlanChildren(nextNodes, source.parentId, siblingIds));
     } else {
+      const found = findWorkflowItem(flow, source.id);
+      if (!found) return;
       const nextNodes = [
         ...nodes,
         {
@@ -749,22 +862,31 @@ export function WorkflowBoard({
           data: { ...source.data, title: `${source.data.title} 副本` },
         },
       ];
-      const nextOrder = insertWorkflowStep(rootStepIds, duplicateId, source.id);
-      commitSequence(nextNodes, nextOrder);
+      const nextFlow = insertWorkflowNode(
+        flow,
+        found.sequenceRef,
+        found.index + 1,
+        duplicateId,
+        source.data.kind,
+      );
+      commitFlow(nextNodes, nextFlow);
     }
     setSelectedNodeId(duplicateId);
-  }, [commitSequence, nodes, rootStepIds]);
+  }, [commitFlow, commitNodes, flow, nodes]);
 
   const renderedNodes = useMemo(() => {
     const childCounts = new Map<string, number>();
     for (const node of nodes) {
       if (node.parentId) childCounts.set(node.parentId, (childCounts.get(node.parentId) ?? 0) + 1);
     }
-    const pinnedTriggerId = rootStepIds.find((id) => (
-      nodes.find((node) => node.id === id)?.data.kind === "issue-trigger"
-    ));
+    const orderedIds = workflowNodeIds(flow);
+    const pinnedTriggerId = rootStepIds[0] && isWorkflowTriggerKind(
+      nodes.find((node) => node.id === rootStepIds[0])?.data.kind ?? "",
+    )
+      ? rootStepIds[0]
+      : null;
     const enriched = nodes.map((node) => {
-      const stepIndex = rootStepIds.indexOf(node.id);
+      const stepIndex = orderedIds.indexOf(node.id);
       const dragShiftY = node.parentId
         ? planDragShift(node.id, planDragPreview)
         : rootDragShift(node.id, rootDragPreview);
@@ -793,48 +915,46 @@ export function WorkflowBoard({
           onDuplicate: () => duplicateNode(node.id),
           onDelete: () => deleteNode(node.id),
           onAddChild: node.data.acceptsChildren
-            ? () => openStepPicker(null, node.id)
+            ? () => openPlanStepPicker(node.id)
             : undefined,
         },
       };
     });
-    const lastId = rootStepIds.at(-1);
-    const lastNode = lastId ? enriched.find((node) => node.id === lastId) : null;
-    const endY = lastNode
-      ? lastNode.position.y + Number(lastNode.style?.height ?? WORKFLOW_STEP_HEIGHT) + WORKFLOW_STEP_GAP
-      : 72;
-    const endNode: WorkflowCanvasNode = {
-      id: END_STEP_ID,
-      type: "workflow",
-      position: { x: 0, y: endY },
+    const virtualNodes = layout.virtualNodes.map((virtualNode) => ({
+      id: virtualNode.id,
+      type: "workflow" as const,
+      position: virtualNode.position,
       origin: TOP_CENTER_ORIGIN,
       draggable: false,
       selectable: false,
       deletable: false,
       connectable: false,
-      style: { width: WORKFLOW_STEP_WIDTH, height: END_STEP_HEIGHT },
+      style: { width: END_STEP_HEIGHT, height: END_STEP_HEIGHT },
+      initialWidth: END_STEP_HEIGHT,
+      initialHeight: END_STEP_HEIGHT,
+      measured: { width: END_STEP_HEIGHT, height: END_STEP_HEIGHT },
       data: {
-        kind: "sequence-end",
+        kind: virtualNode.kind,
         eyebrow: "",
-        title: "添加步骤",
+        title: "",
         description: "",
         meta: "",
-        icon: "plus",
-        tone: "capability",
-        stepNumber: rootStepIds.length === 0 ? 0 : undefined,
-        onAddChild: () => openStepPicker(lastId ?? null),
+        icon: "plus" as const,
+        tone: "capability" as const,
       },
-    };
+    }));
     return [
       ...enriched.filter((node) => !node.parentId),
-      ...(rootStepIds.length > 0 ? [endNode] : []),
+      ...virtualNodes,
       ...enriched.filter((node) => node.parentId),
     ];
   }, [
     deleteNode,
     duplicateNode,
+    flow,
+    layout.virtualNodes,
     nodes,
-    openStepPicker,
+    openPlanStepPicker,
     planDragPreview,
     rootDragPreview,
     rootStepIds,
@@ -844,31 +964,23 @@ export function WorkflowBoard({
   ]);
 
   const renderedEdges = useMemo(() => {
-    const insertEdges = workflowSequenceEdges(rootStepIds).map((edge) => ({
+    return layout.edges.map((edge) => ({
       ...edge,
-      type: "workflowInsert",
       data: {
-        onInsert: () => openStepPicker(edge.source),
+        ...edge.data,
+        onInsert: edge.data.insertion
+          ? () => openStepPicker(
+              edge.data.insertion!.sequenceRef,
+              edge.data.insertion!.index,
+            )
+          : undefined,
       },
-    }));
-    const lastId = rootStepIds.at(-1);
-    return [
-      ...insertEdges,
-      ...(lastId
-        ? [{
-            id: `sequence-${lastId}-end`,
-            source: lastId,
-            target: END_STEP_ID,
-            type: "straight",
-            className: "workflow-sequence-tail-edge",
-          }]
-        : []),
-    ];
-  }, [openStepPicker, rootStepIds]);
+    })) as Edge[];
+  }, [layout.edges, openStepPicker]);
 
   const pickerItems = useMemo(() => {
     if (!pickerTarget) return [];
-    if (pickerTarget.parentId) {
+    if (pickerTarget.kind === "plan") {
       return PALETTE_ITEMS.filter((item) => NESTABLE_TONES.has(item.data.tone));
     }
     if (rootStepIds.length === 0) {
@@ -886,7 +998,7 @@ export function WorkflowBoard({
       position: { x: 0, y: 0 },
       data: { ...item.data },
     };
-    if (pickerTarget.parentId) {
+    if (pickerTarget.kind === "plan") {
       newNode.parentId = pickerTarget.parentId;
       newNode.origin = TOP_LEFT_ORIGIN;
       const childIds = nodes
@@ -895,10 +1007,16 @@ export function WorkflowBoard({
         .map((node) => node.id);
       childIds.push(nodeId);
       const nextNodes = layoutPlanChildren([...nodes, newNode], pickerTarget.parentId, childIds);
-      commitSequence(nextNodes, rootStepIds);
+      commitNodes(nextNodes);
     } else {
-      const nextOrder = insertWorkflowStep(rootStepIds, nodeId, pickerTarget.afterStepId);
-      commitSequence([...nodes, newNode], nextOrder);
+      const nextFlow = insertWorkflowNode(
+        flow,
+        pickerTarget.sequenceRef,
+        pickerTarget.index,
+        nodeId,
+        item.data.kind,
+      );
+      commitFlow([...nodes, newNode], nextFlow);
     }
     setPickerTarget(null);
     setSelectedNodeId(nodeId);
@@ -911,18 +1029,18 @@ export function WorkflowBoard({
       .map((node) => node.id);
     const nextIds = childIds.filter((id) => id !== nodeId);
     nextIds.splice(Math.max(0, Math.min(targetIndex, nextIds.length)), 0, nodeId);
-    commitSequence(layoutPlanChildren(nodes, parentId, nextIds), rootStepIds);
+    commitNodes(layoutPlanChildren(nodes, parentId, nextIds));
   }
 
   const onNodesChange = useCallback((changes: NodeChange<WorkflowCanvasNode>[]) => {
     setNodes((current) => applyNodeChanges(
-      changes.filter((change) => change.type !== "remove" || change.id !== END_STEP_ID),
+      changes.filter((change) => change.type !== "remove" || !isVirtualWorkflowNodeId(change.id)),
       current,
     ));
   }, []);
 
   const onNodeDragStart = useCallback<OnNodeDrag<WorkflowCanvasNode>>((_, node) => {
-    if (node.id === END_STEP_ID) return;
+    if (isVirtualWorkflowNodeId(node.id)) return;
     if (node.parentId) {
       const sourceOrderIds = nodes
         .filter((candidate) => candidate.parentId === node.parentId)
@@ -938,19 +1056,23 @@ export function WorkflowBoard({
       planDragSessionRef.current = preview;
       setPlanDragPreview(preview);
     } else {
-      const sourceIndex = rootStepIds.indexOf(node.id);
-      if (sourceIndex < 0) return;
+      const found = findWorkflowItem(flow, node.id);
+      if (!found) return;
+      const sourceOrderIds = getWorkflowSequence(flow, found.sequenceRef)
+        .items
+        .map((item) => item.nodeId);
       const preview = {
         nodeId: node.id,
-        sourceOrderIds: rootStepIds,
-        sourceIndex,
-        targetIndex: sourceIndex,
+        sequenceRef: found.sequenceRef,
+        sourceOrderIds,
+        sourceIndex: found.index,
+        targetIndex: found.index,
       };
       rootDragSessionRef.current = preview;
       setRootDragPreview(preview);
     }
     setSettlingNodeId(null);
-  }, [nodes, rootStepIds]);
+  }, [flow, nodes]);
 
   const onNodeDrag = useCallback<OnNodeDrag<WorkflowCanvasNode>>((_, node) => {
     const instance = flowRef.current;
@@ -994,35 +1116,37 @@ export function WorkflowBoard({
       setPlanDragPreview(null);
     } else if (rootDragSessionRef.current?.nodeId === node.id) {
       const session = rootDragSessionRef.current;
-      const pinnedId = session.sourceOrderIds.find((id) => (
-        nodes.find((candidate) => candidate.id === id)?.data.kind === "issue-trigger"
-      ));
-      const nextOrder = reorderWorkflowStep(
-        session.sourceOrderIds,
+      const requestedIndex = rootDragPreview?.targetIndex ?? session.sourceIndex;
+      const targetIndex = session.sequenceRef.length === 0
+        ? Math.max(1, requestedIndex)
+        : requestedIndex;
+      const nextFlow = moveWorkflowNode(
+        flow,
         node.id,
-        rootDragPreview?.targetIndex ?? session.sourceIndex,
-        pinnedId,
+        session.sequenceRef,
+        targetIndex,
       );
-      commitSequence(nodes, nextOrder);
+      commitFlow(nodes, nextFlow);
       rootDragSessionRef.current = null;
       setRootDragPreview(null);
     }
     setSettlingNodeId(node.id);
     if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
     settleTimerRef.current = window.setTimeout(() => setSettlingNodeId(null), 220);
-  }, [commitSequence, nodes, planDragPreview, rootDragPreview]);
+  }, [commitFlow, flow, nodes, planDragPreview, rootDragPreview]);
 
   function activateWorkflow(workflowId: string) {
+    setWorkflowTabMenu(null);
     if (workflowId === activeWorkflowId) return;
     workflowSnapshotsRef.current.set(activeWorkflowId, {
       nodes,
-      edges,
+      flow,
       selectedNodeId: null,
     });
     const snapshot = normalizeSnapshot(workflowSnapshotsRef.current.get(workflowId)!);
     setActiveWorkflowId(workflowId);
     setNodes(snapshot.nodes);
-    setEdges(snapshot.edges);
+    setFlow(snapshot.flow);
     setSelectedNodeId(null);
     setPickerTarget(null);
     requestAnimationFrame(() => {
@@ -1031,19 +1155,62 @@ export function WorkflowBoard({
   }
 
   function createWorkflow() {
+    setWorkflowTabMenu(null);
     const workflowId = `workflow-${crypto.randomUUID()}`;
     const workflowName = `未命名流程 ${workflowTabs.length + 1}`;
+    const emptyFlow = createWorkflowFlow();
     workflowSnapshotsRef.current.set(workflowId, {
       nodes: [],
-      edges: [],
+      flow: emptyFlow,
       selectedNodeId: null,
     });
     setWorkflowTabs((current) => [...current, { id: workflowId, name: workflowName }]);
     setActiveWorkflowId(workflowId);
     setNodes([]);
-    setEdges([]);
+    setFlow(emptyFlow);
     setSelectedNodeId(null);
     setPickerTarget(null);
+  }
+
+  function openWorkflowTabMenu(
+    event: ReactMouseEvent<HTMLButtonElement>,
+    workflowId: string,
+  ) {
+    event.preventDefault();
+    setWorkflowTabMenu({
+      workflowId,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }
+
+  function deleteWorkflow(workflowId: string) {
+    if (workflowTabs.length <= 1) return;
+    const workflowIndex = workflowTabs.findIndex((workflow) => workflow.id === workflowId);
+    const nextTabs = workflowTabs.filter((workflow) => workflow.id !== workflowId);
+    workflowSnapshotsRef.current.delete(workflowId);
+
+    if (workflowId !== activeWorkflowId) {
+      setWorkflowTabs(nextTabs);
+      setWorkflowTabMenu(null);
+      return;
+    }
+
+    const replacement = workflowTabs[workflowIndex + 1] ?? workflowTabs[workflowIndex - 1];
+    const snapshot = normalizeSnapshot(workflowSnapshotsRef.current.get(replacement.id)!);
+    setWorkflowTabs(nextTabs);
+    setActiveWorkflowId(replacement.id);
+    setNodes(snapshot.nodes);
+    setFlow(snapshot.flow);
+    setSelectedNodeId(null);
+    setPickerTarget(null);
+    setRenamingWorkflowId(null);
+    setWorkflowNameDraft("");
+    cancelWorkflowRenameRef.current = false;
+    setWorkflowTabMenu(null);
+    requestAnimationFrame(() => {
+      void flowRef.current?.fitView({ padding: 0.2, duration: 240, maxZoom: 1 });
+    });
   }
 
   function handleWorkflowTabKeyDown(
@@ -1149,6 +1316,7 @@ export function WorkflowBoard({
                   key={workflow.id}
                   onClick={() => activateWorkflow(workflow.id)}
                   onDoubleClick={() => startWorkflowRename(workflow)}
+                  onContextMenu={(event) => openWorkflowTabMenu(event, workflow.id)}
                   onKeyDown={(event) => handleWorkflowTabKeyDown(event, workflow.id)}
                   title="双击重命名"
                 >
@@ -1172,16 +1340,6 @@ export function WorkflowBoard({
               <i aria-hidden="true" />
               {persistenceError || "已自动保存"}
             </span>
-            <button
-              type="button"
-              aria-label="适应流程视图"
-              title="适应流程视图"
-              onClick={() => {
-                void flowRef.current?.fitView({ padding: 0.2, duration: 240, maxZoom: 1 });
-              }}
-            >
-              <LinearIcon name="expand" />
-            </button>
           </div>
         </div>
         <div
@@ -1202,7 +1360,7 @@ export function WorkflowBoard({
             onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             onNodeClick={(_, node) => {
-              if (node.id !== END_STEP_ID) setSelectedNodeId(node.id);
+              if (!isVirtualWorkflowNodeId(node.id)) setSelectedNodeId(node.id);
             }}
             onPaneClick={() => setSelectedNodeId(null)}
             nodesConnectable={false}
@@ -1237,7 +1395,7 @@ export function WorkflowBoard({
               className="workflow-empty-add"
               type="button"
               aria-label="添加第一个步骤"
-              onClick={() => openStepPicker(null)}
+              onClick={() => openStepPicker([], 0)}
             >
               <LinearIcon name="plus" />
               <span>添加触发器</span>
@@ -1264,6 +1422,32 @@ export function WorkflowBoard({
             onClose={() => setSelectedNodeId(null)}
           />
         </aside>
+      )}
+
+      {workflowTabMenu && createPortal(
+        <div
+          ref={workflowTabMenuRef}
+          className="task-context-menu workflow-tab-context-menu"
+          role="menu"
+          aria-label="流程操作"
+          style={{ left: workflowTabMenu.x, top: workflowTabMenu.y }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div className="context-menu-group">
+            <button
+              className="context-menu-item is-danger"
+              type="button"
+              role="menuitem"
+              disabled={workflowTabs.length === 1}
+              aria-disabled={workflowTabs.length === 1}
+              onClick={() => deleteWorkflow(workflowTabMenu.workflowId)}
+            >
+              <span className="context-menu-icon"><LinearIcon name="trash" /></span>
+              <span className="context-menu-label">删除流程</span>
+            </button>
+          </div>
+        </div>,
+        document.body,
       )}
     </section>
   );

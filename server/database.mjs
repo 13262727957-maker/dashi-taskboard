@@ -57,6 +57,24 @@ function taskFromRow(row) {
   };
 }
 
+function taskRelationSummaryFromRow(row) {
+  return {
+    id: row.id,
+    identifier: row.identifier,
+    projectId: row.project_id,
+    title: row.title,
+    status: row.status,
+    priority: row.priority,
+    assignee: {
+      type: row.assignee_type,
+      id: row.assignee_id,
+      name: row.assignee_name,
+      avatarUrl: row.assignee_avatar_url,
+    },
+    archivedAt: row.archived_at,
+  };
+}
+
 function commentFromRow(row) {
   return {
     id: row.id,
@@ -288,6 +306,24 @@ export class TaskboardDatabase {
       CREATE INDEX IF NOT EXISTS tasks_project_status_sort
         ON tasks(project_id, archived_at, status, sort_order, created_at)
     `);
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS task_relations (
+        relation_type TEXT NOT NULL CHECK (relation_type IN ('parent', 'blocks', 'related')),
+        source_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        target_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        CHECK (source_task_id <> target_task_id),
+        CHECK (relation_type <> 'related' OR source_task_id < target_task_id),
+        PRIMARY KEY (relation_type, source_task_id, target_task_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS task_relations_target
+        ON task_relations(relation_type, target_task_id);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS task_relations_one_parent
+        ON task_relations(target_task_id)
+        WHERE relation_type = 'parent';
+    `);
 
     const commentColumns = this.database.prepare("PRAGMA table_info(comments)").all();
     if (!commentColumns.some((column) => column.name === "thread_id")) {
@@ -434,7 +470,9 @@ export class TaskboardDatabase {
         projects.updated_at,
         COUNT(tasks.id) AS issue_count
       FROM projects
-      LEFT JOIN tasks ON tasks.project_id = projects.id
+      LEFT JOIN tasks
+        ON tasks.project_id = projects.id
+        AND tasks.archived_at IS NULL
       GROUP BY
         projects.id,
         projects.name,
@@ -471,7 +509,9 @@ export class TaskboardDatabase {
         projects.updated_at,
         COUNT(tasks.id) AS issue_count
       FROM projects
-      LEFT JOIN tasks ON tasks.project_id = projects.id
+      LEFT JOIN tasks
+        ON tasks.project_id = projects.id
+        AND tasks.archived_at IS NULL
       WHERE projects.id = ?
       GROUP BY
         projects.id,
@@ -568,12 +608,12 @@ export class TaskboardDatabase {
         created_at,
         id
     `;
-    return this.database.prepare(sql).all(...values).map(taskFromRow);
+    return this.database.prepare(sql).all(...values).map((row) => this.#taskWithRelations(row));
   }
 
   getTask(id) {
     const row = this.database.prepare("SELECT * FROM tasks WHERE id = ? OR identifier = ?").get(id, id);
-    return row ? taskFromRow(row) : null;
+    return row ? this.#taskWithRelations(row) : null;
   }
 
   createTask(input) {
@@ -802,6 +842,94 @@ export class TaskboardDatabase {
     return this.getTask(current.id);
   }
 
+  addTaskRelation(id, version, type, relatedId, threadId) {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const task = this.#requireTask(id);
+      const relatedTask = this.#requireTask(relatedId);
+      this.#requireVersion(task, version);
+      this.#validateRelationTasks(task, relatedTask);
+
+      const { relationType, sourceTaskId, targetTaskId } = this.#relationEndpoints(
+        type,
+        task.id,
+        relatedTask.id,
+      );
+      if (relationType === "parent") {
+        this.#assertNoParentCycle(task.id, relatedTask.id);
+        const existing = this.database.prepare(`
+          SELECT source_task_id
+          FROM task_relations
+          WHERE relation_type = 'parent' AND target_task_id = ?
+        `).get(task.id);
+        if (existing?.source_task_id === relatedTask.id) {
+          throw new ApiError(409, "RELATION_EXISTS", "This parent relation already exists");
+        }
+        if (existing) {
+          this.database.prepare(`
+            DELETE FROM task_relations
+            WHERE relation_type = 'parent' AND target_task_id = ?
+          `).run(task.id);
+        }
+      } else {
+        const existing = this.database.prepare(`
+          SELECT 1
+          FROM task_relations
+          WHERE relation_type = ? AND source_task_id = ? AND target_task_id = ?
+        `).get(relationType, sourceTaskId, targetTaskId);
+        if (existing) {
+          throw new ApiError(409, "RELATION_EXISTS", "This issue relation already exists");
+        }
+      }
+
+      this.database.prepare(`
+        INSERT INTO task_relations (
+          relation_type, source_task_id, target_task_id, created_at
+        ) VALUES (?, ?, ?, ?)
+      `).run(relationType, sourceTaskId, targetTaskId, now());
+      this.#touchTask(task.id, version, threadId);
+      this.database.exec("COMMIT");
+      return {
+        task: this.getTask(task.id),
+        relatedTask: this.getTask(relatedTask.id),
+      };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  removeTaskRelation(id, version, type, relatedId, threadId) {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const task = this.#requireTask(id);
+      const relatedTask = this.#requireTask(relatedId);
+      this.#requireVersion(task, version);
+      this.#validateRelationTasks(task, relatedTask);
+      const { relationType, sourceTaskId, targetTaskId } = this.#relationEndpoints(
+        type,
+        task.id,
+        relatedTask.id,
+      );
+      const removed = this.database.prepare(`
+        DELETE FROM task_relations
+        WHERE relation_type = ? AND source_task_id = ? AND target_task_id = ?
+      `).run(relationType, sourceTaskId, targetTaskId);
+      if (removed.changes !== 1) {
+        throw new ApiError(404, "RELATION_NOT_FOUND", "This issue relation does not exist");
+      }
+      this.#touchTask(task.id, version, threadId);
+      this.database.exec("COMMIT");
+      return {
+        task: this.getTask(task.id),
+        relatedTask: this.getTask(relatedTask.id),
+      };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   listComments(taskId) {
     const task = this.#requireTask(taskId);
     return this.database.prepare(`
@@ -927,6 +1055,128 @@ export class TaskboardDatabase {
       WHERE comment_id = ?
       ORDER BY created_at, id
     `).all(commentId).map(attachmentFromRow);
+  }
+
+  #taskWithRelations(row) {
+    const task = taskFromRow(row);
+    const parent = this.database.prepare(`
+      SELECT tasks.*
+      FROM task_relations
+      JOIN tasks ON tasks.id = task_relations.source_task_id
+      WHERE task_relations.relation_type = 'parent'
+        AND task_relations.target_task_id = ?
+    `).get(task.id);
+    const subIssues = this.database.prepare(`
+      SELECT tasks.*
+      FROM task_relations
+      JOIN tasks ON tasks.id = task_relations.target_task_id
+      WHERE task_relations.relation_type = 'parent'
+        AND task_relations.source_task_id = ?
+      ORDER BY tasks.sort_order, tasks.created_at, tasks.id
+    `).all(task.id);
+    const blockedBy = this.database.prepare(`
+      SELECT tasks.*
+      FROM task_relations
+      JOIN tasks ON tasks.id = task_relations.source_task_id
+      WHERE task_relations.relation_type = 'blocks'
+        AND task_relations.target_task_id = ?
+      ORDER BY tasks.sort_order, tasks.created_at, tasks.id
+    `).all(task.id);
+    const blocks = this.database.prepare(`
+      SELECT tasks.*
+      FROM task_relations
+      JOIN tasks ON tasks.id = task_relations.target_task_id
+      WHERE task_relations.relation_type = 'blocks'
+        AND task_relations.source_task_id = ?
+      ORDER BY tasks.sort_order, tasks.created_at, tasks.id
+    `).all(task.id);
+    const related = this.database.prepare(`
+      SELECT tasks.*
+      FROM task_relations
+      JOIN tasks ON tasks.id = CASE
+        WHEN task_relations.source_task_id = ? THEN task_relations.target_task_id
+        ELSE task_relations.source_task_id
+      END
+      WHERE task_relations.relation_type = 'related'
+        AND (
+          task_relations.source_task_id = ?
+          OR task_relations.target_task_id = ?
+        )
+      ORDER BY tasks.sort_order, tasks.created_at, tasks.id
+    `).all(task.id, task.id, task.id);
+    task.relations = {
+      parent: parent ? taskRelationSummaryFromRow(parent) : null,
+      subIssues: subIssues.map(taskRelationSummaryFromRow),
+      blockedBy: blockedBy.map(taskRelationSummaryFromRow),
+      blocks: blocks.map(taskRelationSummaryFromRow),
+      related: related.map(taskRelationSummaryFromRow),
+    };
+    return task;
+  }
+
+  #validateRelationTasks(task, relatedTask) {
+    if (task.id === relatedTask.id) {
+      throw new ApiError(400, "SELF_RELATION", "An issue cannot be related to itself");
+    }
+    if (task.projectId !== relatedTask.projectId) {
+      throw new ApiError(400, "CROSS_PROJECT_RELATION", "Issue relations must stay within one project");
+    }
+  }
+
+  #relationEndpoints(type, taskId, relatedTaskId) {
+    if (type === "parent") {
+      return {
+        relationType: "parent",
+        sourceTaskId: relatedTaskId,
+        targetTaskId: taskId,
+      };
+    }
+    if (type === "blocks") {
+      return {
+        relationType: "blocks",
+        sourceTaskId: taskId,
+        targetTaskId: relatedTaskId,
+      };
+    }
+    if (type === "blocked_by") {
+      return {
+        relationType: "blocks",
+        sourceTaskId: relatedTaskId,
+        targetTaskId: taskId,
+      };
+    }
+    const [sourceTaskId, targetTaskId] = [taskId, relatedTaskId].sort();
+    return { relationType: "related", sourceTaskId, targetTaskId };
+  }
+
+  #assertNoParentCycle(childId, parentId) {
+    const cycle = this.database.prepare(`
+      WITH RECURSIVE ancestors(id) AS (
+        SELECT source_task_id
+        FROM task_relations
+        WHERE relation_type = 'parent' AND target_task_id = ?
+        UNION
+        SELECT task_relations.source_task_id
+        FROM task_relations
+        JOIN ancestors ON task_relations.target_task_id = ancestors.id
+        WHERE task_relations.relation_type = 'parent'
+      )
+      SELECT 1 FROM ancestors WHERE id = ?
+    `).get(parentId, childId);
+    if (cycle) {
+      throw new ApiError(409, "RELATION_CYCLE", "This parent would create a cycle");
+    }
+  }
+
+  #touchTask(id, version, threadId) {
+    const result = this.database.prepare(`
+      UPDATE tasks
+      SET thread_id = COALESCE(?, thread_id), version = version + 1, updated_at = ?
+      WHERE id = ? AND version = ?
+    `).run(threadId ?? null, now(), id, version);
+    if (result.changes !== 1) {
+      this.#throwMissingOrConflict(id, version);
+    }
   }
 
   #requireTask(id) {

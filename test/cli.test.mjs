@@ -307,6 +307,67 @@ test("issue restore uses the mutation thread and optimistic version", async () =
   assert.deepEqual(requestBody, { threadId: "thread-current", version: 5 });
 });
 
+test("issue relation add and remove use typed relation endpoints", async () => {
+  const calls = [];
+  const addResult = await run(
+    [
+      "issue", "relation", "add", "TASK/1",
+      "--type", "blocked_by",
+      "--issue", "TASK/2",
+      "--if-version", "4",
+    ],
+    async (url, init) => {
+      calls.push({ url, init });
+      return response({
+        task: { id: "TASK/1", version: 5 },
+        relatedTask: { id: "TASK/2", version: 2 },
+      });
+    },
+  );
+  const removeResult = await run(
+    [
+      "issue", "relation", "remove", "TASK/1",
+      "--type", "related",
+      "--issue", "TASK/3",
+      "--if-version", "5",
+    ],
+    async (url, init) => {
+      calls.push({ url, init });
+      return response({
+        task: { id: "TASK/1", version: 6 },
+        relatedTask: { id: "TASK/3", version: 1 },
+      });
+    },
+  );
+
+  assert.equal(addResult.exitCode, 0);
+  assert.equal(removeResult.exitCode, 0);
+  assert.equal(calls[0].url.pathname, "/api/tasks/TASK%2F1/relations/blocked_by/TASK%2F2");
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    threadId: "thread-current",
+    version: 4,
+  });
+  assert.equal(calls[1].url.pathname, "/api/tasks/TASK%2F1/relations/related/TASK%2F3");
+  assert.equal(calls[1].init.method, "DELETE");
+  assert.deepEqual(JSON.parse(calls[1].init.body), {
+    threadId: "thread-current",
+    version: 5,
+  });
+});
+
+test("issue relation validates its action and relation type before fetching", async () => {
+  for (const argv of [
+    ["issue", "relation", "replace", "TASK-1", "--type", "related", "--issue", "TASK-2"],
+    ["issue", "relation", "add", "TASK-1", "--type", "duplicate", "--issue", "TASK-2"],
+    ["issue", "relation", "add", "TASK-1", "--type", "related"],
+  ]) {
+    const result = await run(argv, async () => assert.fail("fetch should not be called"));
+    assert.equal(result.exitCode, 2);
+    assert.equal(result.stderr.error.code, "USAGE_ERROR");
+  }
+});
+
 test("comment list and add use the issue comments endpoint", async () => {
   const calls = [];
   const listResult = await run(["comment", "list", "TASK/1"], async (url, init) => {

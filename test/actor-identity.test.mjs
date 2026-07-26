@@ -58,6 +58,19 @@ test("agent avatar asset is a transparent PNG logo", async () => {
   assert.equal(logo[25], 6);
 });
 
+test("comment metadata separators never become avatar content", () => {
+  assert.match(detailSource, /className="comment-edited"/);
+  assert.doesNotMatch(styles, /\.comment-header > span(?::before)?/);
+  assert.match(
+    styles,
+    /\.comment-header \.comment-edited::before\s*\{[^}]*content:\s*"·"/s,
+  );
+  assert.match(
+    styles,
+    /\.actor-avatar-image\s*\{[^}]*display:\s*block;[^}]*width:\s*100%;[^}]*height:\s*100%/s,
+  );
+});
+
 test("Codex host identity is forwarded to user-authored taskboard mutations", () => {
   assert.match(injectSource, /function readCodexUser\(\)/);
   assert.match(injectSource, /cdn\.auth0\.com\/avatars/);

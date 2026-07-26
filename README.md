@@ -1,11 +1,10 @@
 # Codex Taskboard
 
-A local-first issue board that runs in a browser and can be embedded in Codex through a thin CodexPlusPlus user script. The same HTTP API powers the React UI and the `taskctl` CLI used by the bundled Codex Skill.
+A local-first issue board that runs in a browser and can be embedded in Codex through the standalone CDP launcher or its injection script. The same HTTP API powers the React UI and the `taskctl` CLI used by the bundled Codex Skill.
 
 ## Requirements
 
 - Node.js 22.5 or newer
-- CodexPlusPlus only when using the embedded Codex view
 
 ## Run locally
 
@@ -54,37 +53,48 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
   ~/.codex/skills/manage-taskboard
 ```
 
-The Skill teaches Codex to inspect an issue, move it to `in_progress`, use optimistic versions, verify the work, and only then mark it `done`.
+The Skill teaches Codex to inspect an issue, move it to `in_progress`, use optimistic versions, verify the work, and then move it to `in_review`; it moves the issue to `done` only after the user explicitly confirms acceptance or asks to mark it complete.
 
 ## Embed in Codex
 
-The project includes a standalone CDP launcher, so embedding does not depend on a third-party Codex++ binary. Quit every running Codex window, then run:
+### Recommended: keep your current window and open a separate Taskboard window
+
+Keep the existing Codex window open. From the Taskboard repository, start a second Codex instance with a dedicated CDP port:
 
 ```bash
-npm run codex
+open -n -a /Applications/ChatGPT.app --args \
+  --remote-debugging-port=9231 \
+  --remote-allow-origins=http://127.0.0.1:9231
+```
+
+After the new Codex window appears, run the injector in another terminal:
+
+```bash
+CODEX_TASKBOARD_HOST=127.0.0.1 \
+npm run codex:inject -- --port 9231 --open
+```
+
+Keep the injector terminal running while using the embedded panel. The original Codex window remains unchanged, and the new window receives the Taskboard sidebar entry. If port `9231` is occupied, use another port in both commands.
+
+### Alternative: restart Codex with the standalone launcher
+
+Quit every running Codex window, then run:
+
+```bash
+CODEX_TASKBOARD_HOST=127.0.0.1 npm run codex
 ```
 
 This starts the local Taskboard service when needed, launches the official macOS Codex app with a loopback-only CDP port, injects a native-looking Taskboard entry after Plugins, and keeps watching both the service and replacement renderers. Opening Taskboard asks this launcher to health-check the fixed local service, restart it when needed, and rebuild a failed iframe. Keep this command running while using the embedded panel. The launcher does not modify `ChatGPT.app` or its `app.asar`.
 
 Codex 26.715.52143 ships a renderer CSP that blocks arbitrary HTTP iframes. The launcher therefore enables CDP CSP bypass, reloads that renderer once, installs the document-start script, and waits until the Taskboard OOPIF is actually loaded. CDP is unauthenticated to other processes on the same machine, so only run trusted local code while the launcher is active.
 
-To inject into a Codex instance that was already launched with CDP, run:
+To inject into a Codex instance that was already launched with CDP by another method, run:
 
 ```bash
 npm run codex:inject -- --port 9229 --open
 ```
 
 This command also stays resident so the injected tab can restart Taskboard after a service exit. Stop it with `Ctrl-C`.
-
-The user-script can also be discovered by Codex++ when it is installed:
-
-Install `inject/codex-taskboard.user.js` as a CodexPlusPlus user script. On macOS and Linux the user script directory is normally:
-
-```text
-~/.config/Codex++/user_scripts/
-```
-
-On Windows it is under `%APPDATA%\Codex++\user_scripts\`. Codex++ user scripts alone do not bypass the current Codex frame CSP; the standalone launcher above is the supported route for the HTTP iframe on the tested Codex build.
 
 The script adds a Taskboard entry to the Codex sidebar and renders the iframe across Codex's complete main workspace, including the contextual titlebar area so Taskboard's own header does not leave an empty strip. That full rectangular header is placed above Electron's draggable layer and marked `no-drag`; because the native contextual actions are suppressed while Taskboard is active, its own actions use their normal edge padding without an artificial right-side gap. The native sidebar stays mounted, while the previous page selection and contextual header are temporarily suppressed; choosing another Codex page restores them.
 

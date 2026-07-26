@@ -14,6 +14,7 @@ import {
   isTaskPriority,
   isTaskStatus,
 } from "../shared/domain.mjs";
+import { normalizeWorkflowSnapshot } from "../shared/workflow-control-flow.mjs";
 import { ApiError, TaskboardDatabase } from "./database.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -256,23 +257,35 @@ function parseWorkflowWorkspace(value) {
   for (const tab of tabs) {
     const snapshot = value.snapshots[tab.id];
     assertPlainObject(snapshot);
-    assertAllowedKeys(snapshot, new Set(["nodes", "edges", "selectedNodeId"]));
+    assertAllowedKeys(snapshot, new Set(["nodes", "edges", "flow", "selectedNodeId"]));
     if (!Array.isArray(snapshot.nodes) || snapshot.nodes.length > 10_000) {
       throw new ApiError(400, "INVALID_FIELD", `'workspace.snapshots.${tab.id}.nodes' must be an array`);
     }
-    if (!Array.isArray(snapshot.edges) || snapshot.edges.length > 20_000) {
+    if (snapshot.flow === undefined && (!Array.isArray(snapshot.edges) || snapshot.edges.length > 20_000)) {
       throw new ApiError(400, "INVALID_FIELD", `'workspace.snapshots.${tab.id}.edges' must be an array`);
+    }
+    if (snapshot.flow !== undefined && snapshot.edges !== undefined) {
+      throw new ApiError(400, "INVALID_FIELD", `'workspace.snapshots.${tab.id}' cannot contain both 'flow' and 'edges'`);
     }
     const selectedNodeId = stringField(
       snapshot.selectedNodeId ?? null,
       `workspace.snapshots.${tab.id}.selectedNodeId`,
       { nullable: true, maxLength: 256 },
     );
-    snapshots[tab.id] = {
-      nodes: snapshot.nodes,
-      edges: snapshot.edges,
-      selectedNodeId,
-    };
+    try {
+      snapshots[tab.id] = normalizeWorkflowSnapshot({
+        nodes: snapshot.nodes,
+        edges: snapshot.edges,
+        flow: snapshot.flow,
+        selectedNodeId,
+      });
+    } catch (error) {
+      throw new ApiError(
+        400,
+        "INVALID_FIELD",
+        `'workspace.snapshots.${tab.id}' is not a valid workflow: ${error.message}`,
+      );
+    }
   }
   return { version: 1, tabs, activeWorkflowId, snapshots };
 }
@@ -509,6 +522,17 @@ function parseArchive(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set(["version", "threadId"]));
   return { version: parseVersion(body.version), threadId: parseThreadId(body.threadId) };
+}
+
+function parseIssueRelationType(value) {
+  if (!["parent", "blocks", "blocked_by", "related"].includes(value)) {
+    throw new ApiError(
+      400,
+      "INVALID_FIELD",
+      "'relation type' must be parent, blocks, blocked_by, or related",
+    );
+  }
+  return value;
 }
 
 function parseCommentCreate(body) {
@@ -1168,6 +1192,59 @@ export function createTaskboardServer(options = {}) {
         }
         events.connect(request, response);
         return;
+      }
+
+      const taskRelationRoute = pathname.match(
+        /^\/api\/tasks\/([^/]+)\/relations\/([^/]+)\/([^/]+)$/,
+      );
+      if (taskRelationRoute) {
+        let taskId;
+        let type;
+        let relatedTaskId;
+        try {
+          taskId = decodeURIComponent(taskRelationRoute[1]);
+          type = decodeURIComponent(taskRelationRoute[2]);
+          relatedTaskId = decodeURIComponent(taskRelationRoute[3]);
+        } catch {
+          throw new ApiError(400, "INVALID_PATH", "Issue relation path contains invalid encoding");
+        }
+        if (
+          taskId.length === 0
+          || taskId.length > 128
+          || relatedTaskId.length === 0
+          || relatedTaskId.length > 128
+        ) {
+          throw new ApiError(400, "INVALID_PATH", "Issue relation task id is invalid");
+        }
+        if ([...url.searchParams.keys()].length > 0) {
+          throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "Issue relation routes do not accept query parameters");
+        }
+        const relationType = parseIssueRelationType(type);
+        if (request.method === "POST") {
+          const { version, threadId } = parseArchive(await readJson(request));
+          const result = database.addTaskRelation(
+            taskId,
+            version,
+            relationType,
+            relatedTaskId,
+            threadId,
+          );
+          events.emit("task.relation.updated", result);
+          return sendJson(response, 200, result);
+        }
+        if (request.method === "DELETE") {
+          const { version, threadId } = parseArchive(await readJson(request));
+          const result = database.removeTaskRelation(
+            taskId,
+            version,
+            relationType,
+            relatedTaskId,
+            threadId,
+          );
+          events.emit("task.relation.updated", result);
+          return sendJson(response, 200, result);
+        }
+        return methodNotAllowed(response, ["POST", "DELETE"]);
       }
 
       const taskCommentsRoute = pathname.match(/^\/api\/tasks\/([^/]+)\/comments$/);

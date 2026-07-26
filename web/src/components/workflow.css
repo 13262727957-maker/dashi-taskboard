@@ -1,6 +1,6 @@
 .workflow-board {
   --workflow-titlebar-height: 48px;
-  --workflow-step-width: 360px;
+  --workflow-step-width: 250px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   width: 100%;
@@ -130,11 +130,6 @@
   font: inherit;
 }
 
-.workflow-tab.is-renaming input:focus {
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--border-strong));
-  box-shadow: 0 0 0 2px var(--accent-soft);
-}
-
 .workflow-tab-add {
   width: 38px;
   margin: 0 2px;
@@ -174,27 +169,6 @@
 
 .workflow-toolbar-status > span.has-error i {
   background: var(--danger);
-}
-
-.workflow-toolbar-status > button {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.workflow-toolbar-status > button:hover {
-  background: var(--surface-hover);
-  color: var(--text-primary);
-}
-
-.workflow-toolbar-status > button svg {
-  width: 14px;
-  height: 14px;
 }
 
 .workflow-canvas {
@@ -289,6 +263,10 @@
 
 .workflow-node-integration {
   --node-tone: #2f7f9d;
+}
+
+.workflow-node-development {
+  --node-tone: #c15f3c;
 }
 
 .workflow-node-planning {
@@ -443,8 +421,10 @@
   opacity: 0;
 }
 
-.workflow-step-card:hover .workflow-step-menu-trigger,
-.workflow-step-card.selected .workflow-step-menu-trigger,
+.workflow-node:hover .workflow-step-menu-trigger,
+.workflow-node.selected .workflow-step-menu-trigger,
+.workflow-plan-container:hover .workflow-step-menu-trigger,
+.workflow-plan-container.selected .workflow-step-menu-trigger,
 .workflow-step-menu-trigger[aria-expanded="true"] {
   opacity: 1;
 }
@@ -560,16 +540,46 @@
   height: 12px;
 }
 
-.workflow-sequence-end {
-  --node-tone: var(--accent);
+.workflow-flow-anchor {
   position: relative;
-  display: grid;
-  place-items: center;
-  width: 360px;
-  height: 42px;
+  width: 1px;
+  height: 1px;
 }
 
-.workflow-sequence-end > button,
+.workflow-flow-merge::after {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  border: 1.25px solid color-mix(in srgb, var(--text-tertiary) 46%, var(--border-strong));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface-raised) 84%, var(--border-strong));
+  box-shadow: 0 0 0 0.5px var(--surface-raised);
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.workflow-condition-branch-label {
+  position: absolute;
+  z-index: 11;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  height: 20px;
+  padding: 0 8px;
+  border: var(--border-hairline) solid color-mix(in srgb, var(--text-primary) 82%, transparent);
+  border-radius: 999px;
+  background: var(--text-primary);
+  color: var(--surface-raised);
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+}
+
 .workflow-empty-add {
   display: inline-flex;
   align-items: center;
@@ -586,7 +596,6 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.035);
 }
 
-.workflow-sequence-end > button:hover,
 .workflow-empty-add:hover {
   border-style: solid;
   border-color: color-mix(in srgb, var(--accent) 58%, var(--border-strong));
@@ -594,7 +603,6 @@
   color: var(--accent);
 }
 
-.workflow-sequence-end svg,
 .workflow-empty-add svg {
   width: 13px;
   height: 13px;
@@ -651,6 +659,29 @@
 .workflow-plan-add svg {
   width: 12px;
   height: 12px;
+}
+
+.workflow-plan-add-inline {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  gap: 4px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 8px;
+}
+
+.workflow-plan-add-inline:hover {
+  background: var(--surface-hover);
+  color: var(--node-tone);
+}
+
+.workflow-plan-add-inline svg {
+  width: 11px;
+  height: 11px;
 }
 
 .workflow-plan-item {
@@ -732,8 +763,30 @@
 }
 
 .workflow-plan-item.is-settling,
-.workflow-step-card.is-settling {
+.workflow-step-card.is-settling,
+.workflow-node.is-settling,
+.workflow-plan-container.is-settling {
   animation: workflow-step-settle 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.workflow-node.is-drag-shifted,
+.workflow-plan-container.is-drag-shifted {
+  will-change: transform;
+}
+
+.workflow-node.is-dragging,
+.workflow-plan-container.is-dragging {
+  border-color: color-mix(in srgb, var(--node-tone) 72%, var(--border-strong));
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.14);
+  cursor: grabbing;
+}
+
+.workflow-node-state.needs-config {
+  color: color-mix(in srgb, var(--warning) 76%, var(--text-secondary));
+}
+
+.workflow-node-state.needs-config i {
+  background: var(--warning);
 }
 
 @keyframes workflow-step-settle {
@@ -846,11 +899,6 @@
   color: var(--text-tertiary);
 }
 
-.workflow-step-picker-search:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--border-strong));
-  box-shadow: 0 0 0 2px var(--accent-soft);
-}
-
 .workflow-step-picker-search svg {
   width: 15px;
   height: 15px;
@@ -941,6 +989,10 @@
 
 .workflow-step-picker-mark.tone-integration {
   --node-tone: #2f7f9d;
+}
+
+.workflow-step-picker-mark.tone-development {
+  --node-tone: #c15f3c;
 }
 
 .workflow-step-picker-mark.tone-planning {
@@ -1173,13 +1225,6 @@
 .workflow-config-section input,
 .workflow-config-section select {
   height: 30px;
-}
-
-.workflow-config-section input:focus,
-.workflow-config-section textarea:focus,
-.workflow-config-section select:focus {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
-  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .workflow-config-section input:disabled,

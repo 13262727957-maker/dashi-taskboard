@@ -45,6 +45,11 @@ export function TaskCard({
   const dueDate = task.dueDate
     ? new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(`${task.dueDate}T12:00:00`))
     : null;
+  const subIssueTotal = task.relations.subIssues.length;
+  const completedSubIssues = task.relations.subIssues.filter((issue) => issue.status === "done").length;
+  const activeBlockers = task.relations.blockedBy.filter((issue) => (
+    issue.status !== "done" && issue.status !== "canceled"
+  )).length;
 
   function stopThen(callback: () => void) {
     return (event: MouseEvent<HTMLButtonElement>) => {
@@ -82,7 +87,17 @@ export function TaskCard({
       />
 
       <div className="card-topline">
-        <span className="task-identifier">{task.identifier}</span>
+        <span className="card-reference">
+          <span className="task-identifier">{task.identifier}</span>
+          {task.relations.parent && (
+            <>
+              <LinearIcon name="chevronRight" />
+              <span className="card-parent-title" title={task.relations.parent.title}>
+                {task.relations.parent.title}
+              </span>
+            </>
+          )}
+        </span>
         <ActorAvatar actor={task.assignee} className="card-assignee-avatar" />
         <div className="card-actions" aria-label="移动议题">
           <button
@@ -114,6 +129,18 @@ export function TaskCard({
         <span className={`priority-icon priority-icon-${task.priority}`} title={PRIORITY_LABELS[task.priority]}>
           <LinearPriorityIcon priority={task.priority} />
         </span>
+        {activeBlockers > 0 && (
+          <span className="blocked-by-count" title={`被 ${activeBlockers} 个未完成议题阻塞`}>
+            <LinearIcon name="alert" />
+            {activeBlockers}
+          </span>
+        )}
+        {subIssueTotal > 0 && (
+          <span className="sub-issue-progress-chip" title={`${completedSubIssues}/${subIssueTotal} 个子议题已完成`}>
+            <span className="sub-issue-progress" aria-hidden="true" />
+            {completedSubIssues}/{subIssueTotal}
+          </span>
+        )}
         {task.labels.slice(0, 2).map((label) => (
           <span className="label-chip" key={label}>{label}</span>
         ))}

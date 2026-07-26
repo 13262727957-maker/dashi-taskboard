@@ -14,28 +14,29 @@ const workflowStoreSource = await readFile(new URL("../web/src/workflowStore.ts"
 const databaseSource = await readFile(new URL("../server/database.mjs", import.meta.url), "utf8");
 const serverSource = await readFile(new URL("../server/app.mjs", import.meta.url), "utf8");
 const styles = await readFile(new URL("../web/src/components/workflow.css", import.meta.url), "utf8");
+const globalStyles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 
-test("the board selector exposes issue and workflow views without the old placeholders", () => {
-  assert.match(appSource, /type BoardView = "issues" \| "workflow"/);
-  assert.match(appSource, /useState<BoardView>\("issues"\)/);
-  assert.match(appSource, />\s*议题看板\s*<\/button>/);
-  assert.match(appSource, />\s*流程看板\s*<\/button>/);
-  assert.match(appSource, /aria-pressed=\{boardView === "issues"\}/);
-  assert.match(appSource, /aria-pressed=\{boardView === "workflow"\}/);
+test("the taskboard exposes only the issue board and cannot retain a hidden workflow view", () => {
+  assert.match(
+    appSource,
+    /<div className="view-tabs" aria-label="看板视图">[\s\S]*?<span className="view-tab active" aria-current="page">[\s\S]*?议题看板[\s\S]*?<\/span>[\s\S]*?<\/div>/,
+  );
+  assert.doesNotMatch(appSource, />\s*流程看板\s*</);
+  assert.doesNotMatch(appSource, /type BoardView|useState<BoardView>|setBoardView|selectBoardView/);
   assert.doesNotMatch(appSource, /<span>活跃<\/span>|<span>积压事项<\/span>|所有议题|add-view/);
 });
 
-test("workflow view lazy-loads a constrained React Flow editor while issue tools stay on the issue board", () => {
-  assert.match(appSource, /boardView === "issues" && <div className="toolbar-tools">/);
-  assert.match(appSource, /lazy\(\(\) => import\("\.\/components\/WorkflowBoard"\)/);
-  assert.match(appSource, /boardView === "workflow" \? \([\s\S]*?<WorkflowBoard/);
+test("the issue board stays mounted while the workflow editor implementation remains intact", () => {
+  assert.match(appSource, /<div className="toolbar-tools">/);
+  assert.doesNotMatch(appSource, /lazy\(\(\) => import\("\.\/components\/WorkflowBoard"\)|<WorkflowBoard/);
+  assert.match(workflowSource, /export function WorkflowBoard\(/);
   assert.match(workflowSource, /from "@xyflow\/react"/);
   assert.match(workflowSource, /aria-label="流程编排区"/);
   assert.match(workflowSource, /nodesConnectable=\{false\}/);
   assert.match(workflowSource, /connectOnClick=\{false\}/);
   assert.doesNotMatch(workflowSource, /MiniMap|onConnect=|aria-label="节点库"|workflow-library/);
   assert.match(styles, /\.workflow-board/);
-  assert.match(styles, /\.workflow-step-card/);
+  assert.match(globalStyles, /\.workflow-node/);
   assert.doesNotMatch(appSource, /workflow-board-placeholder|具体功能将在后续开发/);
 });
 
@@ -69,10 +70,10 @@ test("the workflow catalog retains the real trigger, capability, API, integratio
 });
 
 test("workflow tabs switch independent sequences, create blank workflows and rename in place", () => {
-  assert.match(workflowSource, /interface WorkflowSnapshot[\s\S]*?nodes: WorkflowCanvasNode\[\][\s\S]*?edges: Edge\[\][\s\S]*?selectedNodeId/);
+  assert.match(workflowSource, /interface WorkflowSnapshot[\s\S]*?nodes: WorkflowCanvasNode\[\][\s\S]*?flow: WorkflowFlow[\s\S]*?selectedNodeId/);
   assert.match(workflowSource, /const \[workflowTabs, setWorkflowTabs\] = useState<WorkflowTab\[\]>/);
-  assert.match(workflowSource, /function activateWorkflow[\s\S]*?setNodes\(snapshot\.nodes\)[\s\S]*?setEdges\(snapshot\.edges\)/);
-  assert.match(workflowSource, /function createWorkflow[\s\S]*?nodes: \[\][\s\S]*?edges: \[\][\s\S]*?setWorkflowTabs/);
+  assert.match(workflowSource, /function activateWorkflow[\s\S]*?setNodes\(snapshot\.nodes\)[\s\S]*?setFlow\(snapshot\.flow\)/);
+  assert.match(workflowSource, /function createWorkflow[\s\S]*?createWorkflowFlow\(\)[\s\S]*?nodes: \[\][\s\S]*?flow: emptyFlow[\s\S]*?setWorkflowTabs/);
   assert.match(workflowSource, /className="workflow-tabs" role="tablist"/);
   assert.match(workflowSource, /role="tab"[\s\S]*?aria-selected=\{active\}/);
   assert.match(workflowSource, /function handleWorkflowTabKeyDown[\s\S]*?ArrowLeft[\s\S]*?ArrowRight[\s\S]*?Home[\s\S]*?End/);
@@ -84,8 +85,78 @@ test("workflow tabs switch independent sequences, create blank workflows and ren
   assert.doesNotMatch(styles, /\.workflow-tab\.is-active::after/);
 });
 
+test("workflow tab context menu opens at the pointer and closes through established interactions", () => {
+  assert.match(
+    workflowSource,
+    /function openWorkflowTabMenu[\s\S]*?event\.preventDefault\(\)[\s\S]*?clientX[\s\S]*?clientY/,
+  );
+  assert.match(
+    workflowSource,
+    /onContextMenu=\{\(event\) => openWorkflowTabMenu\(event, workflow\.id\)\}/,
+  );
+  assert.match(
+    workflowSource,
+    /className="task-context-menu workflow-tab-context-menu"[\s\S]*?role="menu"[\s\S]*?role="menuitem"[\s\S]*?<LinearIcon name="trash" \/>[\s\S]*?删除流程/,
+  );
+  assert.match(
+    workflowSource,
+    /getBoundingClientRect\(\)[\s\S]*?Math\.max\(8, Math\.min\(workflowTabMenu\.x, window\.innerWidth - rect\.width - 8\)\)[\s\S]*?Math\.max\(8, Math\.min\(workflowTabMenu\.y, window\.innerHeight - rect\.height - 8\)\)/,
+  );
+  assert.match(
+    workflowSource,
+    /document\.addEventListener\("pointerdown", closeWorkflowTabMenuFromOutside\)[\s\S]*?event\.key === "Escape"[\s\S]*?setWorkflowTabMenu\(null\)/,
+  );
+  assert.match(
+    workflowSource,
+    /function activateWorkflow[\s\S]*?setWorkflowTabMenu\(null\)[\s\S]*?if \(workflowId === activeWorkflowId\) return/,
+  );
+});
+
+test("workflow deletion preserves inactive state, selects the right active neighbor and persists snapshots", () => {
+  const deleteWorkflowSource = workflowSource.slice(
+    workflowSource.indexOf("  function deleteWorkflow("),
+    workflowSource.indexOf("  function handleWorkflowTabKeyDown("),
+  );
+  const inactiveDeleteBranch = deleteWorkflowSource.match(
+    /if \(workflowId !== activeWorkflowId\) \{([\s\S]*?)\n    \}/,
+  )?.[1] ?? "";
+  assert.match(
+    workflowSource,
+    /function deleteWorkflow[\s\S]*?if \(workflowTabs\.length <= 1\) return/,
+  );
+  assert.match(
+    workflowSource,
+    /const workflowIndex = workflowTabs\.findIndex[\s\S]*?workflowSnapshotsRef\.current\.delete\(workflowId\)/,
+  );
+  assert.match(
+    workflowSource,
+    /if \(workflowId !== activeWorkflowId\) \{[\s\S]*?setWorkflowTabs\(nextTabs\)[\s\S]*?setWorkflowTabMenu\(null\)[\s\S]*?return;[\s\S]*?\}/,
+  );
+  assert.doesNotMatch(
+    inactiveDeleteBranch,
+    /setActiveWorkflowId|setNodes|setFlow|setSelectedNodeId|setPickerTarget|setRenamingWorkflowId/,
+  );
+  assert.match(
+    workflowSource,
+    /const replacement = workflowTabs\[workflowIndex \+ 1\] \?\? workflowTabs\[workflowIndex - 1\][\s\S]*?normalizeSnapshot\(workflowSnapshotsRef\.current\.get\(replacement\.id\)!\)/,
+  );
+  assert.match(
+    workflowSource,
+    /setActiveWorkflowId\(replacement\.id\)[\s\S]*?setNodes\(snapshot\.nodes\)[\s\S]*?setFlow\(snapshot\.flow\)[\s\S]*?setSelectedNodeId\(null\)[\s\S]*?setPickerTarget\(null\)[\s\S]*?setRenamingWorkflowId\(null\)/,
+  );
+  assert.match(
+    workflowSource,
+    /disabled=\{workflowTabs\.length === 1\}[\s\S]*?aria-disabled=\{workflowTabs\.length === 1\}/,
+  );
+  assert.match(
+    workflowSource,
+    /serializeWorkflowWorkspace\([\s\S]*?workflowTabs,[\s\S]*?activeWorkflowId,[\s\S]*?workflowSnapshotsRef\.current[\s\S]*?saveWorkflowWorkspace\(/,
+  );
+  assert.doesNotMatch(workflowSource, /localStorage|deleteWorkflowWorkspace|confirm\(/);
+});
+
 test("workflow edits persist per project and continue to synchronize through the shared service", () => {
-  assert.match(appSource, /<WorkflowBoard[\s\S]*?projectId=\{selectedProject\?\.id \?\? "local"\}/);
+  assert.match(workflowSource, /export function WorkflowBoard\(/);
   assert.match(databaseSource, /CREATE TABLE IF NOT EXISTS workflow_workspaces/);
   assert.match(databaseSource, /saveWorkflowWorkspace\(projectId, expectedVersion, workspace\)/);
   assert.match(serverSource, /\/workflow-workspace/);
@@ -106,7 +177,8 @@ test("issue workflow choices read the shared service workspace without loading R
   assert.match(workflowStoreSource, /export function workflowOptionsFromWorkspace\(workspace: unknown\)/);
   assert.match(appSource, /getWorkflowWorkspace<unknown>\(projectId, signal\)/);
   assert.match(appSource, /event\.type === "workflow\.updated"/);
-  assert.match(appSource, /setWorkflowRevision/);
+  assert.match(appSource, /refreshWorkflowOptions\(selectedProjectId\)/);
+  assert.doesNotMatch(appSource, /WorkflowBoard|@xyflow\/react/);
   assert.doesNotMatch(appSource, /from "\.\/components\/WorkflowBoard".*workflowStorageKey/);
 });
 
@@ -156,17 +228,20 @@ test("the execution plan keeps compact ordered items with drag preview and settl
   assert.match(workflowSource, /function reorderPlanItem/);
   assert.match(workflowSource, /setSettlingNodeId\(node\.id\)/);
   assert.match(workflowSource, /onNodeDragStart=\{onNodeDragStart\}[\s\S]*?onNodeDrag=\{onNodeDrag\}[\s\S]*?onNodeDragStop=\{onNodeDragStop\}/);
-  assert.match(workflowNodeSource, /workflow-plan-item/);
+  assert.match(workflowNodeSource, /workflow-node-compact/);
   assert.match(workflowNodeSource, /is-drag-shifted[\s\S]*?is-settling[\s\S]*?translate3d\(0, \$\{data\.dragShiftY\}px, 0\)/);
-  assert.match(styles, /\.workflow-plan-item \{[\s\S]*?transform 170ms cubic-bezier\(0\.2, 0\.8, 0\.2, 1\)/);
-  assert.match(styles, /\.workflow-plan-item\.is-settling,[\s\S]*?\.workflow-step-card\.is-settling/);
+  assert.match(globalStyles, /\.workflow-node-compact \{[\s\S]*?transform 160ms cubic-bezier\(0\.2, 0\.8, 0\.2, 1\)/);
+  assert.match(globalStyles, /\.workflow-node-compact\.is-settling/);
 });
 
 test("steps are inserted from sequence connectors through a searchable grouped chooser", () => {
   assert.match(workflowSource, /const openStepPicker = useCallback/);
-  assert.match(workflowSource, /workflowSequenceEdges\(rootStepIds\)/);
-  assert.match(workflowSource, /onInsert: \(\) => openStepPicker\(edge\.source\)/);
-  assert.match(workflowNodeSource, /aria-label="在流程末尾添加步骤"/);
+  assert.match(workflowSource, /deriveWorkflowLayout\(flow, nodes\)/);
+  assert.match(workflowSource, /edge\.data\.insertion[\s\S]*?openStepPicker\([\s\S]*?sequenceRef[\s\S]*?index/);
+  assert.match(
+    workflowSource,
+    /insertWorkflowNode\([\s\S]*?pickerTarget\.sequenceRef[\s\S]*?pickerTarget\.index/,
+  );
   assert.match(workflowSource, /aria-label="添加第一个步骤"/);
   assert.match(pickerSource, /role="dialog"/);
   assert.match(pickerSource, /placeholder="搜索应用或动作…"/);

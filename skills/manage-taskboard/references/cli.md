@@ -77,6 +77,37 @@ Use `issue move` to set `in_progress` before implementation and `in_review` afte
 
 Use either `--git-branch` or `--worktree-path`/`--worktree-branch`; an issue has only one development context. Issue JSON stores it as `developmentContext`, either `{ "type": "branch", "branch": "..." }` or `{ "type": "worktree", "path": "...", "branch": "..." }`. Its singular `threadId` is the Codex conversation that most recently created or changed the issue itself. Recurrence requires a due date.
 
+## Issue relations
+
+Read the anchor issue immediately before adding or removing a relation and use its current version. Relation writes require Codex conversation attribution like every other issue write.
+
+```bash
+taskctl issue relation add ISSUE_ID \
+  --type parent \
+  --issue PARENT_ISSUE_ID \
+  [--thread-id ID] \
+  [--if-version N] \
+  [--json]
+
+taskctl issue relation add ISSUE_ID \
+  --type blocks|blocked_by|related \
+  --issue RELATED_ISSUE_ID \
+  [--thread-id ID] \
+  [--if-version N] \
+  [--json]
+
+taskctl issue relation remove ISSUE_ID \
+  --type parent|blocks|blocked_by|related \
+  --issue RELATED_ISSUE_ID \
+  [--thread-id ID] \
+  [--if-version N] \
+  [--json]
+```
+
+For `--type parent`, `ISSUE_ID` is the child and `PARENT_ISSUE_ID` is its parent. Adding another parent replaces the child's current parent atomically. To add an existing issue as a sub-issue of `LOCAL-6`, anchor the command on the child and pass `--issue LOCAL-6`.
+
+For `blocks`, the anchor issue blocks the related issue. For `blocked_by`, the related issue blocks the anchor. `related` is symmetric. Self-relations, duplicates, parent cycles, and relations between different projects are rejected.
+
 ## Issue comments
 
 Use the issue id to read or append comments. Comment updates and deletes require the latest comment `version` returned by `comment list`.

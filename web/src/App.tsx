@@ -1,6 +1,4 @@
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -11,6 +9,7 @@ import {
 } from "react";
 import {
   ApiError,
+  addTaskRelation,
   archiveTask as archiveTaskRequest,
   createProject as createProjectRequest,
   createTask as createTaskRequest,
@@ -21,6 +20,7 @@ import {
   listProjects,
   listTasks,
   moveTask as moveTaskRequest,
+  removeTaskRelation,
   restoreTask as restoreTaskRequest,
   setCurrentUserActor,
   uploadAttachment,
@@ -38,6 +38,7 @@ import { TaskContextMenu } from "./components/TaskContextMenu";
 import { TaskDetail } from "./components/TaskDetail";
 import { TaskEditor } from "./components/TaskEditor";
 import { TaskFilterMenu } from "./components/TaskFilterMenu";
+import { buildIssueUrl, readIssueIdentifier } from "./issueRoute";
 import { DEFAULT_LABELS } from "./labels";
 import {
   EMPTY_TASK_FILTERS,
@@ -52,6 +53,7 @@ import {
   type ActorIdentity,
   type DevelopmentScan,
   type HostContext,
+  type IssueRelationType,
   type Project,
   type Task,
   type TaskDraft,
@@ -66,11 +68,6 @@ import {
 
 type ConnectionState = "connecting" | "live" | "reconnecting";
 type Theme = "light" | "dark";
-type BoardView = "issues" | "workflow";
-
-const WorkflowBoard = lazy(() => import("./components/WorkflowBoard").then((module) => ({
-  default: module.WorkflowBoard,
-})));
 
 interface EditorState {
   task: Task | null;
@@ -123,6 +120,7 @@ const EVENT_NAMES = [
   "task.moved",
   "task.archived",
   "task.restored",
+  "task.relation.updated",
   "comment.created",
   "comment.updated",
   "comment.deleted",
@@ -243,12 +241,12 @@ export function App() {
   const [filters, setFilters] = useState(readTaskFilters);
   const [showEmptyColumns, setShowEmptyColumns] = useState(readShowEmptyColumns);
   const [columnVisibilityByProject, setColumnVisibilityByProject] = useState(readColumnVisibilityByProject);
-  const [boardView, setBoardView] = useState<BoardView>("issues");
   const [editor, setEditor] = useState<EditorState | null>(null);
-  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [detailTaskIdentifier, setDetailTaskIdentifier] = useState<string | null>(
+    () => readIssueIdentifier(window.location.search),
+  );
   const [commentsRevision, setCommentsRevision] = useState(0);
   const [attachmentsRevision, setAttachmentsRevision] = useState(0);
-  const [workflowRevision, setWorkflowRevision] = useState(0);
   const [workflowOptions, setWorkflowOptions] = useState<WorkflowOption[]>(DEFAULT_WORKFLOW_OPTIONS);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
@@ -292,9 +290,10 @@ export function App() {
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
   const currentUser = hostContext?.user ?? DEFAULT_USER_ACTOR;
   const selectedDeviceWorkspacePath = deviceWorkspacePaths[selectedProjectId];
-  const detailTask = detailTaskId
-    ? tasks.find((task) => task.id === detailTaskId) ?? null
+  const detailTask = detailTaskIdentifier
+    ? tasks.find((task) => task.identifier === detailTaskIdentifier) ?? null
     : null;
+  const detailTaskId = detailTask?.id ?? null;
   const contextMenuTask = contextMenu
     ? tasks.find((task) => task.id === contextMenu.taskId) ?? null
     : null;
@@ -343,6 +342,44 @@ export function App() {
     [projectChoices],
   );
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  function openTaskDetail(task: Pick<Task, "identifier" | "projectId">) {
+    closeContextMenu();
+    setProjectMenuOpen(false);
+    setDetailTaskIdentifier(task.identifier);
+    const currentIssue = readIssueIdentifier(window.location.search);
+    const boardUrl = buildIssueUrl(window.location.href, task.projectId, null);
+    if (!currentIssue) {
+      window.history.replaceState(window.history.state, "", boardUrl);
+    }
+    const detailUrl = buildIssueUrl(
+      currentIssue ? window.location.href : boardUrl.href,
+      task.projectId,
+      task.identifier,
+    );
+    window.history.pushState(window.history.state, "", detailUrl);
+  }
+
+  function closeTaskDetail() {
+    setDetailTaskIdentifier(null);
+    const url = buildIssueUrl(window.location.href, selectedProjectId || null, null);
+    window.history.replaceState(window.history.state, "", url);
+  }
+
+  useEffect(() => {
+    function syncRouteFromLocation() {
+      const url = new URL(window.location.href);
+      const routeProjectId = url.searchParams.get("project") ?? "";
+      setDetailTaskIdentifier(readIssueIdentifier(url.search));
+      if (routeProjectId === selectedProjectId) return;
+      setSelectedProjectId(routeProjectId);
+      if (routeProjectId) window.localStorage.setItem(LAST_PROJECT_KEY, routeProjectId);
+      else window.localStorage.removeItem(LAST_PROJECT_KEY);
+    }
+
+    window.addEventListener("popstate", syncRouteFromLocation);
+    return () => window.removeEventListener("popstate", syncRouteFromLocation);
+  }, [selectedProjectId]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -611,7 +648,6 @@ export function App() {
       }
       if (!affectsSelectedProject) return;
       if (event.type === "workflow.updated") {
-        setWorkflowRevision((current) => current + 1);
         if (selectedProjectId) void refreshWorkflowOptions(selectedProjectId);
         return;
       }
@@ -712,23 +748,22 @@ export function App() {
         && !event.metaKey
         && !event.ctrlKey
         && selectedProjectId
-        && boardView === "issues"
       ) {
         event.preventDefault();
         setEditor({ task: null, status: "backlog" });
       }
-      if (event.key === "/" && !detailTaskId && selectedProjectId && boardView === "issues") {
+      if (event.key === "/" && !detailTaskId && selectedProjectId) {
         event.preventDefault();
         document.getElementById("task-search")?.focus();
       }
       if (event.key === "Escape" && detailTaskId) {
-        setDetailTaskId(null);
+        closeTaskDetail();
       }
     }
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [boardView, contextMenu, detailTaskId, editor, projectMenuOpen, selectedProjectId]);
+  }, [contextMenu, detailTaskId, editor, projectMenuOpen, selectedProjectId]);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter(
@@ -782,11 +817,6 @@ export function App() {
       window.localStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(next));
       return next;
     });
-  }
-
-  function selectBoardView(view: BoardView) {
-    closeContextMenu();
-    setBoardView(view);
   }
 
   async function saveEditor(draft: TaskDraft, attachments: File[]) {
@@ -975,6 +1005,33 @@ export function App() {
     }
   }
 
+  async function mutateTaskRelation(
+    action: "add" | "remove",
+    task: Task,
+    type: IssueRelationType,
+    relatedTaskId: string,
+  ) {
+    setActionError(null);
+    try {
+      const result = action === "add"
+        ? await addTaskRelation(task, type, relatedTaskId)
+        : await removeTaskRelation(task, type, relatedTaskId);
+      setTasks((current) => sortTasks(current.map((candidate) => {
+        if (candidate.id === result.task.id) return result.task;
+        if (candidate.id === result.relatedTask.id) return result.relatedTask;
+        return candidate;
+      })));
+      if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
+      return result;
+    } catch (error) {
+      setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
+        ? "该议题已在其他位置更新，看板已重新同步。"
+        : errorMessage(error));
+      if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
+      throw error;
+    }
+  }
+
   async function duplicateTask(task: Task) {
     setActionError(null);
     try {
@@ -1084,7 +1141,7 @@ export function App() {
   function changeProject(projectId: string) {
     closeContextMenu();
     setProjectMenuOpen(false);
-    setDetailTaskId(null);
+    setDetailTaskIdentifier(null);
     setSelectedProjectId(projectId);
     window.localStorage.setItem(LAST_PROJECT_KEY, projectId);
     setSearch("");
@@ -1092,15 +1149,14 @@ export function App() {
     setActionError(null);
     undoStackRef.current = [];
     setUndoNotice(null);
-    const url = new URL(window.location.href);
-    url.searchParams.set("project", projectId);
+    const url = buildIssueUrl(window.location.href, projectId, null);
     window.history.replaceState(null, "", url);
   }
 
   function returnToProjectHome() {
     closeContextMenu();
     setProjectMenuOpen(false);
-    setDetailTaskId(null);
+    setDetailTaskIdentifier(null);
     setSelectedProjectId("");
     window.localStorage.removeItem(LAST_PROJECT_KEY);
     setSearch("");
@@ -1108,8 +1164,7 @@ export function App() {
     setActionError(null);
     undoStackRef.current = [];
     setUndoNotice(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete("project");
+    const url = buildIssueUrl(window.location.href, null, null);
     window.history.replaceState(null, "", url);
     void loadProjectList();
   }
@@ -1228,7 +1283,7 @@ export function App() {
                   type="button"
                   aria-label="返回议题看板"
                   title="返回议题看板 (Esc)"
-                  onClick={() => setDetailTaskId(null)}
+                  onClick={closeTaskDetail}
                 >
                   <LinearIcon name="chevronLeft" />
                 </button>
@@ -1338,7 +1393,7 @@ export function App() {
                 </span>
               </span>
             )}
-            {selectedProjectId && boardView === "issues" && (
+            {selectedProjectId && (
               <button
                 className="icon-button header-create-button"
                 type="button"
@@ -1357,24 +1412,11 @@ export function App() {
 
         {selectedProjectId && !detailTask && <div className="board-toolbar">
           <div className="view-tabs" aria-label="看板视图">
-            <button
-              className={`view-tab${boardView === "issues" ? " active" : ""}`}
-              type="button"
-              aria-pressed={boardView === "issues"}
-              onClick={() => selectBoardView("issues")}
-            >
+            <span className="view-tab active" aria-current="page">
               议题看板
-            </button>
-            <button
-              className={`view-tab${boardView === "workflow" ? " active" : ""}`}
-              type="button"
-              aria-pressed={boardView === "workflow"}
-              onClick={() => selectBoardView("workflow")}
-            >
-              流程看板
-            </button>
+            </span>
           </div>
-          {boardView === "issues" && <div className="toolbar-tools">
+          <div className="toolbar-tools">
             <label className={`search-field${search ? " has-value" : ""}`} title="搜索议题 (/)" >
               <LinearIcon className="search-icon" name="search" />
               <span className="sr-only">搜索议题</span>
@@ -1409,7 +1451,7 @@ export function App() {
                 <LinearIcon name="close" />
               </button>
             )}
-          </div>}
+          </div>
         </div>}
 
         {(loadError || actionError) && (
@@ -1511,6 +1553,7 @@ export function App() {
           <TaskDetail
             key={detailTask.id}
             task={detailTask}
+            tasks={tasks}
             currentUser={currentUser}
             availableLabels={availableLabels}
             workflows={workflowOptions}
@@ -1519,27 +1562,19 @@ export function App() {
             commentsRevision={commentsRevision}
             attachmentsRevision={attachmentsRevision}
             onUpdate={(current, changes) => updateTaskProperties(current, changes)}
+            onOpenTask={openTaskDetail}
+            onAddRelation={(current, type, relatedTaskId) => (
+              mutateTaskRelation("add", current, type, relatedTaskId)
+            )}
+            onRemoveRelation={(current, type, relatedTaskId) => (
+              mutateTaskRelation("remove", current, type, relatedTaskId)
+            )}
             onOpenThread={openThread}
             onOpenInThread={openTaskInThread}
             openingThread={openingThreadTaskId === detailTask.id}
             onError={setActionError}
             onAnnounce={setAnnouncement}
           />
-        ) : boardView === "workflow" ? (
-          <Suspense fallback={<div className="workflow-board-loading">正在打开流程看板…</div>}>
-            <WorkflowBoard
-              key={selectedProject?.id ?? "local"}
-              projectId={selectedProject?.id ?? "local"}
-              projectName={selectedProject?.name ?? "当前项目"}
-              workspacePath={
-                selectedDeviceWorkspacePath
-                ?? developmentScan.workspacePath
-                ?? hostContext?.workspacePath
-              }
-              revision={workflowRevision}
-              onWorkflowsChange={setWorkflowOptions}
-            />
-          </Suspense>
         ) : tasksLoading && !hasLoadedTasks ? (
           <div className="loading-board" aria-label="Loading issues" aria-busy="true">
             {TASK_STATUSES.map((status) => (
@@ -1578,7 +1613,7 @@ export function App() {
                   settlingTaskId={settlingTaskId}
                   contextMenuTaskId={contextMenu?.taskId ?? null}
                   onCreate={(initialStatus) => setEditor({ task: null, status: initialStatus })}
-                  onEdit={(task) => setDetailTaskId(task.id)}
+                  onEdit={openTaskDetail}
                   onContextMenu={(task, position) => setContextMenu({ taskId: task.id, ...position })}
                   onMove={(task, destination) => void moveTask(task, destination)}
                   onDragStart={(task, height) => {
@@ -1635,7 +1670,7 @@ export function App() {
           position={{ x: contextMenu.x, y: contextMenu.y }}
           labels={availableLabels}
           onClose={closeContextMenu}
-          onEdit={(task) => setDetailTaskId(task.id)}
+          onEdit={openTaskDetail}
           onStatusChange={(task, status) => void moveTask(task, status)}
           onPriorityChange={(task, nextPriority) => void updateTaskProperties(
             task,
