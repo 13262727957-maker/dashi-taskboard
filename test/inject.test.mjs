@@ -1,18 +1,23 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import vm from "node:vm";
+
+import { parseTaskboardAutomationHostRequest } from "../shared/taskboard-automation.mjs";
 
 const sourceUrl = new URL("../inject/codex-taskboard.user.js", import.meta.url);
 const source = await readFile(sourceUrl, "utf8");
 const webStyles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 const webApp = await readFile(new URL("../web/src/App.tsx", import.meta.url), "utf8");
 
-test("injection is an idempotent IIFE guarded by a versioned sentinel", () => {
+test("injection is an idempotent IIFE guarded by its current source hash", () => {
   assert.match(source, /^\(\(\) => \{/);
-  assert.match(source, /const VERSION = "0\.6\.7"/);
+  assert.match(source, /const VERSION = "0\.6\.8"/);
+  assert.match(source, /const SOURCE_HASH = window\.__CODEX_TASKBOARD_SOURCE_HASH__/);
   assert.match(source, /const SENTINEL_KEY = "__codexTaskboardInjection__"/);
-  assert.match(source, /previous\?\.version === VERSION/);
+  assert.match(source, /previous\?\.sourceHash === SOURCE_HASH/);
   assert.match(source, /previous\.refresh\(\);\s*return;/);
+  assert.match(source, /sourceHash: SOURCE_HASH/);
   assert.match(source, /window\[SENTINEL_KEY\] = api/);
 });
 
@@ -154,7 +159,7 @@ test("iframe messages require both the exact origin and source window", () => {
 test("the iframe automation contract is forwarded through the fixed host binding", () => {
   assert.match(source, /message\.type === "taskboard:automation-request"/);
   assert.match(source, /function handleAutomationRequest\(payload\)/);
-  assert.match(source, /requestHost\("automation", \{/);
+  assert.match(source, /requestHost\(\s*"automation",\s*buildAutomationHostPayload\(payload\),\s*\)/);
   assert.match(source, /operation: payload\.operation/);
   assert.match(source, /taskboardProjectId: payload\.taskboardProjectId/);
   assert.match(source, /codexProjectId: payload\.codexProjectId/);
@@ -167,6 +172,40 @@ test("the iframe automation contract is forwarded through the fixed host binding
   assert.match(source, /items: response\.items/);
   assert.match(source, /requestId,\s*ok: false,\s*error:/);
   assert.match(source, /binding\(JSON\.stringify\(\{ \.\.\.payload, id, action \}\)\)/);
+});
+
+test("complete App automation payloads cross the injected forwarder into the current parser", () => {
+  const functionSource = source.slice(
+    source.indexOf("function buildAutomationHostPayload"),
+    source.indexOf("\n\n  async function handleAutomationRequest"),
+  );
+  assert.ok(functionSource.startsWith("function buildAutomationHostPayload"));
+  const buildAutomationHostPayload = vm.runInNewContext(`(${functionSource})`);
+  const basePayload = {
+    requestId: "request-1",
+    taskboardProjectId: "local",
+    codexProjectId: "codex-project",
+    projectName: "Local",
+    workspacePath: "/tmp/local-project",
+    skillPath: "/tmp/manage-taskboard/SKILL.md",
+    automationId: "automation-1",
+    intervalMinutes: 10,
+    model: "gpt-5.6-sol",
+    reasoningEffort: "ultra",
+  };
+
+  for (const operation of ["list", "pause", "ensure-active"]) {
+    const forwarded = {
+      id: `host-${operation}`,
+      action: "automation",
+      ...buildAutomationHostPayload({ ...basePayload, operation }),
+    };
+    assert.deepEqual(
+      parseTaskboardAutomationHostRequest(forwarded),
+      forwarded,
+      `${operation} must retain model and reasoningEffort`,
+    );
+  }
 });
 
 test("only a loopback Taskboard iframe can request native automation", () => {

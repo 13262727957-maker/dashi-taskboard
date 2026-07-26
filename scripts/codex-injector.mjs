@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -14,6 +14,7 @@ import {
 import {
   findResidentInjectorPids,
   handleHostBindingPayload,
+  reconcileInjectionRuntime,
   restartResidentInjector,
 } from "./codex-injector-runtime.mjs";
 
@@ -27,6 +28,8 @@ const taskboardPageUrl = `${taskboardOrigin}/?host=codex`;
 const hostBindingName = "__codexTaskboardHostV1";
 const hostHeartbeatName = "__codexTaskboardHostHeartbeatV1";
 const hostStartupTokenName = "__codexTaskboardHostStartupTokenV1";
+const injectionSourceHashName = "__CODEX_TASKBOARD_SOURCE_HASH__";
+const injectionScriptIdentifierName = "__CODEX_TASKBOARD_SCRIPT_IDENTIFIER__";
 const codexAutomationMethods = new Set([
   "list-automations",
   "automation-create",
@@ -384,7 +387,7 @@ async function stopResidentInjector(pid) {
   throw new Error(`Timed out stopping resident Taskboard injector ${pid}`);
 }
 
-async function waitForResidentInjectorReady(port, pid, startupToken) {
+async function waitForResidentInjectorReady(port, pid, startupToken, expectedSourceHash) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     try {
@@ -397,13 +400,15 @@ async function waitForResidentInjectorReady(port, pid, startupToken) {
           const readiness = await cdp.send("Runtime.evaluate", {
             expression: `({
               token: window[${JSON.stringify(hostStartupTokenName)}],
-              taskboardMounted: Boolean(document.getElementById("codex-taskboard-frame"))
+              taskboardMounted: Boolean(document.getElementById("codex-taskboard-frame")),
+              sourceHash: window.__codexTaskboardInjection__?.sourceHash || null
             })`,
             returnByValue: true,
           });
           if (
             readiness.result.value?.token === startupToken
             && readiness.result.value.taskboardMounted
+            && readiness.result.value.sourceHash === expectedSourceHash
           ) return;
         } finally {
           cdp.close();
@@ -416,6 +421,7 @@ async function waitForResidentInjectorReady(port, pid, startupToken) {
 }
 
 async function restartResidentInjectorForRefresh(port) {
+  const { sourceHash } = await currentInjectionSource();
   return restartResidentInjector(port, {
     findResidents: residentInjectorPids,
     stopResident: stopResidentInjector,
@@ -423,7 +429,9 @@ async function restartResidentInjectorForRefresh(port) {
     startResident: (targetPort, startupToken) => (
       startResidentInjector(targetPort, false, true, startupToken)
     ),
-    waitUntilReady: waitForResidentInjectorReady,
+    waitUntilReady: (targetPort, pid, startupToken) => (
+      waitForResidentInjectorReady(targetPort, pid, startupToken, sourceHash)
+    ),
   });
 }
 
@@ -765,6 +773,8 @@ async function readInjectionStatus(cdp) {
   const status = await cdp.send("Runtime.evaluate", {
     expression: `({
       version: window.__codexTaskboardInjection__?.version || null,
+      sourceHash: window.__codexTaskboardInjection__?.sourceHash || null,
+      scriptIdentifier: window[${JSON.stringify(injectionScriptIdentifierName)}] || null,
       entryMounted: Boolean(document.getElementById("codex-taskboard-entry")),
       pageMounted: Boolean(document.getElementById("codex-taskboard-page")),
       pageVisible: document.getElementById("codex-taskboard-page")?.hidden === false,
@@ -775,12 +785,16 @@ async function readInjectionStatus(cdp) {
   return status.result.value;
 }
 
-async function waitForInjectionStatus(cdp, shouldOpen, timeoutMs) {
+async function waitForInjectionStatus(cdp, shouldOpen, expectedSourceHash, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let status = await readInjectionStatus(cdp);
   while (
     Date.now() < deadline
-    && (!status.entryMounted || (shouldOpen && (!status.pageVisible || !status.frameUrl)))
+    && (
+      status.sourceHash !== expectedSourceHash
+      || !status.entryMounted
+      || (shouldOpen && (!status.pageVisible || !status.frameUrl))
+    )
   ) {
     await new Promise((resolve) => setTimeout(resolve, 250));
     status = await readInjectionStatus(cdp);
@@ -788,9 +802,37 @@ async function waitForInjectionStatus(cdp, shouldOpen, timeoutMs) {
   return status;
 }
 
+async function evaluateInjectionSource(cdp, source) {
+  const evaluation = await cdp.send("Runtime.evaluate", {
+    expression: source,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  if (evaluation.exceptionDetails) {
+    throw new Error(
+      evaluation.exceptionDetails.exception?.description || "Taskboard injection failed",
+    );
+  }
+}
+
+async function publishInjectionScriptIdentifier(cdp, scriptIdentifier) {
+  await cdp.send("Runtime.evaluate", {
+    expression: `window[${JSON.stringify(injectionScriptIdentifierName)}] = ${JSON.stringify(scriptIdentifier)}`,
+    returnByValue: true,
+  });
+}
+
+async function registerInjectionSource(cdp, source) {
+  const registration = await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `${source}\n//# sourceURL=codex-taskboard.user.js`,
+  });
+  return registration.identifier;
+}
+
 async function injectTarget(
   target,
   source,
+  sourceHash,
   shouldOpen,
   screenshotPath,
   keepAlive,
@@ -807,30 +849,51 @@ async function injectTarget(
     await cdp.send("Runtime.enable");
     if (keepAlive) await installTaskboardHostBinding(cdp, supervisor);
     if (keepAlive && attachExisting) {
-      const status = await readInjectionStatus(cdp);
-      if (status.version) {
-        await publishHostHeartbeat(cdp, startupToken);
-        retained = true;
-        return {
-          result: { ...status, cspBypassed: true, frameLoaded: Boolean(status.frameUrl) },
-          connection: cdp,
-        };
-      }
+      const currentStatus = await readInjectionStatus(cdp);
+      const reconciled = await reconcileInjectionRuntime({
+        currentStatus,
+        source,
+        sourceHash,
+        removeRegisteredSource: (identifier) => cdp.send(
+          "Page.removeScriptToEvaluateOnNewDocument",
+          { identifier },
+        ),
+        registerCurrentSource: (currentSource) => registerInjectionSource(cdp, currentSource),
+        evaluateCurrentSource: (currentSource) => evaluateInjectionSource(cdp, currentSource),
+        publishRegistration: (identifier) => publishInjectionScriptIdentifier(cdp, identifier),
+        reopen: () => cdp.send("Runtime.evaluate", {
+          expression: "window.__codexTaskboardInjection__?.open()",
+          returnByValue: true,
+        }),
+      });
+      cdp.on("Page.loadEventFired", () => (
+        publishInjectionScriptIdentifier(cdp, reconciled.scriptIdentifier)
+      ));
+      await publishHostHeartbeat(cdp, startupToken);
+      const status = await waitForInjectionStatus(
+        cdp,
+        reconciled.shouldRemainOpen,
+        sourceHash,
+        15_000,
+      );
+      const frameLoaded = status.frameUrl
+        ? await waitForFrame(cdp, status.frameUrl, 15_000)
+        : false;
+      retained = true;
+      return {
+        result: { ...status, cspBypassed: true, frameLoaded },
+        connection: cdp,
+      };
     }
-    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
-      source: `${source}\n//# sourceURL=codex-taskboard.user.js`,
-    });
+    const scriptIdentifier = await registerInjectionSource(cdp, source);
+    cdp.on("Page.loadEventFired", () => (
+      publishInjectionScriptIdentifier(cdp, scriptIdentifier)
+    ));
     const reloaded = cdp.waitFor("Page.loadEventFired", 15_000);
     await cdp.send("Page.reload");
     await reloaded;
-    const evaluation = await cdp.send("Runtime.evaluate", {
-      expression: source,
-      awaitPromise: true,
-      returnByValue: true,
-    });
-    if (evaluation.exceptionDetails) {
-      throw new Error(evaluation.exceptionDetails.exception?.description || "Taskboard injection failed");
-    }
+    await evaluateInjectionSource(cdp, source);
+    await publishInjectionScriptIdentifier(cdp, scriptIdentifier);
     if (keepAlive) await publishHostHeartbeat(cdp, startupToken);
     if (shouldOpen) {
       await cdp.send("Runtime.evaluate", {
@@ -842,7 +905,7 @@ async function injectTarget(
       });
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    const status = await waitForInjectionStatus(cdp, shouldOpen, 15_000);
+    const status = await waitForInjectionStatus(cdp, shouldOpen, sourceHash, 15_000);
     const frameLoaded = status.frameUrl
       ? await waitForFrame(cdp, status.frameUrl, 15_000)
       : false;
@@ -869,6 +932,7 @@ async function injectTarget(
 async function injectAll(
   port,
   source,
+  sourceHash,
   shouldOpen,
   screenshotPath,
   injectedTargets,
@@ -895,6 +959,7 @@ async function injectAll(
     const { result, connection } = await injectTarget(
       target,
       source,
+      sourceHash,
       shouldOpen && firstTarget,
       firstTarget ? screenshotPath : null,
       keepAlive,
@@ -906,6 +971,21 @@ async function injectAll(
     results.push({ targetId: target.id, title: target.title, url: target.url, ...result });
   }
   return results;
+}
+
+async function currentInjectionSource() {
+  const userScript = await readFile(injectionPath, "utf8");
+  const runtimeSource = `window.__CODEX_TASKBOARD_MANAGED_ORIGIN__ = ${JSON.stringify(taskboardOrigin)};
+if (typeof window.__CODEX_TASKBOARD_URL__ !== "string" || !window.__CODEX_TASKBOARD_URL__.trim()) {
+  window.__CODEX_TASKBOARD_URL__ = ${JSON.stringify(taskboardPageUrl)};
+}
+${userScript}`;
+  const sourceHash = createHash("sha256").update(runtimeSource).digest("hex");
+  return {
+    sourceHash,
+    source: `window[${JSON.stringify(injectionSourceHashName)}] = ${JSON.stringify(sourceHash)};
+${runtimeSource}`,
+  };
 }
 
 async function main() {
@@ -975,16 +1055,12 @@ async function main() {
       await waitUntilReachable(cdpVersionUrl, 30_000);
     }
 
-    const userScript = await readFile(injectionPath, "utf8");
-    const source = `window.__CODEX_TASKBOARD_MANAGED_ORIGIN__ = ${JSON.stringify(taskboardOrigin)};
-if (typeof window.__CODEX_TASKBOARD_URL__ !== "string" || !window.__CODEX_TASKBOARD_URL__.trim()) {
-  window.__CODEX_TASKBOARD_URL__ = ${JSON.stringify(taskboardPageUrl)};
-}
-${userScript}`;
+    const { source, sourceHash } = await currentInjectionSource();
     const injectedTargets = new Map();
     const firstResults = await injectAll(
       options.port,
       source,
+      sourceHash,
       options.open,
       options.screenshot,
       injectedTargets,
@@ -1024,6 +1100,7 @@ ${userScript}`;
         const results = await injectAll(
           options.port,
           source,
+          sourceHash,
           false,
           null,
           injectedTargets,

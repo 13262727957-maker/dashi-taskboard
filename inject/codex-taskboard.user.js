@@ -1,7 +1,8 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.6.7";
+  const VERSION = "0.6.8";
+  const SOURCE_HASH = window.__CODEX_TASKBOARD_SOURCE_HASH__;
   const SENTINEL_KEY = "__codexTaskboardInjection__";
   const DEFAULT_TASKBOARD_URL = "http://127.0.0.1:47823/?host=codex";
   const ENTRY_ID = "codex-taskboard-entry";
@@ -42,7 +43,7 @@
   const TASK_SECTION_LABELS = ["tasks", "任务", "chats", "对话"];
 
   const previous = window[SENTINEL_KEY];
-  if (previous?.version === VERSION && typeof previous.refresh === "function") {
+  if (previous?.sourceHash === SOURCE_HASH && typeof previous.refresh === "function") {
     previous.refresh();
     return;
   }
@@ -726,6 +727,22 @@
     }
   }
 
+  function buildAutomationHostPayload(payload) {
+    return {
+      requestId: payload.requestId,
+      operation: payload.operation,
+      taskboardProjectId: payload.taskboardProjectId,
+      codexProjectId: payload.codexProjectId,
+      projectName: payload.projectName,
+      workspacePath: payload.workspacePath,
+      skillPath: payload.skillPath,
+      ...(payload.automationId === undefined ? {} : { automationId: payload.automationId }),
+      intervalMinutes: payload.intervalMinutes,
+      model: payload.model,
+      reasoningEffort: payload.reasoningEffort,
+    };
+  }
+
   async function handleAutomationRequest(payload) {
     const requestId = typeof payload?.requestId === "string" ? payload.requestId : "";
     if (!requestId) return;
@@ -737,19 +754,10 @@
       return;
     }
     try {
-      const response = await requestHost("automation", {
-        requestId,
-        operation: payload.operation,
-        taskboardProjectId: payload.taskboardProjectId,
-        codexProjectId: payload.codexProjectId,
-        projectName: payload.projectName,
-        workspacePath: payload.workspacePath,
-        skillPath: payload.skillPath,
-        ...(payload.automationId === undefined ? {} : { automationId: payload.automationId }),
-        intervalMinutes: payload.intervalMinutes,
-        model: payload.model,
-        reasoningEffort: payload.reasoningEffort,
-      });
+      const response = await requestHost(
+        "automation",
+        buildAutomationHostPayload(payload),
+      );
       postToFrame({
         type: "taskboard:automation-response",
         payload: response.error
@@ -1244,6 +1252,7 @@
 
   const api = {
     version: VERSION,
+    sourceHash: SOURCE_HASH,
     refresh,
     reloadFrame,
     open: openTaskboard,

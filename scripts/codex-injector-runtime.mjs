@@ -1,4 +1,5 @@
-const HOST_REQUEST_ERROR = "任务面板宿主不支持当前自动认领配置，请重新构建并刷新 Codex 面板";
+const HOST_REQUEST_ERROR = "自动认领配置暂时无法应用，请刷新后重试";
+const AUTOMATION_SCHEMA_DIAGNOSTIC = "AUTOMATION_SCHEMA_MISMATCH";
 
 function parseHostRequest(payload, parseAutomationRequest) {
   if (typeof payload !== "string" || payload.length > 4_096) {
@@ -23,7 +24,12 @@ function parseHostRequest(payload, parseAutomationRequest) {
     const parsed = parseAutomationRequest(request);
     return parsed
       ? { id, request: parsed, error: null }
-      : { id, request: null, error: HOST_REQUEST_ERROR };
+      : {
+          id,
+          request: null,
+          error: HOST_REQUEST_ERROR,
+          diagnosticCode: AUTOMATION_SCHEMA_DIAGNOSTIC,
+        };
   }
   if (
     request.action === "prefill-task-composer"
@@ -52,6 +58,7 @@ export async function handleHostBindingPayload(params, handlers) {
       id: parsed.id,
       ok: false,
       error: parsed.error,
+      ...(parsed.diagnosticCode ? { diagnosticCode: parsed.diagnosticCode } : {}),
     });
     return { responded: true, accepted: false };
   }
@@ -78,6 +85,30 @@ export async function handleHostBindingPayload(params, handlers) {
     });
   }
   return { responded: true, accepted: true };
+}
+
+export async function reconcileInjectionRuntime({
+  currentStatus,
+  source,
+  sourceHash,
+  removeRegisteredSource,
+  registerCurrentSource,
+  evaluateCurrentSource,
+  publishRegistration,
+  reopen,
+}) {
+  if (currentStatus.scriptIdentifier) {
+    try {
+      await removeRegisteredSource(currentStatus.scriptIdentifier);
+    } catch {}
+  }
+  const scriptIdentifier = await registerCurrentSource(source);
+  await evaluateCurrentSource(source);
+  await publishRegistration(scriptIdentifier);
+  const replaced = currentStatus.sourceHash !== sourceHash;
+  const shouldRemainOpen = currentStatus.pageVisible === true;
+  if (replaced && shouldRemainOpen) await reopen();
+  return { replaced, scriptIdentifier, shouldRemainOpen };
 }
 
 export function findResidentInjectorPids({

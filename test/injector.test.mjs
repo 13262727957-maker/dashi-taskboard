@@ -69,6 +69,18 @@ test("the package injection command remains resident for tab-triggered recovery"
   assert.match(source, /__codexTaskboardHostStartupTokenV1/);
 });
 
+test("attach reconciles the renderer against a hashed current injection source", () => {
+  assert.match(source, /createHash\("sha256"\)/);
+  assert.match(source, /__CODEX_TASKBOARD_SOURCE_HASH__/);
+  assert.match(source, /sourceHash: window\.__codexTaskboardInjection__\?\.sourceHash \|\| null/);
+  assert.match(source, /const injectionScriptIdentifierName = "__CODEX_TASKBOARD_SCRIPT_IDENTIFIER__"/);
+  assert.match(source, /scriptIdentifier: window\[\$\{JSON\.stringify\(injectionScriptIdentifierName\)\}\] \|\| null/);
+  assert.match(source, /Page\.removeScriptToEvaluateOnNewDocument/);
+  assert.match(source, /Page\.addScriptToEvaluateOnNewDocument/);
+  assert.match(source, /reconcileInjectionRuntime/);
+  assert.match(source, /expectedSourceHash/);
+});
+
 test("the injector ignores auxiliary Codex windows", () => {
   assert.match(source, /!target\.url\?\.includes\("initialRoute=%2Fglobal-dictation"\)/);
 });

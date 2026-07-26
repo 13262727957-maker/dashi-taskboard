@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   findResidentInjectorPids,
   handleHostBindingPayload,
+  reconcileInjectionRuntime,
   restartResidentInjector,
 } from "../scripts/codex-injector-runtime.mjs";
 
@@ -47,8 +48,78 @@ test("a stale automation parser receives an immediate host error instead of timi
   assert.deepEqual(responses, [{
     id: currentAutomationRequest.id,
     ok: false,
-    error: "任务面板宿主不支持当前自动认领配置，请重新构建并刷新 Codex 面板",
+    error: "自动认领配置暂时无法应用，请刷新后重试",
+    diagnosticCode: "AUTOMATION_SCHEMA_MISMATCH",
   }]);
+});
+
+test("attach replaces an old runtime with the current source and restores an open page", async () => {
+  const calls = [];
+  const result = await reconcileInjectionRuntime({
+    currentStatus: {
+      version: "0.6.7",
+      sourceHash: null,
+      pageVisible: true,
+      scriptIdentifier: "old-registration",
+    },
+    source: "current-source",
+    sourceHash: "current-hash",
+    removeRegisteredSource: async (identifier) => calls.push(["remove", identifier]),
+    registerCurrentSource: async (source) => {
+      calls.push(["register", source]);
+      return "current-registration";
+    },
+    evaluateCurrentSource: async (source) => calls.push(["evaluate", source]),
+    publishRegistration: async (identifier) => calls.push(["publish", identifier]),
+    reopen: async () => calls.push(["open"]),
+  });
+
+  assert.deepEqual(result, {
+    replaced: true,
+    scriptIdentifier: "current-registration",
+    shouldRemainOpen: true,
+  });
+  assert.deepEqual(calls, [
+    ["remove", "old-registration"],
+    ["register", "current-source"],
+    ["evaluate", "current-source"],
+    ["publish", "current-registration"],
+    ["open"],
+  ]);
+});
+
+test("attach is idempotent for the same source hash and does not open a closed page", async () => {
+  const calls = [];
+  const result = await reconcileInjectionRuntime({
+    currentStatus: {
+      version: "0.6.8",
+      sourceHash: "current-hash",
+      pageVisible: false,
+      scriptIdentifier: "old-registration",
+    },
+    source: "current-source",
+    sourceHash: "current-hash",
+    removeRegisteredSource: async (identifier) => calls.push(["remove", identifier]),
+    registerCurrentSource: async (source) => {
+      calls.push(["register", source]);
+      return "current-registration";
+    },
+    evaluateCurrentSource: async (source) => calls.push(["evaluate", source]),
+    publishRegistration: async (identifier) => calls.push(["publish", identifier]),
+    reopen: async () => calls.push(["open"]),
+  });
+
+  assert.deepEqual(result, {
+    replaced: false,
+    scriptIdentifier: "current-registration",
+    shouldRemainOpen: false,
+  });
+  assert.deepEqual(calls, [
+    ["remove", "old-registration"],
+    ["register", "current-source"],
+    ["evaluate", "current-source"],
+    ["publish", "current-registration"],
+  ]);
 });
 
 test("resident discovery accepts this repository's absolute and relative launch forms only", () => {
