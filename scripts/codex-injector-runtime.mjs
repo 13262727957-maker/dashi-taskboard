@@ -80,16 +80,55 @@ export async function handleHostBindingPayload(params, handlers) {
   return { responded: true, accepted: true };
 }
 
-export async function restartResidentInjector(port, handlers) {
-  const previousPid = handlers.findResident(port);
-  if (!previousPid) return { previousPid: null, pid: null, restarted: false };
+export function findResidentInjectorPids({
+  processList,
+  currentPid,
+  injectorPath,
+  projectRoot,
+  port,
+  defaultPort,
+  cwdForPid,
+}) {
+  const absoluteScript = new RegExp(
+    `(?:^|\\s)${escapeRegExp(injectorPath)}(?=\\s|$)`,
+  );
+  const relativeScript = /(?:^|\s)(?:\.\/)?scripts\/codex-injector\.mjs(?=\s|$)/;
+  const residents = [];
 
-  await handlers.stopResident(previousPid);
-  const started = handlers.startResident(port);
-  await handlers.waitUntilReady(port, started.pid);
+  for (const line of processList.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(.+)$/);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const command = match[2];
+    if (pid === currentPid || !/(?:^|\s)--watch(?=\s|$)/.test(command)) continue;
+    const scriptMatches = absoluteScript.test(command)
+      || (relativeScript.test(command) && cwdForPid(pid) === projectRoot);
+    if (!scriptMatches || commandPort(command, defaultPort) !== port) continue;
+    residents.push(pid);
+  }
+  return residents;
+}
+
+export async function restartResidentInjector(port, handlers) {
+  const previousPids = handlers.findResidents(port);
+  if (previousPids.length === 0) return { previousPids: [], pid: null, restarted: false };
+
+  for (const pid of previousPids) await handlers.stopResident(pid);
+  const startupToken = handlers.createStartupToken();
+  const started = handlers.startResident(port, startupToken);
+  await handlers.waitUntilReady(port, started.pid, startupToken);
   return {
-    previousPid,
+    previousPids,
     pid: started.pid,
     restarted: true,
   };
+}
+
+function commandPort(command, defaultPort) {
+  const match = command.match(/(?:^|\s)--port(?:=(\d+)|\s+(\d+))(?=\s|$)/);
+  return match ? Number(match[1] ?? match[2]) : defaultPort;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

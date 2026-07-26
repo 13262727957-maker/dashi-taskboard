@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -11,18 +12,21 @@ import {
   reconcileTaskboardAutomation,
 } from "../shared/taskboard-automation.mjs";
 import {
+  findResidentInjectorPids,
   handleHostBindingPayload,
   restartResidentInjector,
 } from "./codex-injector-runtime.mjs";
 
 const injectorPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(injectorPath), "..");
+const defaultCodexDebuggingPort = 9229;
 const injectionPath = path.join(projectRoot, "inject", "codex-taskboard.user.js");
 const taskboardOrigin = `http://127.0.0.1:${resolvePort()}`;
 const taskboardHealthUrl = `${taskboardOrigin}/health`;
 const taskboardPageUrl = `${taskboardOrigin}/?host=codex`;
 const hostBindingName = "__codexTaskboardHostV1";
 const hostHeartbeatName = "__codexTaskboardHostHeartbeatV1";
+const hostStartupTokenName = "__codexTaskboardHostStartupTokenV1";
 const codexAutomationMethods = new Set([
   "list-automations",
   "automation-create",
@@ -32,7 +36,7 @@ let codexAutomationRequestSequence = 0;
 
 function parseArgs(argv) {
   const options = {
-    port: 9229,
+    port: defaultCodexDebuggingPort,
     portExplicit: false,
     launch: false,
     watch: false,
@@ -40,6 +44,7 @@ function parseArgs(argv) {
     refresh: false,
     refreshIfRunning: false,
     attachExisting: false,
+    startupToken: null,
     daemon: false,
     screenshot: null,
     appPath: "/Applications/ChatGPT.app",
@@ -53,6 +58,12 @@ function parseArgs(argv) {
     else if (arg === "--refresh") options.refresh = true;
     else if (arg === "--refresh-if-running") options.refreshIfRunning = true;
     else if (arg === "--attach-existing") options.attachExisting = true;
+    else if (arg === "--startup-token") {
+      options.startupToken = argv[++index];
+      if (!/^[a-z0-9-]{1,100}$/i.test(options.startupToken || "")) {
+        throw new Error("--startup-token must be an identifier");
+      }
+    }
     else if (arg === "--daemon") options.daemon = true;
     else if (arg === "--port") {
       options.port = Number(argv[++index]);
@@ -304,30 +315,52 @@ function codexDebuggingPorts(preferredPort) {
   return [...ports];
 }
 
-function residentInjectorPid(port) {
+function processCwd(pid) {
+  const result = spawnSync("/usr/sbin/lsof", [
+    "-a",
+    "-p",
+    String(pid),
+    "-d",
+    "cwd",
+    "-Fn",
+  ], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024,
+  });
+  if (result.status !== 0) return null;
+  const cwd = result.stdout.split("\n").find((line) => line.startsWith("n"))?.slice(1);
+  return cwd ? path.resolve(cwd) : null;
+}
+
+function residentInjectorPids(port) {
   const processes = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
   });
-  if (processes.status !== 0) return null;
-  const portPattern = new RegExp(`(?:^|\\s)--port(?:=|\\s+)${port}(?:\\s|$)`);
-  for (const line of processes.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(.+)$/);
-    if (!match || Number(match[1]) === process.pid) continue;
-    const command = match[2];
-    if (command.includes(injectorPath) && command.includes("--watch") && portPattern.test(command)) {
-      return Number(match[1]);
-    }
-  }
-  return null;
+  if (processes.status !== 0) return [];
+  return findResidentInjectorPids({
+    processList: processes.stdout,
+    currentPid: process.pid,
+    injectorPath,
+    projectRoot,
+    port,
+    defaultPort: defaultCodexDebuggingPort,
+    cwdForPid: processCwd,
+  });
 }
 
-function startResidentInjector(port, shouldOpen, attachExisting = false) {
-  const existingPid = residentInjectorPid(port);
+function startResidentInjector(
+  port,
+  shouldOpen,
+  attachExisting = false,
+  startupToken = null,
+) {
+  const [existingPid] = residentInjectorPids(port);
   if (existingPid) return { pid: existingPid, started: false };
   const args = [injectorPath, "--watch", "--port", String(port)];
   if (shouldOpen) args.push("--open");
   if (attachExisting) args.push("--attach-existing");
+  if (startupToken) args.push("--startup-token", startupToken);
   const child = spawn(process.execPath, args, {
     cwd: projectRoot,
     detached: true,
@@ -351,7 +384,7 @@ async function stopResidentInjector(pid) {
   throw new Error(`Timed out stopping resident Taskboard injector ${pid}`);
 }
 
-async function waitForResidentInjectorReady(port, pid, startedAt) {
+async function waitForResidentInjectorReady(port, pid, startupToken) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     try {
@@ -361,11 +394,17 @@ async function waitForResidentInjectorReady(port, pid, startedAt) {
         const cdp = new CdpConnection(target.webSocketDebuggerUrl);
         await cdp.open();
         try {
-          const heartbeat = await cdp.send("Runtime.evaluate", {
-            expression: `Number(window[${JSON.stringify(hostHeartbeatName)}])`,
+          const readiness = await cdp.send("Runtime.evaluate", {
+            expression: `({
+              token: window[${JSON.stringify(hostStartupTokenName)}],
+              taskboardMounted: Boolean(document.getElementById("codex-taskboard-frame"))
+            })`,
             returnByValue: true,
           });
-          if (heartbeat.result.value >= startedAt) return;
+          if (
+            readiness.result.value?.token === startupToken
+            && readiness.result.value.taskboardMounted
+          ) return;
         } finally {
           cdp.close();
         }
@@ -377,12 +416,14 @@ async function waitForResidentInjectorReady(port, pid, startedAt) {
 }
 
 async function restartResidentInjectorForRefresh(port) {
-  const startedAt = Date.now();
   return restartResidentInjector(port, {
-    findResident: residentInjectorPid,
+    findResidents: residentInjectorPids,
     stopResident: stopResidentInjector,
-    startResident: (targetPort) => startResidentInjector(targetPort, false, true),
-    waitUntilReady: (targetPort, pid) => waitForResidentInjectorReady(targetPort, pid, startedAt),
+    createStartupToken: randomUUID,
+    startResident: (targetPort, startupToken) => (
+      startResidentInjector(targetPort, false, true, startupToken)
+    ),
+    waitUntilReady: waitForResidentInjectorReady,
   });
 }
 
@@ -710,9 +751,12 @@ async function installTaskboardHostBinding(cdp, supervisor) {
   await cdp.send("Runtime.addBinding", { name: hostBindingName });
 }
 
-async function publishHostHeartbeat(cdp) {
+async function publishHostHeartbeat(cdp, startupToken) {
   await cdp.send("Runtime.evaluate", {
-    expression: `window[${JSON.stringify(hostHeartbeatName)}] = Date.now()`,
+    expression: `(() => {
+      window[${JSON.stringify(hostHeartbeatName)}] = Date.now();
+      window[${JSON.stringify(hostStartupTokenName)}] = ${JSON.stringify(startupToken)};
+    })()`,
     returnByValue: true,
   });
 }
@@ -752,6 +796,7 @@ async function injectTarget(
   keepAlive,
   supervisor,
   attachExisting,
+  startupToken,
 ) {
   const cdp = new CdpConnection(target.webSocketDebuggerUrl);
   let retained = false;
@@ -764,7 +809,7 @@ async function injectTarget(
     if (keepAlive && attachExisting) {
       const status = await readInjectionStatus(cdp);
       if (status.version) {
-        await publishHostHeartbeat(cdp);
+        await publishHostHeartbeat(cdp, startupToken);
         retained = true;
         return {
           result: { ...status, cspBypassed: true, frameLoaded: Boolean(status.frameUrl) },
@@ -786,7 +831,7 @@ async function injectTarget(
     if (evaluation.exceptionDetails) {
       throw new Error(evaluation.exceptionDetails.exception?.description || "Taskboard injection failed");
     }
-    if (keepAlive) await publishHostHeartbeat(cdp);
+    if (keepAlive) await publishHostHeartbeat(cdp, startupToken);
     if (shouldOpen) {
       await cdp.send("Runtime.evaluate", {
         expression: `(() => {
@@ -830,6 +875,7 @@ async function injectAll(
   keepAlive,
   supervisor,
   attachExisting,
+  startupToken,
 ) {
   const targets = await codexTargets(port);
   if (targets.length === 0) throw new Error("No Codex renderer target found");
@@ -854,6 +900,7 @@ async function injectAll(
       keepAlive,
       supervisor,
       attachExisting,
+      startupToken,
     );
     if (connection) injectedTargets.set(target.id, connection);
     results.push({ targetId: target.id, title: target.title, url: target.url, ...result });
@@ -944,6 +991,7 @@ ${userScript}`;
       options.watch,
       supervisor,
       options.attachExisting,
+      options.startupToken,
     );
     console.log(JSON.stringify({ injected: firstResults }, null, 2));
 
@@ -969,7 +1017,7 @@ ${userScript}`;
       }
       for (const connection of injectedTargets.values()) {
         try {
-          await publishHostHeartbeat(connection);
+          await publishHostHeartbeat(connection, options.startupToken);
         } catch (_) {}
       }
       try {
@@ -982,6 +1030,7 @@ ${userScript}`;
           true,
           supervisor,
           options.attachExisting,
+          options.startupToken,
         );
         if (results.length > 0) console.log(JSON.stringify({ injected: results }, null, 2));
       } catch (error) {

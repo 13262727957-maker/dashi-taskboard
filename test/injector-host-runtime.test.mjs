@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  findResidentInjectorPids,
   handleHostBindingPayload,
   restartResidentInjector,
 } from "../scripts/codex-injector-runtime.mjs";
@@ -50,26 +51,66 @@ test("a stale automation parser receives an immediate host error instead of timi
   }]);
 });
 
-test("refresh replaces only the resident injector before reloading its iframe", async () => {
+test("resident discovery accepts this repository's absolute and relative launch forms only", () => {
+  const projectRoot = "/workspace/codex-taskboard";
+  const injectorPath = `${projectRoot}/scripts/codex-injector.mjs`;
+  const processList = [
+    `101 node ${injectorPath} --watch --port 9231`,
+    "102 node scripts/codex-injector.mjs --watch",
+    "103 node ./scripts/codex-injector.mjs --watch --port=9231",
+    "104 node scripts/codex-injector.mjs --watch",
+    `105 node ${injectorPath} --watch --port 9229`,
+    `106 node ${injectorPath} --port 9231`,
+  ].join("\n");
+  const cwdByPid = new Map([
+    [102, projectRoot],
+    [103, projectRoot],
+    [104, "/workspace/another-repository"],
+  ]);
+
+  assert.deepEqual(findResidentInjectorPids({
+    processList,
+    currentPid: 999,
+    injectorPath,
+    projectRoot,
+    port: 9231,
+    defaultPort: 9229,
+    cwdForPid: (pid) => cwdByPid.get(pid) ?? null,
+  }), [101, 103]);
+  assert.deepEqual(findResidentInjectorPids({
+    processList,
+    currentPid: 999,
+    injectorPath,
+    projectRoot,
+    port: 9229,
+    defaultPort: 9229,
+    cwdForPid: (pid) => cwdByPid.get(pid) ?? null,
+  }), [102, 105]);
+});
+
+test("refresh stops every stale resident before starting one token-verified replacement", async () => {
   const calls = [];
+  const startupToken = "replacement-token";
   const replacement = await restartResidentInjector(9231, {
-    findResident: () => 4321,
+    findResidents: () => [4321, 5432],
     stopResident: async (pid) => calls.push(["stop", pid]),
-    startResident: (port) => {
-      calls.push(["start", port]);
+    createStartupToken: () => startupToken,
+    startResident: (port, token) => {
+      calls.push(["start", port, token]);
       return { pid: 9876, started: true };
     },
-    waitUntilReady: async (port, pid) => calls.push(["ready", port, pid]),
+    waitUntilReady: async (port, pid, token) => calls.push(["ready", port, pid, token]),
   });
 
   assert.deepEqual(replacement, {
-    previousPid: 4321,
+    previousPids: [4321, 5432],
     pid: 9876,
     restarted: true,
   });
   assert.deepEqual(calls, [
     ["stop", 4321],
-    ["start", 9231],
-    ["ready", 9231, 9876],
+    ["stop", 5432],
+    ["start", 9231, startupToken],
+    ["ready", 9231, 9876, startupToken],
   ]);
 });
