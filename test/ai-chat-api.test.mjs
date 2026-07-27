@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   createAiChatThread,
+  deleteAiChatThread,
   getAiChatCatalog,
   getAiChatThread,
   interruptAiChatRun,
@@ -64,6 +65,9 @@ test("local AI API client follows the fixed catalog, thread, turn and interrupt 
       return json({ thread, events: [], runs: [] });
     }
     if (path === "/api/local/ai/threads/thread-1" && init.method === "PATCH") return json({ thread });
+    if (path === "/api/local/ai/threads/thread-1" && init.method === "DELETE") {
+      return new Response(null, { status: 204 });
+    }
     if (path === "/api/local/ai/threads/thread-1/turns") {
       return json({ run: { id: "run-1", threadId: "thread-1", status: "running" } }, 202);
     }
@@ -97,6 +101,9 @@ test("local AI API client follows the fixed catalog, thread, turn and interrupt 
       sandbox: "workspace-write",
     });
 
+    await deleteAiChatThread("thread-1");
+    assert.equal(calls.at(-1).init.method, "DELETE");
+
     await startAiChatTurn("thread-1", {
       message: "公开的用户消息",
       skillIds: ["real-skill"],
@@ -113,6 +120,23 @@ test("local AI API client follows the fixed catalog, thread, turn and interrupt 
     assert.equal("hiddenPrompt" in turnBody, false);
 
     assert.equal((await interruptAiChatRun("run-1")).status, "interrupted");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("aborted catalog requests preserve AbortError instead of reporting a service outage", async () => {
+  const previousFetch = globalThis.fetch;
+  const abortError = new DOMException("The operation was aborted", "AbortError");
+  globalThis.fetch = async () => {
+    throw abortError;
+  };
+
+  try {
+    await assert.rejects(
+      () => getAiChatCatalog("project-1"),
+      (error) => error === abortError,
+    );
   } finally {
     globalThis.fetch = previousFetch;
   }

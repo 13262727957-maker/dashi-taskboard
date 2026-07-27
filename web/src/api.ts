@@ -68,7 +68,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, { ...init, headers });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
     throw new ApiError(0, {
       error: {
         code: "SERVICE_UNAVAILABLE",
@@ -148,6 +149,13 @@ export async function updateAiChatThread(
     },
   );
   return data.thread;
+}
+
+export async function deleteAiChatThread(threadId: string): Promise<void> {
+  await request<void>(
+    `/api/local/ai/threads/${encodeURIComponent(threadId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function startAiChatTurn(

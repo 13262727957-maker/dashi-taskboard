@@ -3,6 +3,8 @@ import type {
   AiChatModel,
   AiChatSandbox,
   AiChatSkill,
+  AiChatThread,
+  AiChatThreadSnapshot,
   AiChatThreadStatus,
   TaskboardCapabilities,
 } from "./types";
@@ -23,6 +25,20 @@ export function buildThreadCreateInput(projectId: string, issueId: string | null
     projectId,
     ...(issueId ? { issueId } : {}),
   };
+}
+
+interface AiChatThreadSettings {
+  model: string;
+  reasoningEffort: string;
+  sandbox: AiChatSandbox;
+}
+
+export function settingsForNewAiThread(
+  projectId: string,
+  settingsProjectId: string | null,
+  settings: AiChatThreadSettings,
+): Partial<AiChatThreadSettings> {
+  return projectId === settingsProjectId ? settings : {};
 }
 
 export function routeChatState(
@@ -89,7 +105,9 @@ export function buildTurnInput(
 export function chatPrimaryAction(
   status: AiChatThreadStatus,
   message: string,
+  blocked = false,
 ): "send" | "stop" | "disabled" {
+  if (blocked) return "disabled";
   if (status === "running") return "stop";
   return message.trim() ? "send" : "disabled";
 }
@@ -110,6 +128,7 @@ const VISIBLE_EVENT_TYPES = new Set([
   "assistant",
   "plan",
   "todo",
+  "todo_list",
   "command",
   "command_execution",
   "file",
@@ -120,10 +139,97 @@ const VISIBLE_EVENT_TYPES = new Set([
   "web",
   "web_search",
   "error",
+  "turn.failed",
   "user_message",
   "user",
 ]);
 
-export function filterVisibleAiEvents<T extends Pick<AiChatEvent, "type">>(events: T[]): T[] {
-  return events.filter((event) => VISIBLE_EVENT_TYPES.has(event.type));
+function isMessageEvent(event: Pick<AiChatEvent, "role" | "type">): boolean {
+  return event.role === "user"
+    || event.role === "assistant"
+    || event.type === "user"
+    || event.type === "user_message"
+    || event.type === "assistant"
+    || event.type === "agent_message";
+}
+
+export function filterVisibleAiEvents<
+  T extends Pick<AiChatEvent, "type" | "role" | "data">,
+>(events: T[]): T[] {
+  const visible = events.filter((event) => VISIBLE_EVENT_TYPES.has(event.type));
+  const latestActivityIndex = new Map<string, number>();
+  visible.forEach((event, index) => {
+    const itemId = event.data?.itemId;
+    if (!isMessageEvent(event) && typeof itemId === "string") {
+      latestActivityIndex.set(itemId, index);
+    }
+  });
+  return visible.filter((event, index) => {
+    const itemId = event.data?.itemId;
+    return isMessageEvent(event)
+      || typeof itemId !== "string"
+      || latestActivityIndex.get(itemId) === index;
+  });
+}
+
+export function aiChatEventStatus(
+  event: Pick<AiChatEvent, "role" | "type" | "data">,
+): "running" | "completed" | "failed" {
+  if (event.role === "error" || event.type === "error" || event.type === "turn.failed") {
+    return "failed";
+  }
+  const status = event.data?.status;
+  if (status === "running" || status === "started" || status === "in_progress") {
+    return "running";
+  }
+  if (status === "failed" || status === "error") return "failed";
+  return "completed";
+}
+
+export function patchAiChatSnapshot(
+  current: AiChatThreadSnapshot | null,
+  threadId: string,
+  thread: AiChatThread,
+): AiChatThreadSnapshot | null {
+  if (!current || current.thread.id !== threadId) return current;
+  return { ...current, thread };
+}
+
+export function createAiSnapshotRefreshQueue(
+  refresh: (threadId: string) => Promise<void>,
+) {
+  const states = new Map<string, {
+    queued: boolean;
+    promise: Promise<void>;
+  }>();
+  let active = true;
+
+  return {
+    request(threadId: string): Promise<void> {
+      const current = states.get(threadId);
+      if (current) {
+        current.queued = true;
+        return current.promise;
+      }
+
+      const state = {
+        queued: false,
+        promise: Promise.resolve(),
+      };
+      state.promise = (async () => {
+        do {
+          state.queued = false;
+          await refresh(threadId);
+        } while (active && state.queued);
+      })().finally(() => {
+        if (states.get(threadId) === state) states.delete(threadId);
+      });
+      states.set(threadId, state);
+      return state.promise;
+    },
+    clear() {
+      active = false;
+      states.clear();
+    },
+  };
 }

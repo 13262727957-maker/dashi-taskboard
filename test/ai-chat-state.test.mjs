@@ -2,16 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  aiChatEventStatus,
   buildThreadCreateInput,
   buildTurnInput,
   chatPrimaryAction,
+  createAiSnapshotRefreshQueue,
   filterVisibleAiEvents,
   insertSkillMention,
   isAiChatCapabilityAvailable,
   needsDangerConfirmation,
   normalizeChatSelection,
+  patchAiChatSnapshot,
   readSkillMention,
   routeChatState,
+  settingsForNewAiThread,
   shouldRefreshAiSnapshot,
 } from "../web/src/aiChatState.ts";
 
@@ -66,6 +70,42 @@ test("route changes update only the next origin and preserve the selected global
   );
 });
 
+test("new-thread settings are reused only when they belong to the current project catalog", () => {
+  const settings = {
+    model: "codex-real-model",
+    reasoningEffort: "high",
+    sandbox: "workspace-write",
+  };
+  assert.deepEqual(settingsForNewAiThread("project-a", "project-a", settings), settings);
+  assert.deepEqual(settingsForNewAiThread("project-b", "project-a", settings), {});
+  assert.deepEqual(settingsForNewAiThread("project-b", null, settings), {});
+});
+
+test("PATCH results can update only the snapshot for the thread that started the request", () => {
+  const threadA = {
+    id: "thread-a",
+    title: "A",
+    status: "idle",
+    origin: { projectId: "project-a" },
+  };
+  const threadB = {
+    id: "thread-b",
+    title: "B",
+    status: "idle",
+    origin: { projectId: "project-b" },
+  };
+  const current = { thread: threadB, events: [], runs: [] };
+
+  assert.equal(patchAiChatSnapshot(current, "thread-a", threadA), current);
+  assert.deepEqual(patchAiChatSnapshot(current, "thread-b", {
+    ...threadB,
+    title: "B updated",
+  }), {
+    ...current,
+    thread: { ...threadB, title: "B updated" },
+  });
+});
+
 test("model and effort selections are restricted to the real catalog", () => {
   assert.deepEqual(normalizeChatSelection(models, "codex-real-model", "medium"), {
     model: "codex-real-model",
@@ -118,12 +158,117 @@ test("runtime controls distinguish send, stop, danger confirmation and SSE refre
   assert.equal(chatPrimaryAction("running", "hello"), "stop");
   assert.equal(chatPrimaryAction("idle", "hello"), "send");
   assert.equal(chatPrimaryAction("idle", "  "), "disabled");
+  assert.equal(chatPrimaryAction("idle", "hello", true), "disabled");
+  assert.equal(chatPrimaryAction("running", "hello", true), "disabled");
   assert.equal(needsDangerConfirmation("danger-full-access", false), true);
   assert.equal(needsDangerConfirmation("danger-full-access", true), false);
   assert.equal(needsDangerConfirmation("workspace-write", false), false);
   assert.equal(shouldRefreshAiSnapshot("ai.event"), true);
   assert.equal(shouldRefreshAiSnapshot("ai.run"), true);
   assert.equal(shouldRefreshAiSnapshot("unrelated"), false);
+});
+
+test("visible activity keeps only the latest lifecycle item without merging messages", () => {
+  const events = filterVisibleAiEvents([
+    {
+      id: "1",
+      type: "agent_message",
+      role: "assistant",
+      content: "公开回复一",
+      data: { itemId: "shared-message" },
+    },
+    {
+      id: "2",
+      type: "agent_message",
+      role: "assistant",
+      content: "公开回复二",
+      data: { itemId: "shared-message" },
+    },
+    {
+      id: "3",
+      type: "command_execution",
+      role: "activity",
+      content: "npm test",
+      data: { itemId: "command-1", status: "started" },
+    },
+    {
+      id: "4",
+      type: "command_execution",
+      role: "activity",
+      content: "npm test",
+      data: { itemId: "command-1", status: "in_progress" },
+    },
+    {
+      id: "5",
+      type: "command_execution",
+      role: "activity",
+      content: "npm test",
+      data: { itemId: "command-1", status: "completed" },
+    },
+    { id: "6", type: "todo_list", role: "activity", content: "完成测试" },
+    { id: "7", type: "turn.failed", role: "error", content: "执行失败" },
+    { id: "8", type: "user_message", role: "user", content: "第一条", data: { itemId: "user-1" } },
+    { id: "9", type: "user_message", role: "user", content: "第二条", data: { itemId: "user-1" } },
+    { id: "10", type: "reasoning", role: "activity", content: "private chain of thought" },
+    { id: "11", type: "raw_jsonl", role: "activity", content: "{\"secret\":true}" },
+  ]);
+  assert.deepEqual(events.map((event) => event.id), ["1", "2", "5", "6", "7", "8", "9"]);
+});
+
+test("activity status treats started, running and in_progress as active and failures as failed", () => {
+  assert.equal(aiChatEventStatus({
+    id: "1",
+    type: "command_execution",
+    role: "activity",
+    content: "",
+    data: { status: "started" },
+  }), "running");
+  assert.equal(aiChatEventStatus({
+    id: "2",
+    type: "todo_list",
+    role: "activity",
+    content: "",
+    data: { status: "in_progress" },
+  }), "running");
+  assert.equal(aiChatEventStatus({
+    id: "3",
+    type: "turn.failed",
+    role: "error",
+    content: "failed",
+  }), "failed");
+  assert.equal(aiChatEventStatus({
+    id: "4",
+    type: "file_change",
+    role: "activity",
+    content: "",
+    data: { status: "completed" },
+  }), "completed");
+});
+
+test("snapshot hint refreshes allow one in-flight request and one queued request", async () => {
+  const calls = [];
+  const releases = [];
+  const queue = createAiSnapshotRefreshQueue(async (threadId) => {
+    calls.push(threadId);
+    await new Promise((resolve) => releases.push(resolve));
+  });
+
+  const first = queue.request("thread-1");
+  const queued = [
+    queue.request("thread-1"),
+    queue.request("thread-1"),
+    queue.request("thread-1"),
+  ];
+  assert.deepEqual(calls, ["thread-1"]);
+
+  releases.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ["thread-1", "thread-1"]);
+
+  releases.shift()();
+  await Promise.all([first, ...queued]);
+  assert.deepEqual(calls, ["thread-1", "thread-1"]);
+  queue.clear();
 });
 
 test("reasoning and raw JSONL events are excluded from the visible timeline", () => {

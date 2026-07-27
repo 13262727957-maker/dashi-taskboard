@@ -185,3 +185,47 @@ test("composer does not submit during IME composition and background runs keep l
   assert.match(chatSource, /subscribeAiChatThread\(threadId/);
   assert.match(chatSource, /observedRunStatusesRef/);
 });
+
+test("composer and Enter submission stay disabled while a snapshot is loading", () => {
+  assert.match(chatSource, /disabled=\{[\s\S]*?loading[\s\S]*?\}/);
+  assert.match(chatSource, /const composerBlocked = loading[\s\S]*?\|\| settingsSaving/);
+  assert.match(chatSource, /if \(composerBlocked\) return;/);
+  assert.match(chatSource, /chatPrimaryAction\([\s\S]*?composerBlocked/);
+});
+
+test("new threads cannot inherit settings from a selected thread in another project", () => {
+  assert.match(chatSource, /settingsForNewAiThread\(/);
+  assert.match(chatSource, /catalogProjectId/);
+  assert.match(chatSource, /catalogLoadedProjectId/);
+  assert.match(chatSource, /createAiChatThread\(\{[\s\S]*?\.\.\.settings/);
+});
+
+test("quiet refreshes preserve action errors and PATCH results are guarded by their starting thread", () => {
+  assert.match(chatSource, /if \(!quiet\) setError\(null\);/);
+  assert.match(chatSource, /patchAiChatSnapshot\(current,\s*threadId,\s*thread\)/);
+  assert.match(chatSource, /selectedThreadRef\.current === threadId/);
+  assert.match(chatSource, /restoreDraftSettings\(previousThread\)/);
+});
+
+test("danger confirmation sends the bound pending retry instead of the current draft", () => {
+  assert.match(chatSource, /pendingDangerInput/);
+  assert.match(chatSource, /setPendingDangerInput\(\{[\s\S]*?message:\s*trimmed/);
+  assert.match(chatSource, /startMessage\(\s*pendingDangerInput\.message,\s*true,\s*pendingDangerInput\.skillIds/);
+  assert.doesNotMatch(chatSource, /onClick=\{\(\) => void startMessage\(draft,\s*true\)\}/);
+});
+
+test("SSE hints are coalesced and the panel remains resizable without clipping narrow menus", () => {
+  assert.match(chatSource, /createAiSnapshotRefreshQueue/);
+  assert.match(chatSource, /selectedHintRefreshQueue\.request\(selectedThreadId\)/);
+  assert.match(styles, /\.ai-chat-panel\s*\{[\s\S]*?resize:\s*both;/);
+  assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*?\.ai-chat-panel\s*\{[\s\S]*?resize:\s*none;/);
+  assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*?\.ai-chat-menu-wrap\s*\{[\s\S]*?position:\s*static;/);
+  assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*?\.ai-chat-option-menu\s*\{[\s\S]*?right:\s*0;[\s\S]*?left:\s*0;/);
+});
+
+test("history exposes deletion of local records without adding rename controls", () => {
+  assert.match(chatSource, /deleteAiChatThread\(/);
+  assert.match(chatSource, /aria-label=\{`删除对话 \$\{thread\.title\}`\}/);
+  assert.match(chatSource, /window\.confirm\(`删除本地对话“\$\{thread\.title\}”\？`\)/);
+  assert.doesNotMatch(chatSource, /重命名对话|renameAiChatThread/);
+});
