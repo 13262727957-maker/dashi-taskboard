@@ -317,11 +317,11 @@ export function spawnCodexTurn({
   function terminateProcessGroup() {
     if (Number.isInteger(child.pid)) {
       try {
-        process.kill(-child.pid, "SIGTERM");
+        process.kill(-child.pid, "SIGKILL");
         return;
       } catch {}
     }
-    child.kill("SIGTERM");
+    child.kill("SIGKILL");
   }
 
   function rejectWithDiagnostic(error) {

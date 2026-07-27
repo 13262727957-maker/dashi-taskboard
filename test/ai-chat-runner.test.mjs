@@ -44,7 +44,6 @@ async function createFixture() {
   ]);
   const capturePath = path.join(directory, "capture.jsonl");
   const descendantPath = path.join(directory, "descendant-alive");
-  const signalPath = path.join(directory, "fatal-signal");
   const executable = path.join(directory, "fake-codex.mjs");
   await writeFile(executable, `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
@@ -83,16 +82,14 @@ if (args[0] === "app-server") {
     const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
     if (!args.includes("resume")) emit({type:"thread.started",thread_id:"codex-thread-1"});
     emit({type:"turn.started"});
-    if (prompt.includes("MALFORMED_DELAY") || prompt.includes("CALLBACK_FATAL_DELAY")) {
+    if (prompt.includes("MALFORMED_STUBBORN") || prompt.includes("CALLBACK_FATAL_STUBBORN")) {
       spawn(process.execPath, [
         "-e",
-        'setTimeout(() => require("node:fs").writeFileSync(process.env.FAKE_DESCENDANT_PATH, "alive"), 300)',
+        'process.on("SIGTERM", () => {}); setTimeout(() => require("node:fs").writeFileSync(process.env.FAKE_DESCENDANT_PATH, "alive"), 300); setInterval(() => {}, 1000)',
       ], {env:process.env,stdio:"ignore"});
-      process.on("SIGTERM", () => {
-        appendFileSync(process.env.FAKE_SIGNAL_PATH, "signal\\n");
-        setTimeout(() => process.exit(143), 150);
-      });
-      if (prompt.includes("CALLBACK_FATAL_DELAY")) {
+      process.on("SIGTERM", () => {});
+      setInterval(() => {}, 1000);
+      if (prompt.includes("CALLBACK_FATAL_STUBBORN")) {
         emit({type:"thread.started",thread_id:"unexpected-thread"});
       } else {
         process.stdout.write("{not-json}\\n");
@@ -150,7 +147,6 @@ if (args[0] === "app-server") {
       ...process.env,
       FAKE_CAPTURE_PATH: capturePath,
       FAKE_DESCENDANT_PATH: descendantPath,
-      FAKE_SIGNAL_PATH: signalPath,
     },
     killGraceMs: 50,
   });
@@ -162,7 +158,6 @@ if (args[0] === "app-server") {
     directory,
     otherWorkspace,
     service,
-    signalPath,
     workspace,
     async close() {
       await this.service.close();
@@ -296,34 +291,17 @@ test("malformed Codex JSONL fails the run", async () => {
   }
 });
 
-test("parser and event callback failures keep the thread locked until the process group closes", async () => {
+test("parser and event callback failures kill a SIGTERM-resistant process group", async () => {
   const fixture = await createFixture();
   try {
     for (const [message, expectedError] of [
-      ["MALFORMED_DELAY", "Codex emitted malformed JSONL"],
-      ["CALLBACK_FATAL_DELAY", "Codex returned an unexpected thread id"],
+      ["MALFORMED_STUBBORN", "Codex emitted malformed JSONL"],
+      ["CALLBACK_FATAL_STUBBORN", "Codex returned an unexpected thread id"],
     ]) {
-      await Promise.all([
-        rm(fixture.signalPath, { force: true }),
-        rm(fixture.descendantPath, { force: true }),
-      ]);
+      await rm(fixture.descendantPath, { force: true });
       const thread = await fixture.service.createThread({ projectId: "project" });
       const run = await fixture.service.startTurn(thread.id, { message });
-      await waitFor(async () => {
-        try {
-          await readFile(fixture.signalPath);
-          return true;
-        } catch {
-          return false;
-        }
-      });
-
-      assert.equal(fixture.service.getRun(run.id).status, "running");
-      await assert.rejects(
-        fixture.service.startTurn(thread.id, { message: "must remain locked" }),
-        (error) => error.code === "THREAD_BUSY",
-      );
-      await waitFor(() => fixture.service.getRun(run.id).status === "failed");
+      await waitFor(() => fixture.service.getRun(run.id).status === "failed", 700);
       assert.equal(fixture.service.getRun(run.id).error, expectedError);
       await new Promise((resolve) => setTimeout(resolve, 350));
       await assert.rejects(readFile(fixture.descendantPath), (error) => error.code === "ENOENT");
