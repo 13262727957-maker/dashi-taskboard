@@ -15,6 +15,7 @@ import {
   isTaskStatus,
 } from "../shared/domain.mjs";
 import { normalizeWorkflowSnapshot } from "../shared/workflow-control-flow.mjs";
+import { AiChatService } from "./ai-chat.mjs";
 import { ApiError, TaskboardDatabase } from "./database.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -128,6 +129,50 @@ function assertAllowedKeys(value, allowed) {
   const unknown = Object.keys(value).filter((key) => !allowed.has(key));
   if (unknown.length > 0) {
     throw new ApiError(400, "UNKNOWN_FIELD", `Unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
+  }
+}
+
+function assertAllowedQuery(searchParams, allowed, routeLabel) {
+  for (const key of searchParams.keys()) {
+    if (!allowed.has(key)) {
+      throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", `${routeLabel} does not accept query parameter '${key}'`);
+    }
+    if (searchParams.getAll(key).length !== 1) {
+      throw new ApiError(400, "INVALID_QUERY_PARAMETER", `Query parameter '${key}' cannot be repeated`);
+    }
+  }
+}
+
+function assertNoQuery(searchParams, routeLabel) {
+  assertAllowedQuery(searchParams, new Set(), routeLabel);
+}
+
+function decodeRouteSegment(value, name) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    throw new ApiError(400, "INVALID_PATH", `${name} contains invalid encoding`);
+  }
+  if (!decoded || decoded.length > 256 || decoded.includes("\0")) {
+    throw new ApiError(400, "INVALID_PATH", `${name} is invalid`);
+  }
+  return decoded;
+}
+
+function isLoopbackAddress(value) {
+  if (typeof value !== "string") return false;
+  const address = value.toLowerCase().split("%", 1)[0];
+  return address === "::1"
+    || address === "127.0.0.1"
+    || address.startsWith("127.")
+    || address === "::ffff:127.0.0.1"
+    || address.startsWith("::ffff:127.");
+}
+
+function assertLoopbackRequest(request) {
+  if (!isLoopbackAddress(request.socket.remoteAddress)) {
+    throw new ApiError(403, "LOCAL_AI_LOOPBACK_REQUIRED", "Local AI routes are only available from this device");
   }
 }
 
@@ -623,6 +668,13 @@ async function readJson(request) {
   }
 }
 
+async function assertEmptyRequestBody(request, routeLabel) {
+  const body = await readBody(request, JSON_BODY_LIMIT, "Request body cannot exceed 1 MiB");
+  if (body.length > 0) {
+    throw new ApiError(400, "INVALID_BODY", `${routeLabel} does not accept a request body`);
+  }
+}
+
 function parseTaskFilters(searchParams) {
   const allowed = new Set(["projectId", "status", "archived"]);
   for (const key of searchParams.keys()) {
@@ -645,6 +697,92 @@ function parseTaskFilters(searchParams) {
   }
   const projectId = projectIdValue === null ? undefined : validateProjectId(projectIdValue);
   return { projectId, status: statusValue ?? undefined, archived };
+}
+
+function parseAiSandbox(value) {
+  if (value === undefined) return undefined;
+  if (!["read-only", "workspace-write", "danger-full-access"].includes(value)) {
+    throw new ApiError(
+      400,
+      "INVALID_SANDBOX",
+      "'sandbox' must be read-only, workspace-write, or danger-full-access",
+    );
+  }
+  return value;
+}
+
+function parseAiSetting(value, name, maxLength) {
+  const setting = stringField(value, name, { maxLength });
+  if (setting === "") {
+    throw new ApiError(400, "INVALID_FIELD", `'${name}' cannot be empty`);
+  }
+  return setting;
+}
+
+function parseAiThreadCreate(body) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, new Set([
+    "projectId",
+    "issueId",
+    "title",
+    "model",
+    "reasoningEffort",
+    "sandbox",
+  ]));
+  return {
+    projectId: validateProjectId(body.projectId),
+    issueId: parseAiSetting(body.issueId, "issueId", 128),
+    title: parseAiSetting(body.title, "title", 160),
+    model: parseAiSetting(body.model, "model", 128),
+    reasoningEffort: parseAiSetting(body.reasoningEffort, "reasoningEffort", 64),
+    sandbox: parseAiSandbox(body.sandbox),
+  };
+}
+
+function parseAiThreadPatch(body) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, new Set(["title", "model", "reasoningEffort", "sandbox"]));
+  const input = {};
+  if (body.title !== undefined) input.title = parseAiSetting(body.title, "title", 160);
+  if (body.model !== undefined) input.model = parseAiSetting(body.model, "model", 128);
+  if (body.reasoningEffort !== undefined) {
+    input.reasoningEffort = parseAiSetting(body.reasoningEffort, "reasoningEffort", 64);
+  }
+  if (body.sandbox !== undefined) input.sandbox = parseAiSandbox(body.sandbox);
+  if (Object.keys(input).length === 0) {
+    throw new ApiError(400, "INVALID_BODY", "PATCH requires at least one thread setting");
+  }
+  return input;
+}
+
+function parseAiSkillIds(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 20) {
+    throw new ApiError(400, "INVALID_FIELD", "'skillIds' must be an array with at most 20 entries");
+  }
+  const skillIds = value.map((skillId, index) => (
+    stringField(skillId, `skillIds[${index}]`, { required: true, maxLength: 256 })
+  ));
+  if (new Set(skillIds).size !== skillIds.length) {
+    throw new ApiError(400, "INVALID_FIELD", "'skillIds' must not contain duplicates");
+  }
+  return skillIds;
+}
+
+function parseAiTurn(body) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, new Set(["message", "skillIds", "dangerFullAccessConfirmed"]));
+  if (
+    body.dangerFullAccessConfirmed !== undefined
+    && typeof body.dangerFullAccessConfirmed !== "boolean"
+  ) {
+    throw new ApiError(400, "INVALID_FIELD", "'dangerFullAccessConfirmed' must be a boolean");
+  }
+  return {
+    message: stringField(body.message, "message", { required: true, maxLength: 100_000 }),
+    skillIds: parseAiSkillIds(body.skillIds),
+    dangerFullAccessConfirmed: body.dangerFullAccessConfirmed,
+  };
 }
 
 class EventHub {
@@ -1026,6 +1164,13 @@ export function createTaskboardServer(options = {}) {
   const resolved = resolveServerOptions(options);
   const database = new TaskboardDatabase(resolved.databasePath);
   const events = new EventHub();
+  const aiChat = new AiChatService({
+    database,
+    codexExecutable: resolved.codexExecutable,
+    codexStatePath: resolved.codexStatePath,
+    manageTaskboardSkillPath: resolved.skillPath,
+  });
+  const aiEventResponses = new Set();
 
   const server = createServer(async (request, response) => {
     response.setHeader("x-content-type-options", "nosniff");
@@ -1034,6 +1179,9 @@ export function createTaskboardServer(options = {}) {
       assertTrustedNetworkRequest(request);
       const url = new URL(request.url, "http://127.0.0.1");
       const pathname = url.pathname;
+      if (pathname === "/api/local/ai" || pathname.startsWith("/api/local/ai/")) {
+        assertLoopbackRequest(request);
+      }
 
       if (pathname === "/health") {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
@@ -1045,7 +1193,95 @@ export function createTaskboardServer(options = {}) {
         if ([...url.searchParams.keys()].length > 0) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/meta does not accept query parameters");
         }
-        return sendJson(response, 200, { manageTaskboardSkillPath: resolved.skillPath });
+        return sendJson(response, 200, {
+          manageTaskboardSkillPath: resolved.skillPath,
+          capabilities: { localAiChat: isLoopbackAddress(request.socket.remoteAddress) },
+        });
+      }
+
+      if (pathname === "/api/local/ai/catalog") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertAllowedQuery(url.searchParams, new Set(["projectId"]), "GET /api/local/ai/catalog");
+        const projectId = validateProjectId(url.searchParams.get("projectId") ?? undefined);
+        return sendJson(response, 200, await aiChat.getCatalog(projectId));
+      }
+
+      if (pathname === "/api/local/ai/threads") {
+        assertNoQuery(url.searchParams, "/api/local/ai/threads");
+        if (request.method === "GET") {
+          return sendJson(response, 200, { threads: await aiChat.listThreads() });
+        }
+        if (request.method === "POST") {
+          const thread = await aiChat.createThread(parseAiThreadCreate(await readJson(request)));
+          return sendJson(response, 201, { thread });
+        }
+        return methodNotAllowed(response, ["GET", "POST"]);
+      }
+
+      const aiThreadEventsRoute = pathname.match(/^\/api\/local\/ai\/threads\/([^/]+)\/events$/);
+      if (aiThreadEventsRoute) {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertNoQuery(url.searchParams, "GET /api/local/ai/threads/:id/events");
+        const threadId = decodeRouteSegment(aiThreadEventsRoute[1], "Thread id");
+        await aiChat.getThreadSnapshot(threadId);
+        response.writeHead(200, {
+          connection: "keep-alive",
+          "cache-control": "no-cache, no-transform",
+          "content-type": "text/event-stream; charset=utf-8",
+          "x-accel-buffering": "no",
+        });
+        response.write(": connected\n\n");
+        aiEventResponses.add(response);
+        const unsubscribe = aiChat.subscribe(threadId, (event) => {
+          const type = event?.type === "ai.run" ? "ai.run" : "ai.event";
+          response.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+        });
+        const keepAlive = setInterval(() => response.write(": keep-alive\n\n"), 20_000);
+        keepAlive.unref();
+        request.once("close", () => {
+          clearInterval(keepAlive);
+          unsubscribe();
+          aiEventResponses.delete(response);
+        });
+        return;
+      }
+
+      const aiThreadTurnRoute = pathname.match(/^\/api\/local\/ai\/threads\/([^/]+)\/turns$/);
+      if (aiThreadTurnRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertNoQuery(url.searchParams, "POST /api/local/ai/threads/:id/turns");
+        const threadId = decodeRouteSegment(aiThreadTurnRoute[1], "Thread id");
+        const run = await aiChat.startTurn(threadId, parseAiTurn(await readJson(request)));
+        return sendJson(response, 202, { run });
+      }
+
+      const aiThreadRoute = pathname.match(/^\/api\/local\/ai\/threads\/([^/]+)$/);
+      if (aiThreadRoute) {
+        assertNoQuery(url.searchParams, "/api/local/ai/threads/:id");
+        const threadId = decodeRouteSegment(aiThreadRoute[1], "Thread id");
+        if (request.method === "GET") {
+          return sendJson(response, 200, await aiChat.getThreadSnapshot(threadId));
+        }
+        if (request.method === "PATCH") {
+          const thread = await aiChat.updateThread(threadId, parseAiThreadPatch(await readJson(request)));
+          return sendJson(response, 200, { thread });
+        }
+        if (request.method === "DELETE") {
+          await assertEmptyRequestBody(request, "DELETE /api/local/ai/threads/:id");
+          await aiChat.deleteThread(threadId);
+          return sendEmpty(response, 204);
+        }
+        return methodNotAllowed(response, ["GET", "PATCH", "DELETE"]);
+      }
+
+      const aiInterruptRoute = pathname.match(/^\/api\/local\/ai\/runs\/([^/]+)\/interrupt$/);
+      if (aiInterruptRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertNoQuery(url.searchParams, "POST /api/local/ai/runs/:id/interrupt");
+        const runId = decodeRouteSegment(aiInterruptRoute[1], "Run id");
+        await assertEmptyRequestBody(request, "POST /api/local/ai/runs/:id/interrupt");
+        const run = await aiChat.interrupt(runId);
+        return sendJson(response, 200, { run });
       }
 
       if (pathname === "/api/device-workspaces") {
@@ -1530,6 +1766,7 @@ export function createTaskboardServer(options = {}) {
   let listening = false;
   return {
     database,
+    aiChat,
     server,
     options: resolved,
     async listen({ host = "127.0.0.1", port = resolvePort() } = {}) {
@@ -1554,6 +1791,9 @@ export function createTaskboardServer(options = {}) {
     },
     async close() {
       events.close();
+      for (const response of aiEventResponses) response.end();
+      aiEventResponses.clear();
+      await aiChat.close();
       if (listening) {
         await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
         listening = false;
