@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -9,8 +9,9 @@ import { createTaskboardServer } from "../server/index.mjs";
 
 async function createServerFixture(host = "127.0.0.1") {
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-ai-server-"));
-  const workspace = path.join(directory, "workspace");
-  await mkdir(workspace);
+  const workspacePath = path.join(directory, "workspace");
+  await mkdir(workspacePath);
+  const workspace = await realpath(workspacePath);
   const codexExecutable = path.join(directory, "fake-codex.mjs");
   await writeFile(codexExecutable, `#!/usr/bin/env node
 const args = process.argv.slice(2);
