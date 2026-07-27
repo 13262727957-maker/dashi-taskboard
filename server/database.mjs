@@ -875,7 +875,7 @@ export class TaskboardDatabase {
     return this.database.prepare(`
       SELECT * FROM ai_chat_events
       WHERE thread_id = ?
-      ORDER BY created_at, id
+      ORDER BY created_at, rowid
     `).all(threadId).map(aiChatEventFromRow);
   }
 

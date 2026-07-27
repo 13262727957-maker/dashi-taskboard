@@ -272,7 +272,12 @@ test("AI SSE is live-only and thread snapshots remain the durable source", async
     });
     assert.equal(response.status, 200);
     const reader = response.body.getReader();
-    const connected = new TextDecoder().decode((await reader.read()).value);
+    let connected = "";
+    while (!connected.includes("event: ai.event")) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false);
+      connected += new TextDecoder().decode(chunk.value);
+    }
     assert.match(connected, /connected/);
     const turn = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}/turns`, {
       method: "POST",
@@ -289,5 +294,33 @@ test("AI SSE is live-only and thread snapshots remain the durable source", async
     controller.abort();
   } finally {
     await fixture.close();
+  }
+});
+
+test("server close stops accepting requests before AI shutdown completes", async () => {
+  const fixture = await createServerFixture();
+  let appClosed = false;
+  try {
+    let releaseAiClose;
+    const aiCloseGate = new Promise((resolve) => {
+      releaseAiClose = resolve;
+    });
+    fixture.app.aiChat.close = () => aiCloseGate;
+
+    const closing = fixture.app.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const acceptedDuringClose = await fetch(`${fixture.baseUrl}/health`)
+      .then(() => true, () => false);
+    releaseAiClose();
+    await closing;
+    appClosed = true;
+
+    assert.equal(acceptedDuringClose, false);
+  } finally {
+    if (appClosed) {
+      await rm(fixture.directory, { recursive: true, force: true });
+    } else {
+      await fixture.close();
+    }
   }
 });

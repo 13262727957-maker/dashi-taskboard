@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import { TaskboardDatabase } from "../server/database.mjs";
 import { AiChatService } from "../server/ai-chat.mjs";
+import { normalizeCodexEvent } from "../server/ai-chat-process.mjs";
 
 async function waitFor(predicate, timeout = 4_000) {
   const deadline = Date.now() + timeout;
@@ -17,6 +18,21 @@ async function waitFor(predicate, timeout = 4_000) {
   throw new Error("Timed out waiting for condition");
 }
 
+test("normalized item events retain a bounded public item id", () => {
+  const itemId = "x".repeat(70_000);
+  const normalized = normalizeCodexEvent({
+    type: "item.updated",
+    item: {
+      id: itemId,
+      type: "command_execution",
+      command: "npm test",
+      status: "in_progress",
+    },
+  });
+
+  assert.equal(normalized.data.itemId, itemId.slice(0, 65_536));
+});
+
 async function createFixture() {
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-ai-runner-"));
   const workspacePath = path.join(directory, "workspace");
@@ -27,11 +43,15 @@ async function createFixture() {
     realpath(otherWorkspacePath),
   ]);
   const capturePath = path.join(directory, "capture.jsonl");
+  const descendantPath = path.join(directory, "descendant-alive");
+  const signalPath = path.join(directory, "fatal-signal");
   const executable = path.join(directory, "fake-codex.mjs");
   await writeFile(executable, `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 const args = process.argv.slice(2);
 if (args[0] === "debug" && args[1] === "models") {
+  if (args.length !== 2) process.exit(2);
   process.stdout.write(JSON.stringify({models:[{
     slug:"gpt-real", display_name:"GPT Real", description:"Real fixture",
     default_reasoning_level:"medium",
@@ -63,6 +83,22 @@ if (args[0] === "app-server") {
     const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
     if (!args.includes("resume")) emit({type:"thread.started",thread_id:"codex-thread-1"});
     emit({type:"turn.started"});
+    if (prompt.includes("MALFORMED_DELAY") || prompt.includes("CALLBACK_FATAL_DELAY")) {
+      spawn(process.execPath, [
+        "-e",
+        'setTimeout(() => require("node:fs").writeFileSync(process.env.FAKE_DESCENDANT_PATH, "alive"), 300)',
+      ], {env:process.env,stdio:"ignore"});
+      process.on("SIGTERM", () => {
+        appendFileSync(process.env.FAKE_SIGNAL_PATH, "signal\\n");
+        setTimeout(() => process.exit(143), 150);
+      });
+      if (prompt.includes("CALLBACK_FATAL_DELAY")) {
+        emit({type:"thread.started",thread_id:"unexpected-thread"});
+      } else {
+        process.stdout.write("{not-json}\\n");
+      }
+      return;
+    }
     if (prompt.includes("MALFORMED")) {
       process.stdout.write("{not-json}\\n");
       return;
@@ -70,6 +106,18 @@ if (args[0] === "app-server") {
     emit({type:"item.completed",item:{type:"reasoning",text:"SECRET REASONING"}});
     emit({type:"item.completed",item:{type:"agent_message",text:"Visible answer"}});
     emit({type:"item.completed",item:{type:"command_execution",command:"npm test",status:"completed",exit_code:0,aggregated_output:"ok"}});
+    if (prompt.includes("TURN_FAILED_ZERO")) {
+      emit({type:"turn.failed",error:{message:"Protocol turn failed"}});
+      return;
+    }
+    if (prompt.includes("ROOT_ERROR_ZERO")) {
+      emit({type:"error",message:"Protocol root error"});
+      return;
+    }
+    if (prompt.includes("NO_TERMINAL")) return;
+    if (prompt.includes("ITEM_ERROR")) {
+      emit({type:"item.completed",item:{id:"item-error-1",type:"error",message:"Recoverable item error"}});
+    }
     if (prompt.includes("WAIT")) {
       const timer = setTimeout(() => { emit({type:"turn.completed",usage:{input_tokens:1,output_tokens:2}}); }, 800);
       process.on("SIGTERM", () => { clearTimeout(timer); process.exit(143); });
@@ -98,16 +146,23 @@ if (args[0] === "app-server") {
     codexExecutable: executable,
     codexStatePath,
     manageTaskboardSkillPath: "/fixture/manage-taskboard/SKILL.md",
-    processEnv: { ...process.env, FAKE_CAPTURE_PATH: capturePath },
+    processEnv: {
+      ...process.env,
+      FAKE_CAPTURE_PATH: capturePath,
+      FAKE_DESCENDANT_PATH: descendantPath,
+      FAKE_SIGNAL_PATH: signalPath,
+    },
     killGraceMs: 50,
   });
   return {
     capturePath,
     database,
     databasePath,
+    descendantPath,
     directory,
     otherWorkspace,
     service,
+    signalPath,
     workspace,
     async close() {
       await this.service.close();
@@ -236,6 +291,105 @@ test("malformed Codex JSONL fails the run", async () => {
       ),
       true,
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("parser and event callback failures keep the thread locked until the process group closes", async () => {
+  const fixture = await createFixture();
+  try {
+    for (const [message, expectedError] of [
+      ["MALFORMED_DELAY", "Codex emitted malformed JSONL"],
+      ["CALLBACK_FATAL_DELAY", "Codex returned an unexpected thread id"],
+    ]) {
+      await Promise.all([
+        rm(fixture.signalPath, { force: true }),
+        rm(fixture.descendantPath, { force: true }),
+      ]);
+      const thread = await fixture.service.createThread({ projectId: "project" });
+      const run = await fixture.service.startTurn(thread.id, { message });
+      await waitFor(async () => {
+        try {
+          await readFile(fixture.signalPath);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+
+      assert.equal(fixture.service.getRun(run.id).status, "running");
+      await assert.rejects(
+        fixture.service.startTurn(thread.id, { message: "must remain locked" }),
+        (error) => error.code === "THREAD_BUSY",
+      );
+      await waitFor(() => fixture.service.getRun(run.id).status === "failed");
+      assert.equal(fixture.service.getRun(run.id).error, expectedError);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      await assert.rejects(readFile(fixture.descendantPath), (error) => error.code === "ENOENT");
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("protocol terminal events determine run success and item errors remain non-fatal", async () => {
+  const fixture = await createFixture();
+  try {
+    for (const [message, expectedStatus] of [
+      ["TURN_FAILED_ZERO", "failed"],
+      ["ROOT_ERROR_ZERO", "failed"],
+      ["NO_TERMINAL", "failed"],
+      ["ITEM_ERROR", "completed"],
+    ]) {
+      const thread = await fixture.service.createThread({ projectId: "project" });
+      const run = await fixture.service.startTurn(thread.id, { message });
+      await waitFor(() => fixture.service.getRun(run.id).status !== "running");
+      assert.equal(fixture.service.getRun(run.id).status, expectedStatus, message);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("startTurn revalidates the latest danger sandbox and persisted model settings", async () => {
+  const fixture = await createFixture();
+  try {
+    for (const scenario of [
+      {
+        changes: { sandbox: "danger-full-access" },
+        expectedCode: "DANGER_CONFIRMATION_REQUIRED",
+      },
+      {
+        changes: { model: "retired-model" },
+        expectedCode: "INVALID_MODEL",
+      },
+      {
+        changes: { reasoningEffort: "ultra" },
+        expectedCode: "INVALID_REASONING_EFFORT",
+      },
+    ]) {
+      const thread = await fixture.service.createThread({ projectId: "project" });
+      const originalGetCatalog = fixture.service.getCatalog.bind(fixture.service);
+      let releaseCatalog;
+      let catalogRequested = false;
+      const catalogGate = new Promise((resolve) => {
+        releaseCatalog = resolve;
+      });
+      fixture.service.getCatalog = async (...args) => {
+        catalogRequested = true;
+        await catalogGate;
+        return originalGetCatalog(...args);
+      };
+
+      const pending = fixture.service.startTurn(thread.id, { message: "must not spawn" });
+      await waitFor(() => catalogRequested);
+      fixture.database.updateAiChatThread(thread.id, scenario.changes);
+      releaseCatalog();
+      await assert.rejects(pending, (error) => error.code === scenario.expectedCode);
+      assert.equal(fixture.database.listAiChatRuns(thread.id).length, 0);
+      fixture.service.getCatalog = originalGetCatalog;
+    }
   } finally {
     await fixture.close();
   }

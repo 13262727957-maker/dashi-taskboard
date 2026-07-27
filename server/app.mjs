@@ -1230,12 +1230,13 @@ export function createTaskboardServer(options = {}) {
           "content-type": "text/event-stream; charset=utf-8",
           "x-accel-buffering": "no",
         });
-        response.write(": connected\n\n");
         aiEventResponses.add(response);
         const unsubscribe = aiChat.subscribe(threadId, (event) => {
           const type = event?.type === "ai.run" ? "ai.run" : "ai.event";
           response.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
         });
+        response.write(": connected\n\n");
+        response.write('event: ai.event\ndata: {"type":"ai.event"}\n\n');
         const keepAlive = setInterval(() => response.write(": keep-alive\n\n"), 20_000);
         keepAlive.unref();
         request.once("close", () => {
@@ -1790,14 +1791,17 @@ export function createTaskboardServer(options = {}) {
       return server.address();
     },
     async close() {
+      const serverClosed = listening
+        ? new Promise((resolve, reject) => {
+            server.close((error) => error ? reject(error) : resolve());
+          })
+        : Promise.resolve();
       events.close();
       for (const response of aiEventResponses) response.end();
       aiEventResponses.clear();
       await aiChat.close();
-      if (listening) {
-        await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-        listening = false;
-      }
+      await serverClosed;
+      listening = false;
       database.close();
     },
   };

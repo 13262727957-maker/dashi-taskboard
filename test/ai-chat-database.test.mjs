@@ -162,3 +162,45 @@ test("deleting an AI chat thread removes its runs and visible events", async () 
     await fixture.close();
   }
 });
+
+test("AI chat events with the same timestamp retain SQLite insertion order", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.database.createAiChatThread({
+      id: "thread-1",
+      title: "New conversation",
+      origin: {
+        projectId: "local",
+        projectName: "Local",
+        workspacePath: "/tmp/project",
+      },
+      model: "gpt-real",
+      reasoningEffort: "medium",
+      sandbox: "read-only",
+    });
+    const createdAt = "2026-07-27T12:00:00.000Z";
+    fixture.database.insertAiChatEvent({
+      id: "z-first",
+      threadId: "thread-1",
+      type: "agent_message",
+      role: "assistant",
+      content: "first",
+      createdAt,
+    });
+    fixture.database.insertAiChatEvent({
+      id: "a-second",
+      threadId: "thread-1",
+      type: "agent_message",
+      role: "assistant",
+      content: "second",
+      createdAt,
+    });
+
+    assert.deepEqual(
+      fixture.database.listAiChatEvents("thread-1").map((event) => event.id),
+      ["z-first", "a-second"],
+    );
+  } finally {
+    await fixture.close();
+  }
+});
