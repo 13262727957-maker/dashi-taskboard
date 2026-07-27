@@ -40,6 +40,7 @@ import {
   assigneeTargetForActor,
 } from "./actors";
 import { BoardColumn, STATUS_DETAILS } from "./components/BoardColumn";
+import { AiChat } from "./components/AiChat";
 import { BoardSettingsMenu } from "./components/BoardSettingsMenu";
 import { HiddenColumns } from "./components/HiddenColumns";
 import { LinearIcon } from "./components/LinearIcon";
@@ -352,6 +353,7 @@ export function App() {
   const [developmentScan, setDevelopmentScan] = useState<DevelopmentScan>({ workspacePath: null, contexts: [] });
   const [developmentScanLoading, setDevelopmentScanLoading] = useState(false);
   const [manageTaskboardSkillPath, setManageTaskboardSkillPath] = useState("");
+  const [localAiChatAvailable, setLocalAiChatAvailable] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -861,6 +863,7 @@ export function App() {
         listDeviceWorkspaces(signal),
       ]);
       setManageTaskboardSkillPath(metadata.manageTaskboardSkillPath);
+      setLocalAiChatAvailable(metadata.capabilities?.localAiChat === true);
       setDeviceWorkspacePaths((current) => {
         const next = { ...current, ...workspaces };
         if (JSON.stringify(next) === JSON.stringify(current)) return current;
@@ -2107,6 +2110,12 @@ export function App() {
           onArchive={(task) => void archiveTask(task)}
         />
       )}
+
+      <AiChat
+        available={localAiChatAvailable}
+        projectId={selectedProjectId || null}
+        issueId={detailTaskId}
+      />
 
       <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
       {undoNotice && (
