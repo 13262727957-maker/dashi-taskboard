@@ -9,6 +9,7 @@ import {
   type ChangeEvent,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import ReactMarkdown from "react-markdown";
@@ -68,8 +69,29 @@ type ComposerAttachment = AiChatImageAttachmentInput & {
   id: string;
   previewUrl: string;
 };
+type PanelResizeEdge = "top" | "right";
+type PanelGeometry = {
+  width: number;
+  height: number;
+  right: number;
+};
+type PanelResizeSession = {
+  edge: PanelResizeEdge;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startLeft: number;
+  startWidth: number;
+  startHeight: number;
+  startRight: number;
+  captureTarget: HTMLElement;
+};
 
 const LAST_THREAD_KEY = "taskboard.aiChat.lastThreadId";
+const PANEL_EDGE_GAP = 8;
+const PANEL_MIN_WIDTH = 420;
+const PANEL_MAX_WIDTH = 672;
+const PANEL_MIN_HEIGHT = 360;
 const IMAGE_ATTACHMENT_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -342,9 +364,13 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
+  const [panelGeometry, setPanelGeometry] = useState<PanelGeometry | null>(null);
+  const [panelResizeEdge, setPanelResizeEdge] = useState<PanelResizeEdge | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const panelResizeSessionRef = useRef<PanelResizeSession | null>(null);
   const selectedThreadRef = useRef(selectedThreadId);
   const panelOpenRef = useRef(panelOpen);
   const snapshotRequestRef = useRef(0);
@@ -367,6 +393,137 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     panelOpenRef.current = panelOpen;
     if (panelOpen) setUnread(false);
   }, [panelOpen]);
+
+  useEffect(() => {
+    function finishPanelResize(pointerId?: number) {
+      const session = panelResizeSessionRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+      if (session.captureTarget.hasPointerCapture(session.pointerId)) {
+        session.captureTarget.releasePointerCapture(session.pointerId);
+      }
+      panelResizeSessionRef.current = null;
+      setPanelResizeEdge(null);
+    }
+
+    function resizePanel(event: PointerEvent) {
+      const session = panelResizeSessionRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      event.preventDefault();
+
+      if (session.edge === "top") {
+        const maxHeight = window.innerHeight - PANEL_EDGE_GAP * 2;
+        const minHeight = Math.min(PANEL_MIN_HEIGHT, maxHeight);
+        const height = Math.min(
+          maxHeight,
+          Math.max(minHeight, session.startHeight - (event.clientY - session.startY)),
+        );
+        setPanelGeometry({
+          width: session.startWidth,
+          height,
+          right: session.startRight,
+        });
+        return;
+      }
+
+      const maxWidth = Math.min(
+        PANEL_MAX_WIDTH,
+        window.innerWidth - PANEL_EDGE_GAP - session.startLeft,
+      );
+      const minWidth = Math.min(PANEL_MIN_WIDTH, maxWidth);
+      const width = Math.min(
+        maxWidth,
+        Math.max(minWidth, session.startWidth + (event.clientX - session.startX)),
+      );
+      setPanelGeometry({
+        width,
+        height: session.startHeight,
+        right: window.innerWidth - session.startLeft - width,
+      });
+    }
+
+    function handlePointerEnd(event: PointerEvent) {
+      finishPanelResize(event.pointerId);
+    }
+
+    function handleWindowBlur() {
+      finishPanelResize();
+    }
+
+    function handleWindowResize() {
+      finishPanelResize();
+      if (window.innerWidth <= 719) {
+        setPanelGeometry(null);
+        return;
+      }
+
+      setPanelGeometry((current) => {
+        if (!current) return current;
+        const maxWidth = Math.min(
+          PANEL_MAX_WIDTH,
+          window.innerWidth - PANEL_EDGE_GAP * 2,
+        );
+        const width = Math.min(
+          maxWidth,
+          Math.max(Math.min(PANEL_MIN_WIDTH, maxWidth), current.width),
+        );
+        const maxHeight = window.innerHeight - PANEL_EDGE_GAP * 2;
+        const height = Math.min(
+          maxHeight,
+          Math.max(Math.min(PANEL_MIN_HEIGHT, maxHeight), current.height),
+        );
+        const maxRight = window.innerWidth - PANEL_EDGE_GAP - width;
+        const right = Math.min(
+          maxRight,
+          Math.max(PANEL_EDGE_GAP, current.right),
+        );
+        return { width, height, right };
+      });
+    }
+
+    window.addEventListener("pointermove", resizePanel, { passive: false });
+    window.addEventListener("pointerup", handlePointerEnd);
+    window.addEventListener("pointercancel", handlePointerEnd);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("resize", handleWindowResize);
+    return () => {
+      window.removeEventListener("pointermove", resizePanel);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerEnd);
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("resize", handleWindowResize);
+    };
+  }, []);
+
+  function startPanelResize(
+    event: ReactPointerEvent<HTMLDivElement>,
+    edge: PanelResizeEdge,
+  ) {
+    if (window.innerWidth <= 719) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = panel.getBoundingClientRect();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    panelResizeSessionRef.current = {
+      edge,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: rect.left,
+      startWidth: rect.width,
+      startHeight: rect.height,
+      startRight: window.innerWidth - rect.right,
+      captureTarget: event.currentTarget,
+    };
+    setPanelGeometry({
+      width: rect.width,
+      height: rect.height,
+      right: window.innerWidth - rect.right,
+    });
+    setPanelResizeEdge(edge);
+  }
 
   const replaceThread = useCallback((thread: AiChatThread) => {
     setThreads((current) => {
@@ -933,7 +1090,23 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       }}
     >
       {panelOpen && (
-        <section className="ai-chat-panel" aria-label="Codex AI 对话" data-screen-label="Codex AI 对话">
+        <section
+          ref={panelRef}
+          className={`ai-chat-panel${panelResizeEdge ? ` is-resizing-${panelResizeEdge}` : ""}`}
+          style={panelGeometry ?? undefined}
+          aria-label="Codex AI 对话"
+          data-screen-label="Codex AI 对话"
+        >
+          <div
+            className="ai-chat-resize-handle is-top"
+            aria-hidden="true"
+            onPointerDown={(event) => startPanelResize(event, "top")}
+          />
+          <div
+            className="ai-chat-resize-handle is-right"
+            aria-hidden="true"
+            onPointerDown={(event) => startPanelResize(event, "right")}
+          />
           <header className="ai-chat-panel-header">
             <div className="ai-chat-panel-title">
               <strong>{snapshot?.thread.title ?? "新对话"}</strong>

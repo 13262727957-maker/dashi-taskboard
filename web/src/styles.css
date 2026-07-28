@@ -6482,6 +6482,29 @@ kbd {
   animation: ai-chat-panel-in 140ms cubic-bezier(.22, .8, .34, 1) both;
 }
 
+.ai-chat-resize-handle {
+  position: absolute;
+  z-index: 20;
+  touch-action: none;
+  user-select: none;
+}
+
+.ai-chat-resize-handle.is-top {
+  top: 0;
+  right: 16px;
+  left: 16px;
+  height: 4px;
+  cursor: ns-resize;
+}
+
+.ai-chat-resize-handle.is-right {
+  top: 16px;
+  right: 0;
+  bottom: 16px;
+  width: 4px;
+  cursor: ew-resize;
+}
+
 .ai-chat-panel-header {
   display: flex;
   flex: 0 0 42px;
@@ -7690,6 +7713,10 @@ kbd {
     border: 0;
     border-radius: 0;
     resize: none;
+  }
+
+  .ai-chat-resize-handle {
+    display: none;
   }
 
   .ai-chat-launcher {
