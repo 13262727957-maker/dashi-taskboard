@@ -29,9 +29,7 @@ import {
   deleteWorkflowNode,
   deriveWorkflowLayout,
   findWorkflowItem,
-  getWorkflowSequence,
   insertWorkflowNode,
-  moveWorkflowNode,
   normalizeWorkflowSnapshot,
   serializeWorkflowSnapshot,
   workflowNodeIds,
@@ -122,14 +120,6 @@ interface WorkflowTabMenu {
   y: number;
 }
 
-interface SequenceDragPreview {
-  nodeId: string;
-  sequenceRef: WorkflowSequenceRef;
-  sourceOrderIds: string[];
-  sourceIndex: number;
-  targetIndex: number;
-}
-
 interface PlanDragPreview {
   nodeId: string;
   parentId: string;
@@ -140,7 +130,6 @@ interface PlanDragPreview {
 
 const WORKFLOW_STEP_WIDTH = 250;
 const WORKFLOW_STEP_HEIGHT = 138;
-const WORKFLOW_STEP_GAP = 58;
 const PLAN_ITEM_WIDTH = 230;
 const PLAN_ITEM_HEIGHT = 34;
 const PLAN_ITEM_GAP = 4;
@@ -149,7 +138,7 @@ const PLAN_CONTAINER_BOTTOM = 38;
 const END_STEP_HEIGHT = 1;
 const TOP_CENTER_ORIGIN: [number, number] = [0.5, 0];
 const TOP_LEFT_ORIGIN: [number, number] = [0, 0];
-const PAN_MOUSE_BUTTONS = [1, 2];
+const CANVAS_PAN_PADDING = 72;
 const PRO_OPTIONS = { hideAttribution: true };
 const NODE_TYPES = { workflow: WorkflowNode } satisfies NodeTypes;
 const EDGE_TYPES = { workflowInsert: WorkflowInsertEdge } satisfies EdgeTypes;
@@ -157,6 +146,27 @@ const NESTABLE_TONES = new Set(["capability", "api", "integration", "development
 
 function isVirtualWorkflowNodeId(nodeId: string) {
   return nodeId.startsWith("__flow-");
+}
+
+function workflowContentBounds(nodes: WorkflowCanvasNode[]) {
+  const rootNodes = nodes.filter((node) => !node.parentId && !isVirtualWorkflowNodeId(node.id));
+  if (rootNodes.length === 0) return null;
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const node of rootNodes) {
+    const width = Number(node.style?.width ?? node.measured?.width ?? node.initialWidth ?? WORKFLOW_STEP_WIDTH);
+    const height = Number(node.style?.height ?? node.measured?.height ?? node.initialHeight ?? WORKFLOW_STEP_HEIGHT);
+    const origin = node.origin ?? TOP_CENTER_ORIGIN;
+    const x = node.position.x - width * origin[0];
+    const y = node.position.y - height * origin[1];
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + width);
+    maxY = Math.max(maxY, y + height);
+  }
+  return { minX, minY, maxX, maxY };
 }
 
 function planItemPosition(index: number) {
@@ -461,22 +471,6 @@ function mergeLegacyWorkspace(
   };
 }
 
-function rootDragShift(
-  nodeId: string,
-  preview: SequenceDragPreview | null,
-): number {
-  if (!preview || nodeId === preview.nodeId) return 0;
-  const nodeIndex = preview.sourceOrderIds.indexOf(nodeId);
-  const distance = WORKFLOW_STEP_HEIGHT + WORKFLOW_STEP_GAP;
-  if (preview.targetIndex > preview.sourceIndex) {
-    return nodeIndex > preview.sourceIndex && nodeIndex <= preview.targetIndex ? -distance : 0;
-  }
-  if (preview.targetIndex < preview.sourceIndex) {
-    return nodeIndex >= preview.targetIndex && nodeIndex < preview.sourceIndex ? distance : 0;
-  }
-  return 0;
-}
-
 function planDragShift(
   nodeId: string,
   preview: PlanDragPreview | null,
@@ -513,14 +507,19 @@ export function WorkflowBoard({
   const [workflowNameDraft, setWorkflowNameDraft] = useState("");
   const [workflowTabMenu, setWorkflowTabMenu] = useState<WorkflowTabMenu | null>(null);
   const [pickerTarget, setPickerTarget] = useState<StepPickerTarget | null>(null);
-  const [rootDragPreview, setRootDragPreview] = useState<SequenceDragPreview | null>(null);
   const [planDragPreview, setPlanDragPreview] = useState<PlanDragPreview | null>(null);
   const [settlingNodeId, setSettlingNodeId] = useState<string | null>(null);
   const [workflowCapabilities, setWorkflowCapabilities] = useState<WorkflowCapabilities | null>(null);
   const [workflowCapabilitiesFailed, setWorkflowCapabilitiesFailed] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [persistenceError, setPersistenceError] = useState("");
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [canvasZoom, setCanvasZoom] = useState(1);
+  const [contentBounds, setContentBounds] = useState(
+    () => workflowContentBounds(initialSnapshot.nodes),
+  );
   const flowRef = useRef<ReactFlowInstance<WorkflowCanvasNode, Edge> | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   const workflowNameInputRef = useRef<HTMLInputElement | null>(null);
   const workflowTabMenuRef = useRef<HTMLDivElement | null>(null);
   const cancelWorkflowRenameRef = useRef(false);
@@ -530,12 +529,27 @@ export function WorkflowBoard({
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const mountedRef = useRef(true);
   const settleTimerRef = useRef<number | null>(null);
-  const rootDragSessionRef = useRef<SequenceDragPreview | null>(null);
   const planDragSessionRef = useRef<PlanDragPreview | null>(null);
 
   const layout = useMemo(() => deriveWorkflowLayout(flow, nodes), [flow, nodes]);
   const rootStepIds = flow.root.items.map((item) => item.nodeId);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const translateExtent = useMemo<[[number, number], [number, number]] | undefined>(() => {
+    if (!contentBounds || canvasSize.width === 0 || canvasSize.height === 0) return undefined;
+    const padding = CANVAS_PAN_PADDING / canvasZoom;
+    const viewportWidth = canvasSize.width / canvasZoom;
+    const viewportHeight = canvasSize.height / canvasZoom;
+    const contentWidth = contentBounds.maxX - contentBounds.minX;
+    const contentHeight = contentBounds.maxY - contentBounds.minY;
+    const extentWidth = Math.max(contentWidth + padding * 2, viewportWidth + padding * 2);
+    const extentHeight = Math.max(contentHeight + padding * 2, viewportHeight + padding * 2);
+    const centerX = (contentBounds.minX + contentBounds.maxX) / 2;
+    const centerY = (contentBounds.minY + contentBounds.maxY) / 2;
+    return [
+      [centerX - extentWidth / 2, centerY - extentHeight / 2],
+      [centerX + extentWidth / 2, centerY + extentHeight / 2],
+    ];
+  }, [canvasSize.height, canvasSize.width, canvasZoom, contentBounds]);
 
   const applyWorkspace = useCallback((workspace: ReturnType<typeof createInitialWorkflowWorkspace>) => {
     const snapshot = normalizeSnapshot(workspace.snapshots.get(workspace.activeWorkflowId)!);
@@ -558,6 +572,62 @@ export function WorkflowBoard({
       if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    function updateCanvasSize() {
+      const rect = canvas!.getBoundingClientRect();
+      setCanvasSize((current) => (
+        current.width === rect.width && current.height === rect.height
+          ? current
+          : { width: rect.width, height: rect.height }
+      ));
+    }
+    updateCanvasSize();
+    const observer = new ResizeObserver(updateCanvasSize);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const rootNodeIds = nodes
+        .filter((node) => !node.parentId && !isVirtualWorkflowNodeId(node.id))
+        .map((node) => node.id);
+      if (rootNodeIds.length === 0) {
+        setContentBounds(null);
+        return;
+      }
+      const measured = flowRef.current?.getNodesBounds(rootNodeIds);
+      const next = measured && measured.width > 0 && measured.height > 0
+        ? {
+            minX: measured.x,
+            minY: measured.y,
+            maxX: measured.x + measured.width,
+            maxY: measured.y + measured.height,
+          }
+        : workflowContentBounds(nodes);
+      setContentBounds((current) => (
+        current?.minX === next?.minX
+        && current?.minY === next?.minY
+        && current?.maxX === next?.maxX
+        && current?.maxY === next?.maxY
+          ? current
+          : next
+      ));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeWorkflowId, nodes]);
+
+  useEffect(() => {
+    if (!translateExtent) return;
+    const frame = window.requestAnimationFrame(() => {
+      const instance = flowRef.current;
+      if (instance) void instance.zoomTo(instance.getZoom(), { duration: 0 });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [translateExtent]);
 
   useEffect(() => {
     let cancelled = false;
@@ -887,12 +957,10 @@ export function WorkflowBoard({
       : null;
     const enriched = nodes.map((node) => {
       const stepIndex = orderedIds.indexOf(node.id);
-      const dragShiftY = node.parentId
-        ? planDragShift(node.id, planDragPreview)
-        : rootDragShift(node.id, rootDragPreview);
+      const dragShiftY = node.parentId ? planDragShift(node.id, planDragPreview) : 0;
       return {
         ...node,
-        draggable: node.id !== pinnedTriggerId,
+        draggable: Boolean(node.parentId),
         data: {
           ...node.data,
           displayTitle: workflowNodeDisplayTitle(node.data),
@@ -910,7 +978,7 @@ export function WorkflowBoard({
           isTrigger: node.id === pinnedTriggerId,
           childCount: childCounts.get(node.id) ?? 0,
           dragShiftY,
-          dragActive: rootDragPreview?.nodeId === node.id || planDragPreview?.nodeId === node.id,
+          dragActive: planDragPreview?.nodeId === node.id,
           settleActive: settlingNodeId === node.id,
           onDuplicate: () => duplicateNode(node.id),
           onDelete: () => deleteNode(node.id),
@@ -956,7 +1024,6 @@ export function WorkflowBoard({
     nodes,
     openPlanStepPicker,
     planDragPreview,
-    rootDragPreview,
     rootStepIds,
     settlingNodeId,
     workflowCapabilities,
@@ -1040,39 +1107,22 @@ export function WorkflowBoard({
   }, []);
 
   const onNodeDragStart = useCallback<OnNodeDrag<WorkflowCanvasNode>>((_, node) => {
-    if (isVirtualWorkflowNodeId(node.id)) return;
-    if (node.parentId) {
-      const sourceOrderIds = nodes
-        .filter((candidate) => candidate.parentId === node.parentId)
-        .sort((left, right) => left.position.y - right.position.y)
-        .map((candidate) => candidate.id);
-      const preview = {
-        nodeId: node.id,
-        parentId: node.parentId,
-        sourceOrderIds,
-        sourceIndex: sourceOrderIds.indexOf(node.id),
-        targetIndex: sourceOrderIds.indexOf(node.id),
-      };
-      planDragSessionRef.current = preview;
-      setPlanDragPreview(preview);
-    } else {
-      const found = findWorkflowItem(flow, node.id);
-      if (!found) return;
-      const sourceOrderIds = getWorkflowSequence(flow, found.sequenceRef)
-        .items
-        .map((item) => item.nodeId);
-      const preview = {
-        nodeId: node.id,
-        sequenceRef: found.sequenceRef,
-        sourceOrderIds,
-        sourceIndex: found.index,
-        targetIndex: found.index,
-      };
-      rootDragSessionRef.current = preview;
-      setRootDragPreview(preview);
-    }
+    if (!node.parentId) return;
+    const sourceOrderIds = nodes
+      .filter((candidate) => candidate.parentId === node.parentId)
+      .sort((left, right) => left.position.y - right.position.y)
+      .map((candidate) => candidate.id);
+    const preview = {
+      nodeId: node.id,
+      parentId: node.parentId,
+      sourceOrderIds,
+      sourceIndex: sourceOrderIds.indexOf(node.id),
+      targetIndex: sourceOrderIds.indexOf(node.id),
+    };
+    planDragSessionRef.current = preview;
+    setPlanDragPreview(preview);
     setSettlingNodeId(null);
-  }, [flow, nodes]);
+  }, [nodes]);
 
   const onNodeDrag = useCallback<OnNodeDrag<WorkflowCanvasNode>>((_, node) => {
     const instance = flowRef.current;
@@ -1092,48 +1142,19 @@ export function WorkflowBoard({
       ));
       const targetIndex = index < 0 ? siblings.length : index;
       setPlanDragPreview({ ...session, targetIndex });
-      return;
     }
-    const session = rootDragSessionRef.current;
-    if (!session || session.nodeId !== node.id) return;
-    const siblings = session.sourceOrderIds
-      .filter((id) => id !== node.id)
-      .map((id) => instance.getInternalNode(id))
-      .filter((candidate) => candidate !== undefined);
-    const index = siblings.findIndex((candidate) => (
-      centerY < candidate.internals.positionAbsolute.y
-        + (candidate.measured.height ?? WORKFLOW_STEP_HEIGHT) / 2
-    ));
-    const targetIndex = index < 0 ? siblings.length : index;
-    setRootDragPreview({ ...session, targetIndex });
   }, []);
 
   const onNodeDragStop = useCallback<OnNodeDrag<WorkflowCanvasNode>>((_, node) => {
-    if (node.parentId && planDragSessionRef.current?.nodeId === node.id) {
-      const session = planDragSessionRef.current;
-      reorderPlanItem(session.parentId, node.id, planDragPreview?.targetIndex ?? session.sourceIndex);
-      planDragSessionRef.current = null;
-      setPlanDragPreview(null);
-    } else if (rootDragSessionRef.current?.nodeId === node.id) {
-      const session = rootDragSessionRef.current;
-      const requestedIndex = rootDragPreview?.targetIndex ?? session.sourceIndex;
-      const targetIndex = session.sequenceRef.length === 0
-        ? Math.max(1, requestedIndex)
-        : requestedIndex;
-      const nextFlow = moveWorkflowNode(
-        flow,
-        node.id,
-        session.sequenceRef,
-        targetIndex,
-      );
-      commitFlow(nodes, nextFlow);
-      rootDragSessionRef.current = null;
-      setRootDragPreview(null);
-    }
+    if (!node.parentId || planDragSessionRef.current?.nodeId !== node.id) return;
+    const session = planDragSessionRef.current;
+    reorderPlanItem(session.parentId, node.id, planDragPreview?.targetIndex ?? session.sourceIndex);
+    planDragSessionRef.current = null;
+    setPlanDragPreview(null);
     setSettlingNodeId(node.id);
     if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
     settleTimerRef.current = window.setTimeout(() => setSettlingNodeId(null), 220);
-  }, [commitFlow, flow, nodes, planDragPreview, rootDragPreview]);
+  }, [planDragPreview, reorderPlanItem]);
 
   function activateWorkflow(workflowId: string) {
     setWorkflowTabMenu(null);
@@ -1343,6 +1364,7 @@ export function WorkflowBoard({
           </div>
         </div>
         <div
+          ref={canvasRef}
           className="workflow-canvas"
           id="workflow-canvas-panel"
           role="tabpanel"
@@ -1363,15 +1385,18 @@ export function WorkflowBoard({
               if (!isVirtualWorkflowNodeId(node.id)) setSelectedNodeId(node.id);
             }}
             onPaneClick={() => setSelectedNodeId(null)}
+            nodesDraggable={false}
             nodesConnectable={false}
             connectOnClick={false}
             deleteKeyCode={null}
-            selectionOnDrag
+            selectionOnDrag={false}
             panOnScroll
-            panOnDrag={PAN_MOUSE_BUTTONS}
+            panOnDrag
             zoomOnDoubleClick={false}
             minZoom={0.45}
             maxZoom={1.35}
+            translateExtent={translateExtent}
+            onMoveEnd={(_, viewport) => setCanvasZoom(viewport.zoom)}
             proOptions={PRO_OPTIONS}
             onInit={(instance) => {
               flowRef.current = instance;

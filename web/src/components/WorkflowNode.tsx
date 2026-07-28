@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { LinearIcon, type LinearIconName } from "./LinearIcon";
 import { WorkflowMark } from "./WorkflowMark";
@@ -97,23 +98,57 @@ function StepMenu({
   onDuplicate?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const trigger = triggerRef.current;
+    const popover = popoverRef.current;
+    if (!trigger || !popover) return;
+    const triggerRect = trigger.getBoundingClientRect();
+    const popoverRect = popover.getBoundingClientRect();
+    setPosition({
+      top: Math.min(triggerRect.bottom + 4, window.innerHeight - popoverRect.height - 8),
+      left: Math.max(8, Math.min(
+        triggerRect.right - popoverRect.width,
+        window.innerWidth - popoverRect.width - 8,
+      )),
+    });
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
-    function close(event: MouseEvent) {
-      if (menuRef.current?.contains(event.target as globalThis.Node)) return;
+    function close(event: PointerEvent) {
+      if (
+        menuRef.current?.contains(event.target as globalThis.Node)
+        || popoverRef.current?.contains(event.target as globalThis.Node)
+      ) return;
       setOpen(false);
     }
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    function closeOnViewportChange() {
+      setOpen(false);
+    }
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("wheel", closeOnViewportChange, true);
+    window.addEventListener("resize", closeOnViewportChange);
+    window.addEventListener("scroll", closeOnViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("wheel", closeOnViewportChange, true);
+      window.removeEventListener("resize", closeOnViewportChange);
+      window.removeEventListener("scroll", closeOnViewportChange, true);
+    };
   }, [open]);
 
   if (!canDelete && !canDuplicate) return null;
 
   return (
-    <div className="workflow-step-menu workflow-node-menu" ref={menuRef}>
+    <div className="workflow-step-menu workflow-node-menu nodrag nopan" ref={menuRef}>
       <button
+        ref={triggerRef}
         className="workflow-step-menu-trigger"
         type="button"
         aria-label="步骤操作"
@@ -125,8 +160,13 @@ function StepMenu({
       >
         <LinearIcon name="more" />
       </button>
-      {open && (
-        <div className="workflow-step-menu-popover" role="menu">
+      {open && createPortal(
+        <div
+          ref={popoverRef}
+          className="workflow-step-menu-popover is-portaled nodrag nopan"
+          role="menu"
+          style={{ top: position.top, left: position.left }}
+        >
           {canDuplicate && (
             <button
               type="button"
@@ -156,7 +196,8 @@ function StepMenu({
               <span>删除步骤</span>
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -244,7 +285,7 @@ export function WorkflowNode({ data, selected, isConnectable, parentId }: NodePr
         <footer className="workflow-plan-container-footer">
           <span>从上到下执行 · {data.childCount ?? 0} 步</span>
           <button
-            className="workflow-plan-add-inline"
+            className="workflow-plan-add-inline nodrag nopan"
             type="button"
             aria-label="向执行计划添加步骤"
             onClick={(event) => {

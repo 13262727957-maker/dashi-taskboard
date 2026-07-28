@@ -441,6 +441,7 @@
 
 .workflow-step-menu-popover {
   position: absolute;
+  z-index: 1000;
   top: 28px;
   right: 0;
   display: flex;
@@ -452,6 +453,11 @@
   border-radius: 9px;
   background: var(--surface-raised);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.14);
+}
+
+.workflow-step-menu-popover.is-portaled {
+  position: fixed;
+  right: auto;
 }
 
 .workflow-step-menu-popover > button {
