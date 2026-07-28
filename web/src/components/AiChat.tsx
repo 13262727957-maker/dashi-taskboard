@@ -55,7 +55,7 @@ interface AiChatProps {
   issueId: string | null;
 }
 
-type MenuName = "model" | "effort" | "sandbox" | null;
+type MenuName = "model" | "sandbox" | null;
 type PendingDangerInput = {
   message: string;
   skillIds: string[];
@@ -150,23 +150,47 @@ function MarkdownMessage({ children }: { children: string }) {
   );
 }
 
-function ActivityCard({ event }: { event: AiChatEvent }) {
-  const status = aiChatEventStatus(event);
-  const detail = activityDetail(event);
-  const label = ACTIVITY_LABELS[event.type] ?? "执行活动";
+function ActivityGroup({ events }: { events: AiChatEvent[] }) {
+  const statuses = events.map(aiChatEventStatus);
+  const status = statuses.includes("running")
+    ? "running"
+    : statuses.includes("failed") ? "failed" : "completed";
   return (
-    <details className={`ai-chat-activity is-${status}`} open={status !== "completed"}>
+    <details className={`ai-chat-activity-group is-${status}`} open={status !== "completed"}>
       <summary>
         <span className="ai-chat-activity-status" aria-hidden="true">
           {status === "running"
             ? <span className="ai-chat-spinner" />
             : <LinearIcon name={status === "failed" ? "alert" : "check"} />}
         </span>
-        <span className="ai-chat-activity-label">{label}</span>
-        <span className="ai-chat-activity-summary">{event.content}</span>
+        <span className="ai-chat-activity-group-label">
+          {status === "running" ? "处理中" : status === "failed" ? "处理失败" : "已处理"}
+          <span> · {events.length} 项</span>
+        </span>
         <LinearIcon className="ai-chat-activity-chevron" name="chevronDown" />
       </summary>
-      {detail && <pre><code>{detail}</code></pre>}
+      <div className="ai-chat-activity-list">
+        {events.map((event) => {
+          const eventStatus = aiChatEventStatus(event);
+          const detail = activityDetail(event);
+          return (
+            <div className={`ai-chat-activity-row is-${eventStatus}`} key={event.id}>
+              <span className="ai-chat-activity-row-icon" aria-hidden="true">
+                {eventStatus === "running"
+                  ? <span className="ai-chat-spinner" />
+                  : <LinearIcon name={eventStatus === "failed" ? "alert" : "check"} />}
+              </span>
+              <div>
+                <div className="ai-chat-activity-row-heading">
+                  <strong>{ACTIVITY_LABELS[event.type] ?? "执行活动"}</strong>
+                  <span>{event.content}</span>
+                </div>
+                {detail && <pre><code>{detail}</code></pre>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </details>
   );
 }
@@ -202,9 +226,37 @@ function EventAttachments({ event }: { event: AiChatEvent }) {
 }
 
 function MessageTimeline({ events }: { events: AiChatEvent[] }) {
+  const timeline = filterVisibleAiEvents(events).reduce<Array<AiChatEvent | AiChatEvent[]>>(
+    (items, event) => {
+      const isMessage = event.role === "user"
+        || event.type === "user"
+        || event.type === "user_message"
+        || event.role === "assistant"
+        || event.type === "assistant"
+        || event.type === "agent_message";
+      if (isMessage) {
+        items.push(event);
+        return items;
+      }
+      const previous = items[items.length - 1];
+      if (Array.isArray(previous)) previous.push(event);
+      else items.push([event]);
+      return items;
+    },
+    [],
+  );
   return (
     <>
-      {filterVisibleAiEvents(events).map((event) => {
+      {timeline.map((entry) => {
+        if (Array.isArray(entry)) {
+          return (
+            <ActivityGroup
+              events={entry}
+              key={`activity-${entry[0]?.id ?? "empty"}`}
+            />
+          );
+        }
+        const event = entry;
         if (event.role === "user" || event.type === "user" || event.type === "user_message") {
           return (
             <article className="ai-chat-user-message" key={event.id}>
@@ -216,12 +268,11 @@ function MessageTimeline({ events }: { events: AiChatEvent[] }) {
         if (event.role === "assistant" || event.type === "assistant" || event.type === "agent_message") {
           return (
             <article className="ai-chat-assistant-message" key={event.id}>
-              <img src="/codex-agent-logo.png" alt="" aria-hidden="true" />
               <MarkdownMessage>{event.content}</MarkdownMessage>
             </article>
           );
         }
-        return <ActivityCard event={event} key={event.id} />;
+        return null;
       })}
     </>
   );
@@ -798,9 +849,8 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       {panelOpen && (
         <section className="ai-chat-panel" aria-label="Codex AI 对话" data-screen-label="Codex AI 对话">
           <header className="ai-chat-panel-header">
-            <img src="/codex-agent-logo.png" alt="" aria-hidden="true" />
             <div className="ai-chat-panel-title">
-              <strong>{snapshot?.thread.title ?? "Codex"}</strong>
+              <strong>{snapshot?.thread.title ?? "新对话"}</strong>
               <span>{snapshot?.thread.origin.projectName ?? "选择对话或从当前项目新建"}</span>
             </div>
             <button
@@ -911,7 +961,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               </>
             ) : (
               <div className="ai-chat-empty">
-                <img src="/codex-agent-logo.png" alt="" aria-hidden="true" />
+                <LinearIcon name="conversation" />
                 <strong>{projectId ? "在当前项目中开始对话" : "打开一个历史对话"}</strong>
                 <p>{projectId
                   ? "Codex 会在新对话创建时记住当前项目。"
@@ -934,7 +984,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   {attachments.map((attachment) => (
                     <div className="ai-chat-composer-attachment" key={attachment.id}>
                       <img src={attachment.previewUrl} alt="" />
-                      <span title={attachment.filename}>{attachment.filename}</span>
                       <button
                         type="button"
                         aria-label={`移除附件 ${attachment.filename}`}
@@ -1038,8 +1087,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 )}
               </div>
 
+              <span className="ai-chat-toolbar-spacer" />
               <div className="ai-chat-menu-wrap ai-chat-model-menu-wrap">
                 <button
+                  className="ai-chat-model-trigger"
                   type="button"
                   aria-haspopup="menu"
                   aria-expanded={menu === "model"}
@@ -1047,56 +1098,55 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   onClick={() => setMenu((current) => current === "model" ? null : "model")}
                 >
                   <span>{selectedModel?.displayName ?? (draftModel || "模型")}</span>
+                  <span className="ai-chat-model-effort">
+                    {EFFORT_LABELS[draftEffort] ?? (draftEffort || "推理")}
+                  </span>
                   <LinearIcon name="chevronDown" />
                 </button>
                 {menu === "model" && (
-                  <OptionMenu label="模型">
-                    {(activeCatalog?.models ?? []).map((model) => (
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={model.slug === draftModel}
-                        key={model.slug}
-                        onClick={() => void chooseModel(model)}
-                      >
-                        <span><strong>{model.displayName}</strong><small>{model.description}</small></span>
-                        {model.slug === draftModel && <LinearIcon name="check" />}
-                      </button>
-                    ))}
-                  </OptionMenu>
+                  <div className="ai-chat-option-menu ai-chat-config-menu" role="menu" aria-label="模型与推理强度">
+                    <section>
+                      <header>
+                        <span>模型</span>
+                        <strong>{selectedModel?.displayName ?? draftModel}</strong>
+                      </header>
+                      {(activeCatalog?.models ?? []).map((model) => (
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={model.slug === draftModel}
+                          key={model.slug}
+                          onClick={() => void chooseModel(model)}
+                        >
+                          <span><strong>{model.displayName}</strong><small>{model.description}</small></span>
+                          {model.slug === draftModel && <LinearIcon name="check" />}
+                        </button>
+                      ))}
+                    </section>
+                    {selectedModel && (
+                      <section>
+                        <header>
+                          <span>推理强度</span>
+                          <strong>{EFFORT_LABELS[draftEffort] ?? draftEffort}</strong>
+                        </header>
+                        {selectedModel.supportedReasoningEfforts.map((effort) => (
+                          <button
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={effort === draftEffort}
+                            key={effort}
+                            onClick={() => void chooseEffort(effort)}
+                          >
+                            <span>{EFFORT_LABELS[effort] ?? effort}</span>
+                            {effort === draftEffort && <LinearIcon name="check" />}
+                          </button>
+                        ))}
+                      </section>
+                    )}
+                  </div>
                 )}
               </div>
 
-              <div className="ai-chat-menu-wrap">
-                <button
-                  type="button"
-                  aria-haspopup="menu"
-                  aria-expanded={menu === "effort"}
-                  disabled={!selectedModel || snapshot?.thread.status === "running" || settingsSaving}
-                  onClick={() => setMenu((current) => current === "effort" ? null : "effort")}
-                >
-                  {EFFORT_LABELS[draftEffort] ?? (draftEffort || "推理")}
-                  <LinearIcon name="chevronDown" />
-                </button>
-                {menu === "effort" && selectedModel && (
-                  <OptionMenu label="推理强度">
-                    {selectedModel.supportedReasoningEfforts.map((effort) => (
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={effort === draftEffort}
-                        key={effort}
-                        onClick={() => void chooseEffort(effort)}
-                      >
-                        <span>{EFFORT_LABELS[effort] ?? effort}</span>
-                        {effort === draftEffort && <LinearIcon name="check" />}
-                      </button>
-                    ))}
-                  </OptionMenu>
-                )}
-              </div>
-
-              <span className="ai-chat-toolbar-spacer" />
               {primaryAction === "stop" ? (
                 <button
                   className="ai-chat-send-button is-stop"
