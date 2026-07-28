@@ -61,6 +61,8 @@ export interface AiChatModel {
 export interface AiChatSkill {
   id: string;
   label: string;
+  description: string;
+  path: string;
   scope: "user" | "repo" | "system" | "admin";
 }
 

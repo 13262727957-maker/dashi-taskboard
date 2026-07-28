@@ -156,6 +156,23 @@ function normalizedItem(rawType, item) {
 }
 
 export function buildCodexArgs(thread, addDirectories, imagePaths = []) {
+  const permission = thread.sandbox === "read-only"
+    ? {
+        sandbox: "workspace-write",
+        approvalPolicy: "on-request",
+        reviewer: "user",
+      }
+    : thread.sandbox === "workspace-write"
+      ? {
+          sandbox: "workspace-write",
+          approvalPolicy: "on-request",
+          reviewer: "auto_review",
+        }
+      : {
+          sandbox: "danger-full-access",
+          approvalPolicy: "never",
+          reviewer: null,
+        };
   const args = [
     "exec",
     "--json",
@@ -164,8 +181,13 @@ export function buildCodexArgs(thread, addDirectories, imagePaths = []) {
     "-C",
     thread.origin.workspacePath,
     "-s",
-    thread.sandbox,
+    permission.sandbox,
+    "-c",
+    `approval_policy="${permission.approvalPolicy}"`,
   ];
+  if (permission.reviewer) {
+    args.push("-c", `approvals_reviewer="${permission.reviewer}"`);
+  }
   for (const directory of addDirectories) {
     args.push("--add-dir", directory);
   }

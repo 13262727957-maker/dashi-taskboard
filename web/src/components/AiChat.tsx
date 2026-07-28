@@ -57,7 +57,7 @@ interface AiChatProps {
   issueId: string | null;
 }
 
-type MenuName = "model" | "sandbox" | null;
+type MenuName = "model" | "model-list" | "effort-list" | "sandbox" | null;
 type PendingDangerInput = {
   message: string;
   skillIds: string[];
@@ -78,19 +78,35 @@ const IMAGE_ATTACHMENT_TYPES = new Set([
 ]);
 
 const SANDBOX_LABELS: Record<AiChatSandbox, string> = {
-  "read-only": "只读",
-  "workspace-write": "工作区",
-  "danger-full-access": "完全访问",
+  "read-only": "请求批准",
+  "workspace-write": "替我审批",
+  "danger-full-access": "完全访问权限",
+};
+
+const SANDBOX_DESCRIPTIONS: Record<AiChatSandbox, string> = {
+  "read-only": "编辑外部文件和使用互联网时始终询问",
+  "workspace-write": "仅对检测到的风险操作请求批准",
+  "danger-full-access": "不受限制地访问互联网和您电脑上的任何文件",
+};
+
+const SANDBOX_ICONS: Record<AiChatSandbox, "hand" | "terminal" | "shieldAlert"> = {
+  "read-only": "hand",
+  "workspace-write": "terminal",
+  "danger-full-access": "shieldAlert",
 };
 
 const EFFORT_LABELS: Record<string, string> = {
-  low: "轻度",
+  low: "低",
   medium: "中",
   high: "高",
   xhigh: "极高",
   max: "最高",
   ultra: "极高",
 };
+
+function modelDisplayName(value: string): string {
+  return value.replace(/^GPT-/i, "").replaceAll("-", " ");
+}
 
 const ACTIVITY_LABELS: Record<string, string> = {
   plan: "执行计划",
@@ -322,7 +338,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [unread, setUnread] = useState(false);
   const [draftModel, setDraftModel] = useState("");
   const [draftEffort, setDraftEffort] = useState("");
-  const [draftSandbox, setDraftSandbox] = useState<AiChatSandbox>("read-only");
+  const [draftSandbox, setDraftSandbox] = useState<AiChatSandbox>("workspace-write");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
@@ -531,8 +547,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       setDraftModel(normalized.model);
       setDraftEffort(normalized.reasoningEffort);
     }
-    const firstSandbox = activeCatalog?.sandboxes.find(isAiChatSandbox);
-    if (firstSandbox) setDraftSandbox(firstSandbox);
+    const defaultSandbox = activeCatalog?.sandboxes.find(
+      (sandbox): sandbox is AiChatSandbox => sandbox === "workspace-write",
+    ) ?? activeCatalog?.sandboxes.find(isAiChatSandbox);
+    if (defaultSandbox) setDraftSandbox(defaultSandbox);
   }, [activeCatalog, restoreDraftSettings, snapshot?.thread.id]);
 
   useLayoutEffect(() => {
@@ -573,6 +591,8 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
         !skillMention?.query
         || skill.label.toLocaleLowerCase().includes(skillMention.query)
         || skill.id.toLocaleLowerCase().includes(skillMention.query)
+        || skill.description.toLocaleLowerCase().includes(skillMention.query)
+        || skill.path.toLocaleLowerCase().includes(skillMention.query)
       )
     )),
     [activeCatalog?.skills, skillMention?.query],
@@ -1100,16 +1120,23 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               />
               {skillMention && visibleSkills.length > 0 && (
                 <div className="ai-chat-skill-menu" role="listbox" aria-label="可用 Skill">
-                  {visibleSkills.map((skill) => (
+                  {visibleSkills.map((skill, index) => (
                     <button
+                      className={index === 0 ? "is-selected" : undefined}
                       type="button"
                       role="option"
+                      aria-selected={index === 0}
                       key={skill.id}
+                      title={skill.path}
                       onPointerDown={(event) => event.preventDefault()}
                       onClick={() => selectSkill(skill)}
                     >
-                      <LinearIcon name="file" />
-                      <span><strong>{skill.label}</strong><small>{skill.scope}</small></span>
+                      <LinearIcon name="project" />
+                      <span>
+                        <strong>{skill.label}</strong>
+                        {skill.description && <small>{skill.description}</small>}
+                      </span>
+                      <em>{skill.scope}</em>
                     </button>
                   ))}
                 </div>
@@ -1134,34 +1161,51 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 disabled={attachmentBlocked}
                 onClick={() => attachmentInputRef.current?.click()}
               >
-                <LinearIcon name="attachment" />
+                <LinearIcon name="plus" />
               </button>
-              <div className="ai-chat-menu-wrap">
+              <div className="ai-chat-menu-wrap ai-chat-permission-menu-wrap">
                 <button
+                  className="ai-chat-permission-trigger"
                   type="button"
                   aria-haspopup="menu"
                   aria-expanded={menu === "sandbox"}
                   disabled={!activeCatalog || snapshot?.thread.status === "running" || settingsSaving}
                   onClick={() => setMenu((current) => current === "sandbox" ? null : "sandbox")}
                 >
+                  <LinearIcon name={SANDBOX_ICONS[draftSandbox]} />
                   {SANDBOX_LABELS[draftSandbox]}
                   <LinearIcon name="chevronDown" />
                 </button>
                 {menu === "sandbox" && (
-                  <OptionMenu label="执行权限">
+                  <div className="ai-chat-option-menu ai-chat-permission-menu" role="menu" aria-label="执行权限">
+                    <header>
+                      <span>应如何批准 Codex 操作？</span>
+                      <a
+                        href="https://developers.openai.com/codex/security"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        了解更多
+                      </a>
+                    </header>
                     {availableSandboxes.map((sandbox) => (
                       <button
+                        className={sandbox === "danger-full-access" ? "is-danger" : undefined}
                         type="button"
                         role="menuitemradio"
                         aria-checked={sandbox === draftSandbox}
                         key={sandbox}
                         onClick={() => void chooseSandbox(sandbox)}
                       >
-                        <span>{SANDBOX_LABELS[sandbox]}</span>
+                        <LinearIcon name={SANDBOX_ICONS[sandbox]} />
+                        <span>
+                          <strong>{SANDBOX_LABELS[sandbox]}</strong>
+                          <small>{SANDBOX_DESCRIPTIONS[sandbox]}</small>
+                        </span>
                         {sandbox === draftSandbox && <LinearIcon name="check" />}
                       </button>
                     ))}
-                  </OptionMenu>
+                  </div>
                 )}
               </div>
 
@@ -1171,11 +1215,15 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   className="ai-chat-model-trigger"
                   type="button"
                   aria-haspopup="menu"
-                  aria-expanded={menu === "model"}
+                  aria-expanded={menu === "model" || menu === "model-list" || menu === "effort-list"}
                   disabled={!activeCatalog || snapshot?.thread.status === "running" || settingsSaving}
-                  onClick={() => setMenu((current) => current === "model" ? null : "model")}
+                  onClick={() => setMenu((current) => (
+                    current === "model" || current === "model-list" || current === "effort-list"
+                      ? null
+                      : "model"
+                  ))}
                 >
-                  <span>{selectedModel?.displayName ?? (draftModel || "模型")}</span>
+                  <span>{modelDisplayName(selectedModel?.displayName ?? (draftModel || "模型"))}</span>
                   <span className="ai-chat-model-effort">
                     {EFFORT_LABELS[draftEffort] ?? (draftEffort || "推理")}
                   </span>
@@ -1183,44 +1231,63 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 </button>
                 {menu === "model" && (
                   <div className="ai-chat-option-menu ai-chat-config-menu" role="menu" aria-label="模型与推理强度">
-                    <section>
-                      <header>
-                        <span>模型</span>
-                        <strong>{selectedModel?.displayName ?? draftModel}</strong>
-                      </header>
-                      {(activeCatalog?.models ?? []).map((model) => (
-                        <button
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={model.slug === draftModel}
-                          key={model.slug}
-                          onClick={() => void chooseModel(model)}
-                        >
-                          <span><strong>{model.displayName}</strong><small>{model.description}</small></span>
-                          {model.slug === draftModel && <LinearIcon name="check" />}
-                        </button>
-                      ))}
-                    </section>
-                    {selectedModel && (
-                      <section>
-                        <header>
-                          <span>推理强度</span>
-                          <strong>{EFFORT_LABELS[draftEffort] ?? draftEffort}</strong>
-                        </header>
-                        {selectedModel.supportedReasoningEfforts.map((effort) => (
-                          <button
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={effort === draftEffort}
-                            key={effort}
-                            onClick={() => void chooseEffort(effort)}
-                          >
-                            <span>{EFFORT_LABELS[effort] ?? effort}</span>
-                            {effort === draftEffort && <LinearIcon name="check" />}
-                          </button>
-                        ))}
-                      </section>
-                    )}
+                    <button type="button" onClick={() => setMenu("model-list")}>
+                      <span>模型</span>
+                      <strong>{modelDisplayName(selectedModel?.displayName ?? draftModel)}</strong>
+                      <LinearIcon name="chevronRight" />
+                    </button>
+                    <button type="button" onClick={() => setMenu("effort-list")}>
+                      <span>推理强度</span>
+                      <strong>{EFFORT_LABELS[draftEffort] ?? draftEffort}</strong>
+                      <LinearIcon name="chevronRight" />
+                    </button>
+                  </div>
+                )}
+                {menu === "model-list" && (
+                  <div className="ai-chat-option-menu ai-chat-config-menu ai-chat-config-submenu" role="menu" aria-label="选择模型">
+                    <header>
+                      <button type="button" aria-label="返回模型与推理强度" onClick={() => setMenu("model")}>
+                        <LinearIcon name="chevronLeft" />
+                      </button>
+                      <strong>模型</strong>
+                    </header>
+                    {(activeCatalog?.models ?? []).map((model) => (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={model.slug === draftModel}
+                        key={model.slug}
+                        onClick={() => void chooseModel(model)}
+                      >
+                        <span>
+                          <strong>{modelDisplayName(model.displayName)}</strong>
+                          {model.description && <small>{model.description}</small>}
+                        </span>
+                        {model.slug === draftModel && <LinearIcon name="check" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {menu === "effort-list" && selectedModel && (
+                  <div className="ai-chat-option-menu ai-chat-config-menu ai-chat-config-submenu" role="menu" aria-label="选择推理强度">
+                    <header>
+                      <button type="button" aria-label="返回模型与推理强度" onClick={() => setMenu("model")}>
+                        <LinearIcon name="chevronLeft" />
+                      </button>
+                      <strong>推理强度</strong>
+                    </header>
+                    {selectedModel.supportedReasoningEfforts.map((effort) => (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={effort === draftEffort}
+                        key={effort}
+                        onClick={() => void chooseEffort(effort)}
+                      >
+                        <span>{EFFORT_LABELS[effort] ?? effort}</span>
+                        {effort === draftEffort && <LinearIcon name="check" />}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>

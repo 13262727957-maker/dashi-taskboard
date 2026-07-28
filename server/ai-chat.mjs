@@ -121,7 +121,7 @@ export class AiChatService {
     const model = this.#resolveModel(catalog, input.model);
     const reasoningEffort = input.reasoningEffort ?? model.defaultReasoningEffort;
     this.#validateReasoningEffort(model, reasoningEffort);
-    const sandbox = input.sandbox ?? "read-only";
+    const sandbox = input.sandbox ?? "workspace-write";
     this.#validateSandbox(sandbox);
 
     let issue;

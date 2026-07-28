@@ -220,6 +220,8 @@ function sanitizeSkills(entries) {
       unique.set(id, {
         id,
         label: displayName || id,
+        description: typeof skill.description === "string" ? skill.description.trim() : "",
+        path: typeof skill.path === "string" ? skill.path.trim() : "",
         scope: ["user", "repo", "system", "admin"].includes(skill.scope) ? skill.scope : "user",
       });
     }
