@@ -6765,6 +6765,8 @@ kbd {
   color: inherit;
   font-size: 14px;
   line-height: 22px;
+  -webkit-user-select: text;
+  user-select: text;
   word-break: break-word;
 }
 
@@ -6811,6 +6813,8 @@ kbd {
   flex-wrap: wrap;
   gap: 5px;
   margin-top: 8px;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .ai-chat-event-attachments > span {
@@ -6935,6 +6939,8 @@ kbd {
   color: var(--text-secondary);
   font-size: 14px;
   font-weight: 520;
+  -webkit-user-select: text;
+  user-select: text;
   white-space: nowrap;
 }
 
@@ -6955,6 +6961,8 @@ kbd {
 
 .ai-chat-activity-list {
   padding: 3px 0 2px 24px;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .ai-chat-activity-row {
@@ -7034,6 +7042,11 @@ kbd {
   font-size: 10px;
 }
 
+.ai-chat-running {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .ai-chat-retry:hover {
   background: var(--surface-hover);
   color: var(--text-primary);
@@ -7054,6 +7067,8 @@ kbd {
   gap: 7px;
   color: var(--text-tertiary);
   text-align: center;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .ai-chat-empty > svg {
@@ -7086,6 +7101,8 @@ kbd {
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 9px;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .ai-chat-error svg {
