@@ -43,6 +43,10 @@ import { BoardColumn, STATUS_DETAILS } from "./components/BoardColumn";
 import { AiChat } from "./components/AiChat";
 import { BoardSettingsMenu } from "./components/BoardSettingsMenu";
 import { HiddenColumns } from "./components/HiddenColumns";
+import {
+  resolveInlineMediaMarkdown,
+  type PendingInlineImage,
+} from "./components/InlineMediaComposer";
 import { LinearIcon } from "./components/LinearIcon";
 import { ProjectAutomationMenu } from "./components/ProjectAutomationMenu";
 import { TaskContextMenu } from "./components/TaskContextMenu";
@@ -1292,18 +1296,18 @@ export function App() {
     setBoardView(view);
   }
 
-  async function saveEditor(draft: TaskDraft, attachments: File[]) {
+  async function saveEditor(
+    draft: TaskDraft,
+    attachments: File[],
+    inlineImages: PendingInlineImage[],
+  ) {
     if (!selectedProjectId || !editor) return;
     setActionError(null);
     try {
       const creating = editor.task === null;
-      const saved = editor.task
+      let saved = editor.task
         ? await updateTaskRequest(editor.task, draft)
         : await createTaskRequest(selectedProjectId, draft);
-      setTasks((current) => sortTasks([
-        ...current.filter((task) => task.id !== saved.id),
-        saved,
-      ]));
       if (creating) {
         setProjects((current) => current.map((project) => (
           project.id === selectedProjectId
@@ -1313,19 +1317,37 @@ export function App() {
       }
       let uploadedAttachments = 0;
       let failedAttachments = 0;
-      if (creating && attachments.length > 0) {
-        const results = await Promise.allSettled(
-          attachments.map((file) => uploadAttachment(saved.id, file)),
-        );
+      if (creating && (attachments.length > 0 || inlineImages.length > 0)) {
+        const [results, inlineAttachments] = await Promise.all([
+          Promise.allSettled(
+            attachments.map((file) => uploadAttachment(saved.id, file)),
+          ),
+          Promise.all(
+            inlineImages.map((image) => uploadAttachment(saved.id, image.file)),
+          ),
+        ]);
         uploadedAttachments = results.filter((result) => result.status === "fulfilled").length;
         failedAttachments = results.length - uploadedAttachments;
+        if (inlineImages.length > 0) {
+          const description = resolveInlineMediaMarkdown(
+            draft.description,
+            inlineImages,
+            inlineAttachments,
+          );
+          saved = await updateTaskRequest(saved, { ...draft, description });
+        }
       }
+      setTasks((current) => sortTasks([
+        ...current.filter((task) => task.id !== saved.id),
+        saved,
+      ]));
       setEditor(null);
       if (failedAttachments > 0) {
         setActionError(`${saved.identifier} 已创建，但有 ${failedAttachments} 个附件上传失败，可在详情页重试。`);
       }
       if (creating) {
-        const message = `${saved.identifier} 已创建${uploadedAttachments > 0 ? `，已上传 ${uploadedAttachments} 个附件` : ""}。`;
+        const totalUploaded = uploadedAttachments + inlineImages.length;
+        const message = `${saved.identifier} 已创建${totalUploaded > 0 ? `，已上传 ${totalUploaded} 个附件` : ""}。`;
         pushUndo(message, async () => {
           const candidate = tasksRef.current.find((task) => task.id === saved.id);
           const current = candidate && candidate.version >= saved.version ? candidate : saved;

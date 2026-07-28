@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -70,6 +70,7 @@ const COMMAND_OPTIONS = new Map([
   ["comment add", new Set(["body", "thread-id", "json"])],
   ["comment update", new Set(["body", "thread-id", "if-version", "json"])],
   ["comment delete", new Set(["thread-id", "if-version", "json"])],
+  ["attachment download", new Set(["output", "json"])],
   ["context current", new Set(["cwd", "json"])],
 ]);
 
@@ -173,7 +174,7 @@ async function execute(parsed, overrides) {
   const allowedOptions = COMMAND_OPTIONS.get(command);
   if (!allowedOptions) {
     throw usageError(
-      "Expected one of: project list/create, issue list/get/create/update/move/archive/restore/relation, comment list/add/update/delete, context current",
+      "Expected one of: project list/create, issue list/get/create/update/move/archive/restore/relation, comment list/add/update/delete, attachment download, context current",
     );
   }
   validateOptions(parsed.options, allowedOptions);
@@ -247,6 +248,9 @@ async function execute(parsed, overrides) {
         threadId: resolveThreadId(parsed.options, overrides),
         version: explicitVersion(parsed.options["if-version"]),
       });
+    case "attachment download":
+      expectOperandCount(parsed, 1);
+      return downloadAttachment(api, parsed.operands[0], parsed.options, overrides);
     case "context current":
       expectOperandCount(parsed, 0);
       return currentContext(api, parsed.options, overrides);
@@ -305,6 +309,61 @@ function createApiClient(overrides) {
       }
       return payload;
     },
+    async download(pathname) {
+      let response;
+      try {
+        response = await fetchImplementation(new URL(pathname, `${baseUrl}/`), {
+          headers: {
+            accept: "*/*",
+            "x-taskboard-client": "taskctl",
+          },
+        });
+      } catch (error) {
+        throw new TaskctlError(`Cannot reach taskboard service at ${baseUrl}`, {
+          code: "SERVICE_UNAVAILABLE",
+          exitCode: 3,
+          details: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (!response.ok) {
+        const payload = await readResponse(response);
+        const apiError = extractApiError(payload, response.status);
+        throw new TaskctlError(apiError.message, {
+          code: apiError.code,
+          exitCode: response.status === 409 ? 5 : 4,
+          details: apiError.details,
+        });
+      }
+
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return {
+        bytes,
+        contentType: response.headers.get("content-type"),
+        size: Number(response.headers.get("content-length")) || bytes.byteLength,
+      };
+    },
+  };
+}
+
+async function downloadAttachment(api, attachmentId, options, overrides) {
+  const output = resolveInputPath(requiredOption(options, "output"), overrides);
+  const downloaded = await api.download(attachmentContentPath(attachmentId));
+  const write = overrides.writeFile ?? writeFile;
+  try {
+    await write(output, downloaded.bytes);
+  } catch (error) {
+    throw new TaskctlError(`Cannot write attachment file: ${output}`, {
+      code: "FILE_WRITE_FAILED",
+      exitCode: 2,
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return {
+    attachmentId,
+    output,
+    contentType: downloaded.contentType,
+    size: downloaded.size,
   };
 }
 
@@ -552,7 +611,9 @@ function expectOperandCount(parsed, expected) {
     throw usageError(
       expected === 0
         ? `${parsed.resource} ${parsed.action} does not accept positional arguments`
-        : `${parsed.resource} ${parsed.action} requires exactly ${expected} issue id`,
+        : `${parsed.resource} ${parsed.action} requires exactly ${expected} positional ${
+            expected === 1 ? "argument" : "arguments"
+          }`,
     );
   }
 }
@@ -577,6 +638,11 @@ function taskPath(taskId) {
 function commentPath(commentId) {
   if (!commentId) throw usageError("Missing comment id");
   return `/api/comments/${encodeURIComponent(commentId)}`;
+}
+
+function attachmentContentPath(attachmentId) {
+  if (!attachmentId) throw usageError("Missing attachment id");
+  return `/api/attachments/${encodeURIComponent(attachmentId)}/content`;
 }
 
 function explicitVersion(rawVersion) {

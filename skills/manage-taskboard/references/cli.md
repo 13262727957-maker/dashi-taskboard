@@ -120,3 +120,19 @@ taskctl comment delete COMMENT_ID --if-version N [--thread-id ID] [--json]
 ```
 
 Each comment JSON object independently records the most recent conversation that created or changed that comment as `threadId`. Comment operations never change the parent issue's `threadId`.
+
+## Download inline images
+
+Issue descriptions and comments may contain inline images at exact positions in their Markdown:
+
+```markdown
+![alt text](/api/attachments/ATTACHMENT_ID/content)
+```
+
+Download an inline image to an explicit local path before inspecting it:
+
+```bash
+taskctl attachment download ATTACHMENT_ID --output PATH [--json]
+```
+
+The command writes the response body as binary data and returns the absolute output path, content type, and size in its JSON result. Choose the output filename yourself; `taskctl` does not infer or append an extension.

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ClipboardEvent, FormEvent } from "react";
+import type { FormEvent } from "react";
 import { ApiError } from "../api";
 import {
   TASK_PRIORITIES,
@@ -24,11 +24,18 @@ import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
 import {
-  clipboardImages,
   fileKey,
   MAX_ATTACHMENT_SIZE,
   PendingAttachments,
 } from "./PendingAttachments";
+import {
+  createInlineMediaSegments,
+  InlineMediaComposer,
+  inlineMediaImages,
+  serializeInlineMedia,
+  type InlineMediaSegment,
+  type PendingInlineImage,
+} from "./InlineMediaComposer";
 
 const PRIORITY_LABELS: Record<TaskPriority, string> = {
   none: "无优先级",
@@ -54,7 +61,11 @@ interface TaskEditorProps {
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
   onCancel: () => void;
-  onSave: (draft: TaskDraft, attachments: File[]) => Promise<void>;
+  onSave: (
+    draft: TaskDraft,
+    attachments: File[],
+    inlineImages: PendingInlineImage[],
+  ) => Promise<void>;
 }
 
 function isoDate(date: Date): string {
@@ -106,6 +117,9 @@ export function TaskEditor({
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState(task?.title ?? "");
   const [description, setDescription] = useState(task?.description ?? "");
+  const [descriptionSegments, setDescriptionSegments] = useState<InlineMediaSegment[]>(
+    () => createInlineMediaSegments(),
+  );
   const [status, setStatus] = useState<TaskStatus>(task?.status ?? initialStatus);
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "none");
   const [assignee, setAssignee] = useState<ActorIdentity>(task?.assignee ?? currentUser);
@@ -163,9 +177,12 @@ export function TaskEditor({
       const assigneeTarget = task && actorKey(assignee) === actorKey(task.assignee)
         ? undefined
         : assigneeTargetForActor(assignee, currentUser);
+      const descriptionValue = task
+        ? description.trim()
+        : serializeInlineMedia(descriptionSegments).trim();
       await onSave({
         title: cleanTitle,
-        description: description.trim(),
+        description: descriptionValue,
         status,
         priority,
         labels: selectedLabels,
@@ -174,7 +191,7 @@ export function TaskEditor({
         developmentContext,
         dueDate: dueDate || null,
         recurrence,
-      }, attachments);
+      }, attachments, inlineMediaImages(descriptionSegments));
     } catch (caught) {
       if (caught instanceof ApiError && caught.code === "VERSION_CONFLICT") {
         setError("这个议题已在其他位置发生变更，请关闭并刷新后重试。");
@@ -198,14 +215,6 @@ export function TaskEditor({
       const existing = new Set(current.map(fileKey));
       return [...current, ...selected.filter((file) => !existing.has(fileKey(file)))];
     });
-  }
-
-  function handleDescriptionPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    if (task) return;
-    const images = clipboardImages(event.clipboardData);
-    if (images.length === 0) return;
-    event.preventDefault();
-    addAttachments(images);
   }
 
   function chooseDueDate(value: string) {
@@ -246,10 +255,22 @@ export function TaskEditor({
             <span className="sr-only">标题</span>
             <input ref={titleRef} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Issue title" maxLength={240} autoComplete="off" />
           </label>
-          <label className="composer-description">
-            <span className="sr-only">描述</span>
-            <textarea value={description} onChange={(event) => setDescription(event.target.value)} onPaste={handleDescriptionPaste} placeholder="Add description…" rows={5} />
-          </label>
+          {task ? (
+            <label className="composer-description">
+              <span className="sr-only">描述</span>
+              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add description…" rows={5} />
+            </label>
+          ) : (
+            <InlineMediaComposer
+              className="composer-description inline-media-description"
+              segments={descriptionSegments}
+              placeholder="Add description…"
+              ariaLabel="描述"
+              disabled={saving}
+              onChange={setDescriptionSegments}
+              onError={setAttachmentError}
+            />
+          )}
 
           {!task && (
             <PendingAttachments

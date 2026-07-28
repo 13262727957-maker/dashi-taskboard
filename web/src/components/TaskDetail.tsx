@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -39,11 +39,20 @@ import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
 import {
-  clipboardImages,
   fileKey,
   MAX_ATTACHMENT_SIZE,
   PendingAttachments,
 } from "./PendingAttachments";
+import {
+  createInlineMediaSegments,
+  InlineMediaComposer,
+  inlineMediaImages,
+  inlineMediaText,
+  resolveInlineMediaMarkdown,
+  serializeInlineMedia,
+  type InlineMediaComposerHandle,
+  type InlineMediaSegment,
+} from "./InlineMediaComposer";
 import {
   IssueParentLink,
   IssueRelationSidebar,
@@ -208,7 +217,11 @@ export function TaskDetail({
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(true);
   const [commentsError, setCommentsError] = useState<string | null>(null);
-  const [draft, setDraft] = useState(() => window.localStorage.getItem(`taskboard.comment-draft.${task.id}`) ?? "");
+  const [commentSegments, setCommentSegments] = useState<InlineMediaSegment[]>(
+    () => createInlineMediaSegments(
+      window.localStorage.getItem(`taskboard.comment-draft.${task.id}`) ?? "",
+    ),
+  );
   const [pendingCommentFiles, setPendingCommentFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
@@ -219,11 +232,13 @@ export function TaskDetail({
   const [deleting, setDeleting] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<InlineMediaComposerHandle>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const commentAttachmentInputRef = useRef<HTMLInputElement>(null);
   const workflowAvailable = !currentTask.workflowId
     || workflows.some((workflow) => workflow.id === currentTask.workflowId);
+  const draft = serializeInlineMedia(commentSegments);
+  const commentInlineImages = inlineMediaImages(commentSegments);
 
   useEffect(() => {
     setCurrentTask(task);
@@ -281,9 +296,10 @@ export function TaskDetail({
 
   useEffect(() => {
     const key = `taskboard.comment-draft.${task.id}`;
-    if (draft) window.localStorage.setItem(key, draft);
+    const text = inlineMediaText(commentSegments);
+    if (text) window.localStorage.setItem(key, text);
     else window.localStorage.removeItem(key);
-  }, [draft, task.id]);
+  }, [commentSegments, task.id]);
 
   useEffect(() => {
     function handleShortcut(event: globalThis.KeyboardEvent) {
@@ -386,23 +402,37 @@ export function TaskDetail({
 
   async function submitComment() {
     const body = draft.trim();
-    if ((!body && pendingCommentFiles.length === 0) || submitting) return;
+    if ((!body && pendingCommentFiles.length === 0 && commentInlineImages.length === 0) || submitting) return;
     setSubmitting(true);
     setCommentsError(null);
     try {
       const comment = await createComment(task.id, body);
-      const results = await Promise.allSettled(
-        pendingCommentFiles.map((file) => uploadCommentAttachment(comment.id, file)),
-      );
+      const [results, inlineAttachments] = await Promise.all([
+        Promise.allSettled(
+          pendingCommentFiles.map((file) => uploadCommentAttachment(comment.id, file)),
+        ),
+        Promise.all(
+          commentInlineImages.map((image) => uploadCommentAttachment(comment.id, image.file)),
+        ),
+      ]);
       const uploaded = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-      const nextComment = { ...comment, attachments: [...comment.attachments, ...uploaded] };
+      const nextComment = commentInlineImages.length > 0
+        ? await updateComment(
+            comment,
+            resolveInlineMediaMarkdown(body, commentInlineImages, inlineAttachments),
+          )
+        : { ...comment, attachments: [...comment.attachments, ...uploaded] };
       setComments((current) => [...current, nextComment]);
-      setDraft("");
+      setCommentSegments(createInlineMediaSegments());
       setPendingCommentFiles([]);
       if (commentAttachmentInputRef.current) commentAttachmentInputRef.current.value = "";
       const failed = results.length - uploaded.length;
       if (failed > 0) setCommentsError(`评论已发布，但有 ${failed} 个附件上传失败。`);
-      else onAnnounce(uploaded.length > 0 ? "评论和附件已发布。" : "评论已发布。");
+      else onAnnounce(
+        uploaded.length + inlineAttachments.length > 0
+          ? "评论和附件已发布。"
+          : "评论已发布。",
+      );
       requestAnimationFrame(() => composerRef.current?.focus());
     } catch (error) {
       setCommentsError(messageFor(error));
@@ -424,13 +454,6 @@ export function TaskDetail({
       const existing = new Set(current.map(fileKey));
       return [...current, ...selected.filter((file) => !existing.has(fileKey(file)))];
     });
-  }
-
-  function handleCommentPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const images = clipboardImages(event.clipboardData);
-    if (images.length === 0) return;
-    event.preventDefault();
-    stageCommentFiles(images);
   }
 
   function handleSubmitShortcut(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -543,6 +566,9 @@ export function TaskDetail({
     .filter((actor, index, actors) => (
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
     ));
+  const visibleTaskAttachments = attachments.filter(
+    (attachment) => !description.includes(attachmentContentUrl(attachment)),
+  );
 
   return (
     <section className="issue-detail" aria-label={`${task.identifier} 议题详情`}>
@@ -641,7 +667,7 @@ export function TaskDetail({
               <header className="attachments-heading">
                 <div>
                   <h2 id="attachments-heading">附件</h2>
-                  <span>{attachments.length}</span>
+                  <span>{visibleTaskAttachments.length}</span>
                 </div>
                 <button
                   className="attachment-add-button"
@@ -665,9 +691,9 @@ export function TaskDetail({
 
               {attachmentsLoading ? (
                 <div className="attachments-loading" aria-label="正在加载附件" aria-busy="true"><i /><i /></div>
-              ) : attachments.length > 0 ? (
+              ) : visibleTaskAttachments.length > 0 ? (
                 <ul className="attachment-list">
-                  {attachments.map((attachment) => (
+                  {visibleTaskAttachments.map((attachment) => (
                     <li key={attachment.id}>
                       <a
                         className="attachment-link"
@@ -824,31 +850,35 @@ export function TaskDetail({
                       ) : (
                         comment.body && <div className="comment-body"><DescriptionDocument value={comment.body} /></div>
                       )}
-                      {comment.attachments.length > 0 && (
+                      {comment.attachments.some(
+                        (attachment) => !comment.body.includes(attachmentContentUrl(attachment)),
+                      ) && (
                         <ul className="comment-attachment-list" aria-label="评论附件">
-                          {comment.attachments.map((attachment) => (
-                            <li key={attachment.id}>
-                              <a
-                                href={attachmentContentUrl(attachment)}
-                                target="_blank"
-                                rel="noreferrer"
-                                title={`打开 ${attachment.filename}`}
-                              >
-                                <span className="attachment-file-icon" aria-hidden="true">
-                                  <LinearIcon name="file" />
-                                </span>
-                                <span><strong>{attachment.filename}</strong><small>{fileSize(attachment.size)}</small></span>
-                              </a>
-                              <button
-                                type="button"
-                                aria-label={`删除 ${attachment.filename}`}
-                                title="删除附件"
-                                onClick={() => setPendingAttachmentDelete(attachment)}
-                              >
-                                <LinearIcon name="trash" />
-                              </button>
-                            </li>
-                          ))}
+                          {comment.attachments
+                            .filter((attachment) => !comment.body.includes(attachmentContentUrl(attachment)))
+                            .map((attachment) => (
+                              <li key={attachment.id}>
+                                <a
+                                  href={attachmentContentUrl(attachment)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={`打开 ${attachment.filename}`}
+                                >
+                                  <span className="attachment-file-icon" aria-hidden="true">
+                                    <LinearIcon name="file" />
+                                  </span>
+                                  <span><strong>{attachment.filename}</strong><small>{fileSize(attachment.size)}</small></span>
+                                </a>
+                                <button
+                                  type="button"
+                                  aria-label={`删除 ${attachment.filename}`}
+                                  title="删除附件"
+                                  onClick={() => setPendingAttachmentDelete(attachment)}
+                                >
+                                  <LinearIcon name="trash" />
+                                </button>
+                              </li>
+                            ))}
                         </ul>
                       )}
                       {comment.threadId && (
@@ -872,17 +902,15 @@ export function TaskDetail({
                   <strong>{currentUser.name}</strong>
                   <span className="actor-id">@{currentUser.id}</span>
                 </div>
-                <textarea
-                  className="comment-input"
+                <InlineMediaComposer
                   ref={composerRef}
-                  value={draft}
-                  rows={4}
-                  maxLength={100_000}
+                  className="comment-inline-media"
+                  segments={commentSegments}
                   placeholder="留下评论…"
-                  aria-label="留下评论"
-                  onChange={(event) => setDraft(event.target.value)}
+                  ariaLabel="留下评论"
+                  onChange={setCommentSegments}
+                  onError={setCommentsError}
                   onKeyDown={handleSubmitShortcut}
-                  onPaste={handleCommentPaste}
                 />
                 <PendingAttachments
                   files={pendingCommentFiles}
@@ -917,7 +945,15 @@ export function TaskDetail({
                   </div>
                   <div>
                     <kbd>⌘ Enter</kbd>
-                    <button className="button primary" type="submit" disabled={(!draft.trim() && pendingCommentFiles.length === 0) || submitting}>
+                    <button
+                      className="button primary"
+                      type="submit"
+                      disabled={(
+                        !draft.trim()
+                        && pendingCommentFiles.length === 0
+                        && commentInlineImages.length === 0
+                      ) || submitting}
+                    >
                       {submitting ? "发布中…" : "评论"}
                     </button>
                   </div>

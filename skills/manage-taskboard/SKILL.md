@@ -16,6 +16,8 @@ Use `taskctl` for every project, issue, and comment operation. Read [references/
    - Create a new issue only when no existing issue reasonably tracks the requirement.
    - Do not create, append, or relate a tiny or trivial request that does not benefit from durable tracking.
 2. Before executing an issue, read the latest issue content and all comments. Treat comments as part of the current requirements, especially when completed work has been returned for changes.
+   - In a description or comment, `![alt](/api/attachments/<id>/content)` marks an inline image at that exact position in the text.
+   - When understanding that image is necessary, use `attachment download` to save it locally, then inspect the saved file with an available image-viewing tool.
 3. Create or update issues with the CLI; consume its JSON output.
    Issues created through `taskctl` are assigned to Codex Agent by default. Later CLI updates do not change the assignee.
 4. Let `taskctl` attribute every issue, relation, or comment mutation to the current Codex conversation through `CODEX_THREAD_ID`. Outside Codex, pass the exact conversation id with `--thread-id`.
