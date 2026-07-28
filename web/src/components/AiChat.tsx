@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
@@ -38,6 +39,7 @@ import {
 import type {
   AiChatCatalog,
   AiChatEvent,
+  AiChatImageAttachmentInput,
   AiChatModel,
   AiChatRun,
   AiChatSandbox,
@@ -57,7 +59,12 @@ type MenuName = "model" | "effort" | "sandbox" | null;
 type PendingDangerInput = {
   message: string;
   skillIds: string[];
+  attachments: AiChatImageAttachmentInput[];
   clearDraftOnSuccess: boolean;
+};
+type ComposerAttachment = AiChatImageAttachmentInput & {
+  id: string;
+  previewUrl: string;
 };
 
 const LAST_THREAD_KEY = "taskboard.aiChat.lastThreadId";
@@ -164,6 +171,36 @@ function ActivityCard({ event }: { event: AiChatEvent }) {
   );
 }
 
+function EventAttachments({ event }: { event: AiChatEvent }) {
+  const rawAttachments = event.data?.attachments;
+  if (!Array.isArray(rawAttachments)) return null;
+  const attachments = rawAttachments.flatMap((value) => {
+    if (typeof value !== "object" || value === null) return [];
+    const attachment = value as Record<string, unknown>;
+    if (
+      typeof attachment.filename !== "string"
+      || typeof attachment.contentType !== "string"
+      || typeof attachment.size !== "number"
+    ) return [];
+    return [{
+      filename: attachment.filename,
+      contentType: attachment.contentType,
+      size: attachment.size,
+    }];
+  });
+  if (attachments.length === 0) return null;
+  return (
+    <div className="ai-chat-event-attachments">
+      {attachments.map((attachment, index) => (
+        <span key={`${attachment.filename}-${index}`}>
+          <LinearIcon name="attachment" />
+          <span>{attachment.filename}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function MessageTimeline({ events }: { events: AiChatEvent[] }) {
   return (
     <>
@@ -172,6 +209,7 @@ function MessageTimeline({ events }: { events: AiChatEvent[] }) {
           return (
             <article className="ai-chat-user-message" key={event.id}>
               <MarkdownMessage>{event.content}</MarkdownMessage>
+              <EventAttachments event={event} />
             </article>
           );
         }
@@ -218,6 +256,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [skillMention, setSkillMention] = useState<ReturnType<typeof readSkillMention>>(null);
   const [pendingDangerInput, setPendingDangerInput] = useState<PendingDangerInput | null>(null);
@@ -228,6 +267,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const selectedThreadRef = useRef(selectedThreadId);
   const panelOpenRef = useRef(panelOpen);
@@ -491,6 +531,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     snapshot?.thread.status ?? "idle",
     draft,
     composerBlocked,
+    attachments.length > 0,
   );
   const anyRunning = threads.some((thread) => thread.status === "running");
   const anyFailed = threads.some((thread) => thread.status === "failed");
@@ -629,10 +670,16 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     dangerConfirmed: boolean,
     boundSkillIds?: string[],
     clearDraftOnSuccess = true,
+    boundAttachments?: AiChatImageAttachmentInput[],
   ) {
     if (composerBlocked) return;
     const trimmed = message.trim();
-    if (!trimmed) return;
+    const messageAttachments = boundAttachments ?? attachments.map((attachment) => ({
+      filename: attachment.filename,
+      contentType: attachment.contentType,
+      dataBase64: attachment.dataBase64,
+    }));
+    if (!trimmed && messageAttachments.length === 0) return;
     let thread = snapshot?.thread ?? null;
     if (!thread) thread = await createThreadForCurrentOrigin();
     if (!thread) return;
@@ -643,6 +690,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       setPendingDangerInput({
         message: trimmed,
         skillIds: messageSkillIds,
+        attachments: messageAttachments,
         clearDraftOnSuccess,
       });
       return;
@@ -652,10 +700,11 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     try {
       const run = await startAiChatTurn(
         thread.id,
-        buildTurnInput(trimmed, messageSkillIds, dangerConfirmed),
+        buildTurnInput(trimmed, messageSkillIds, dangerConfirmed, messageAttachments),
       );
       if (clearDraftOnSuccess) {
         setDraft("");
+        setAttachments([]);
         setSkillIds([]);
         setSkillMention(null);
       }
@@ -674,6 +723,39 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       if (selectedThreadRef.current === thread.id) {
         void selectedHintRefreshQueue.request(thread.id);
       }
+    }
+  }
+
+  async function handleAttachmentSelection(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0) return;
+    try {
+      const nextAttachments = await Promise.all(files.map((file, index) => (
+        new Promise<ComposerAttachment>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result !== "string") {
+              reject(new Error(`无法读取附件 ${file.name}`));
+              return;
+            }
+            const separator = reader.result.indexOf(",");
+            resolve({
+              id: `${file.name}-${file.size}-${file.lastModified}-${Date.now()}-${index}`,
+              filename: file.name,
+              contentType: file.type,
+              dataBase64: reader.result.slice(separator + 1),
+              previewUrl: reader.result,
+            });
+          };
+          reader.onerror = () => reject(new Error(`无法读取附件 ${file.name}`));
+          reader.readAsDataURL(file);
+        })
+      )));
+      setAttachments((current) => [...current, ...nextAttachments]);
+      setError(null);
+    } catch (nextError) {
+      setError(messageFor(nextError));
     }
   }
 
@@ -818,7 +900,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                         || event.type === "user_message"
                       ));
                       if (lastUserEvent) {
-                        void startMessage(lastUserEvent.content, false, undefined, false);
+                        void startMessage(lastUserEvent.content, false, undefined, false, []);
                       }
                     }}
                   >
@@ -847,6 +929,26 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
 
           <div className="ai-chat-composer">
             <div className="ai-chat-input-wrap">
+              {attachments.length > 0 && (
+                <div className="ai-chat-composer-attachments">
+                  {attachments.map((attachment) => (
+                    <div className="ai-chat-composer-attachment" key={attachment.id}>
+                      <img src={attachment.previewUrl} alt="" />
+                      <span title={attachment.filename}>{attachment.filename}</span>
+                      <button
+                        type="button"
+                        aria-label={`移除附件 ${attachment.filename}`}
+                        title="移除附件"
+                        onClick={() => {
+                          setAttachments((current) => current.filter((item) => item.id !== attachment.id));
+                        }}
+                      >
+                        <LinearIcon name="close" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <textarea
                 ref={textareaRef}
                 value={draft}
@@ -888,6 +990,25 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             </div>
 
             <div className="ai-chat-composer-toolbar">
+              <input
+                ref={attachmentInputRef}
+                className="ai-chat-attachment-input"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple
+                tabIndex={-1}
+                onChange={(event) => void handleAttachmentSelection(event)}
+              />
+              <button
+                className="ai-chat-attachment-button"
+                type="button"
+                aria-label="添加图片附件"
+                title="添加图片"
+                disabled={composerBlocked || snapshot?.thread.status === "running"}
+                onClick={() => attachmentInputRef.current?.click()}
+              >
+                <LinearIcon name="attachment" />
+              </button>
               <div className="ai-chat-menu-wrap">
                 <button
                   type="button"
@@ -1023,6 +1144,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                         true,
                         pendingDangerInput.skillIds,
                         pendingDangerInput.clearDraftOnSuccess,
+                        pendingDangerInput.attachments,
                       );
                     }}
                   >
@@ -1035,17 +1157,19 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
         </section>
       )}
 
-      <button
-        type="button"
-        className={`ai-chat-launcher is-${launcherState}`}
-        aria-label={panelOpen ? "关闭 Codex AI 对话" : "打开 Codex AI 对话"}
-        aria-expanded={panelOpen}
-        title="Codex AI 对话"
-        onClick={() => setPanelOpen((current) => !current)}
-      >
-        <img src="/codex-agent-logo.png" alt="" />
-        {launcherState !== "idle" && <span className="ai-chat-launcher-state" aria-hidden="true" />}
-      </button>
+      {!panelOpen && (
+        <button
+          type="button"
+          className={`ai-chat-launcher is-${launcherState}`}
+          aria-label="打开 AI 对话"
+          aria-expanded="false"
+          title="AI 对话"
+          onClick={() => setPanelOpen(true)}
+        >
+          <LinearIcon name="conversation" />
+          {launcherState !== "idle" && <span className="ai-chat-launcher-state" aria-hidden="true" />}
+        </button>
+      )}
     </div>
   );
 }

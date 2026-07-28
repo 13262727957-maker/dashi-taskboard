@@ -22,6 +22,14 @@ const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const execFileAsync = promisify(execFile);
 const JSON_BODY_LIMIT = 1024 * 1024;
 const ATTACHMENT_BODY_LIMIT = 25 * 1024 * 1024;
+const AI_CHAT_TURN_BODY_LIMIT = 25 * 1024 * 1024;
+const AI_CHAT_ATTACHMENT_LIMIT = 10;
+const AI_CHAT_IMAGE_TYPES = new Set([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 const INLINE_ATTACHMENT_TYPES = new Set([
   "application/pdf",
   "image/avif",
@@ -651,12 +659,16 @@ async function readBody(request, limit, tooLargeMessage) {
   return Buffer.concat(chunks);
 }
 
-async function readJson(request) {
+async function readJson(
+  request,
+  limit = JSON_BODY_LIMIT,
+  tooLargeMessage = "Request body cannot exceed 1 MiB",
+) {
   const contentType = request.headers["content-type"]?.split(";", 1)[0].trim().toLowerCase();
   if (contentType !== "application/json") {
     throw new ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Content-Type must be application/json");
   }
-  const body = await readBody(request, JSON_BODY_LIMIT, "Request body cannot exceed 1 MiB");
+  const body = await readBody(request, limit, tooLargeMessage);
   const length = body.length;
   if (length === 0) {
     throw new ApiError(400, "INVALID_JSON", "Request body cannot be empty");
@@ -769,19 +781,96 @@ function parseAiSkillIds(value) {
   return skillIds;
 }
 
+function parseAiAttachments(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > AI_CHAT_ATTACHMENT_LIMIT) {
+    throw new ApiError(
+      400,
+      "INVALID_ATTACHMENT",
+      `'attachments' must be an array with at most ${AI_CHAT_ATTACHMENT_LIMIT} images`,
+    );
+  }
+  return value.map((attachment, index) => {
+    assertPlainObject(attachment);
+    assertAllowedKeys(attachment, new Set(["filename", "contentType", "dataBase64"]));
+    const filename = stringField(attachment.filename, `attachments[${index}].filename`, {
+      required: true,
+      maxLength: 240,
+    });
+    if (/[\u0000-\u001f\u007f/\\]/.test(filename)) {
+      throw new ApiError(
+        400,
+        "INVALID_ATTACHMENT",
+        `'attachments[${index}].filename' is invalid`,
+      );
+    }
+    const contentType = stringField(
+      attachment.contentType,
+      `attachments[${index}].contentType`,
+      { required: true, maxLength: 64 },
+    ).toLowerCase();
+    if (!AI_CHAT_IMAGE_TYPES.has(contentType)) {
+      throw new ApiError(
+        415,
+        "UNSUPPORTED_MEDIA_TYPE",
+        `'attachments[${index}].contentType' must be image/png, image/jpeg, image/webp, or image/gif`,
+      );
+    }
+    const dataBase64 = stringField(
+      attachment.dataBase64,
+      `attachments[${index}].dataBase64`,
+      { required: true, maxLength: AI_CHAT_TURN_BODY_LIMIT },
+    );
+    if (
+      dataBase64.length % 4 !== 0
+      || !/^[A-Za-z0-9+/]+={0,2}$/.test(dataBase64)
+    ) {
+      throw new ApiError(
+        400,
+        "INVALID_ATTACHMENT",
+        `'attachments[${index}].dataBase64' must contain valid base64`,
+      );
+    }
+    const data = Buffer.from(dataBase64, "base64");
+    if (data.length === 0 || data.toString("base64") !== dataBase64) {
+      throw new ApiError(
+        400,
+        "INVALID_ATTACHMENT",
+        `'attachments[${index}].dataBase64' must contain valid base64`,
+      );
+    }
+    return { filename, contentType, data, size: data.length };
+  });
+}
+
 function parseAiTurn(body) {
   assertPlainObject(body);
-  assertAllowedKeys(body, new Set(["message", "skillIds", "dangerFullAccessConfirmed"]));
+  assertAllowedKeys(body, new Set([
+    "message",
+    "skillIds",
+    "dangerFullAccessConfirmed",
+    "attachments",
+  ]));
   if (
     body.dangerFullAccessConfirmed !== undefined
     && typeof body.dangerFullAccessConfirmed !== "boolean"
   ) {
     throw new ApiError(400, "INVALID_FIELD", "'dangerFullAccessConfirmed' must be a boolean");
   }
+  const message = stringField(body.message ?? "", "message", { maxLength: 100_000 });
+  const attachments = parseAiAttachments(body.attachments);
+  if (message === "" && attachments.length === 0) {
+    throw new ApiError(
+      400,
+      "INVALID_MESSAGE",
+      "A message or at least one image attachment is required",
+    );
+  }
   return {
-    message: stringField(body.message, "message", { required: true, maxLength: 100_000 }),
+    message,
     skillIds: parseAiSkillIds(body.skillIds),
     dangerFullAccessConfirmed: body.dangerFullAccessConfirmed,
+    attachments,
   };
 }
 
@@ -1252,7 +1341,14 @@ export function createTaskboardServer(options = {}) {
         if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
         assertNoQuery(url.searchParams, "POST /api/local/ai/threads/:id/turns");
         const threadId = decodeRouteSegment(aiThreadTurnRoute[1], "Thread id");
-        const run = await aiChat.startTurn(threadId, parseAiTurn(await readJson(request)));
+        const run = await aiChat.startTurn(
+          threadId,
+          parseAiTurn(await readJson(
+            request,
+            AI_CHAT_TURN_BODY_LIMIT,
+            "AI chat turn body cannot exceed 25 MiB",
+          )),
+        );
         return sendJson(response, 202, { run });
       }
 

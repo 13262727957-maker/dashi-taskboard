@@ -155,7 +155,7 @@ function normalizedItem(rawType, item) {
   };
 }
 
-export function buildCodexArgs(thread, addDirectories) {
+export function buildCodexArgs(thread, addDirectories, imagePaths = []) {
   const args = [
     "exec",
     "--json",
@@ -176,8 +176,15 @@ export function buildCodexArgs(thread, addDirectories) {
     args.push("-c", `model_reasoning_effort="${thread.reasoningEffort}"`);
   }
   if (thread.codexThreadId) {
-    args.push("resume", thread.codexThreadId, "-");
+    args.push("resume");
+    for (const imagePath of imagePaths) {
+      args.push("-i", imagePath);
+    }
+    args.push(thread.codexThreadId, "-");
   } else {
+    for (const imagePath of imagePaths) {
+      args.push("-i", imagePath);
+    }
     args.push("-");
   }
   return args;

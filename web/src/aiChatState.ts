@@ -1,5 +1,6 @@
 import type {
   AiChatEvent,
+  AiChatImageAttachmentInput,
   AiChatModel,
   AiChatSandbox,
   AiChatSkill,
@@ -94,10 +95,12 @@ export function buildTurnInput(
   message: string,
   skillIds: string[],
   dangerFullAccessConfirmed: boolean,
+  attachments: AiChatImageAttachmentInput[] = [],
 ) {
   return {
     message,
     ...(skillIds.length > 0 ? { skillIds } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
     ...(dangerFullAccessConfirmed ? { dangerFullAccessConfirmed: true } : {}),
   };
 }
@@ -106,10 +109,11 @@ export function chatPrimaryAction(
   status: AiChatThreadStatus,
   message: string,
   blocked = false,
+  hasAttachments = false,
 ): "send" | "stop" | "disabled" {
   if (blocked) return "disabled";
   if (status === "running") return "stop";
-  return message.trim() ? "send" : "disabled";
+  return message.trim() || hasAttachments ? "send" : "disabled";
 }
 
 export function needsDangerConfirmation(

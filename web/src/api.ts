@@ -1,6 +1,7 @@
 import type {
   ActorIdentity,
   AiChatCatalog,
+  AiChatImageAttachmentInput,
   AiChatRun,
   AiChatSandbox,
   AiChatThread,
@@ -163,6 +164,7 @@ export async function startAiChatTurn(
   input: {
     message: string;
     skillIds?: string[];
+    attachments?: AiChatImageAttachmentInput[];
     dangerFullAccessConfirmed?: boolean;
   },
 ): Promise<AiChatRun> {

@@ -64,6 +64,12 @@ export interface AiChatSkill {
   scope: "user" | "repo" | "system" | "admin";
 }
 
+export interface AiChatImageAttachmentInput {
+  filename: string;
+  contentType: string;
+  dataBase64: string;
+}
+
 export interface AiChatCatalog {
   models: AiChatModel[];
   skills: AiChatSkill[];

@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { ApiError } from "./database.mjs";
 import { discoverAiCatalog, resolveAiWorkspace } from "./ai-chat-catalog.mjs";
 import {
@@ -9,6 +13,12 @@ import {
 
 const SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const ERROR_CONTENT_LIMIT = 65_536;
+const IMAGE_EXTENSIONS = new Map([
+  ["image/gif", ".gif"],
+  ["image/jpeg", ".jpg"],
+  ["image/png", ".png"],
+  ["image/webp", ".webp"],
+]);
 
 function cappedError(value) {
   const message = value instanceof Error ? value.message : String(value ?? "");
@@ -238,85 +248,103 @@ export class AiChatService {
       }
     }
 
-    const args = buildCodexArgs(thread, resolved.addDirectories);
-    const prompt = buildCodexPrompt(thread, { message: input.message, skillIds }, this.manageTaskboardSkillPath);
-    const run = this.database.createAiChatRun({ threadId });
-    this.#emit(threadId, { type: "ai.run", run });
-    const userEvent = this.database.insertAiChatEvent({
-      threadId,
-      runId: run.id,
-      type: "user_message",
-      role: "user",
-      content: input.message,
-    });
-    this.#emit(threadId, { type: "ai.event", event: userEvent });
+    const attachments = input.attachments ?? [];
+    const { temporaryDirectory, imagePaths } = await this.#writeTurnImages(attachments);
+    try {
+      const args = buildCodexArgs(thread, resolved.addDirectories, imagePaths);
+      const prompt = buildCodexPrompt(thread, { message: input.message, skillIds }, this.manageTaskboardSkillPath);
+      const run = this.database.createAiChatRun({ threadId });
+      this.#emit(threadId, { type: "ai.run", run });
+      const userEvent = this.database.insertAiChatEvent({
+        threadId,
+        runId: run.id,
+        type: "user_message",
+        role: "user",
+        content: input.message,
+        data: attachments.length > 0
+          ? {
+              attachments: attachments.map(({ filename, contentType, size }) => ({
+                filename,
+                contentType,
+                size,
+              })),
+            }
+          : undefined,
+      });
+      this.#emit(threadId, { type: "ai.event", event: userEvent });
 
-    const resumingThreadId = thread.codexThreadId;
-    let startedThreadId = null;
-    let terminalOutcome = null;
-    let terminalError = "";
-    const { child, completion } = spawnCodexTurn({
-      executable: this.codexExecutable,
-      args,
-      prompt,
-      env: this.processEnv,
-      onRawEvent: (raw) => {
-        const normalized = normalizeCodexEvent(raw);
-        if (!normalized) return;
-        if (normalized.kind === "thread.started") {
-          if (
-            (resumingThreadId && normalized.threadId !== resumingThreadId)
-            || (startedThreadId && normalized.threadId !== startedThreadId)
-          ) {
-            throw new Error("Codex returned an unexpected thread id");
+      const resumingThreadId = thread.codexThreadId;
+      let startedThreadId = null;
+      let terminalOutcome = null;
+      let terminalError = "";
+      const { child, completion } = spawnCodexTurn({
+        executable: this.codexExecutable,
+        args,
+        prompt,
+        env: this.processEnv,
+        onRawEvent: (raw) => {
+          const normalized = normalizeCodexEvent(raw);
+          if (!normalized) return;
+          if (normalized.kind === "thread.started") {
+            if (
+              (resumingThreadId && normalized.threadId !== resumingThreadId)
+              || (startedThreadId && normalized.threadId !== startedThreadId)
+            ) {
+              throw new Error("Codex returned an unexpected thread id");
+            }
+            startedThreadId = normalized.threadId;
+            this.database.updateAiChatThread(threadId, { codexThreadId: normalized.threadId });
+            return;
           }
-          startedThreadId = normalized.threadId;
-          this.database.updateAiChatThread(threadId, { codexThreadId: normalized.threadId });
-          return;
-        }
-        const event = this.database.insertAiChatEvent({
-          threadId,
-          runId: run.id,
-          type: normalized.type,
-          role: normalized.role,
-          content: normalized.content,
-          data: normalized.data,
-        });
-        if (raw.type === "turn.completed" && terminalOutcome === null) {
-          terminalOutcome = "completed";
-        } else if (raw.type === "turn.failed" || raw.type === "error") {
-          terminalOutcome = "failed";
-          terminalError ||= normalized.content;
-        }
-        this.#emit(threadId, { type: "ai.event", event });
-      },
-    });
+          const event = this.database.insertAiChatEvent({
+            threadId,
+            runId: run.id,
+            type: normalized.type,
+            role: normalized.role,
+            content: normalized.content,
+            data: normalized.data,
+          });
+          if (raw.type === "turn.completed" && terminalOutcome === null) {
+            terminalOutcome = "completed";
+          } else if (raw.type === "turn.failed" || raw.type === "error") {
+            terminalOutcome = "failed";
+            terminalError ||= normalized.content;
+          }
+          this.#emit(threadId, { type: "ai.event", event });
+        },
+      });
 
-    const active = { child, threadId, interrupted: false };
-    this.active.set(run.id, active);
-    const finalization = completion.then(
-      (result) => this.#finishRun({
-        run,
-        active,
-        result,
-        resumingThreadId,
-        startedThreadId: () => startedThreadId,
-        terminalOutcome: () => terminalOutcome,
-        terminalError: () => terminalError,
-      }),
-      (error) => this.#finishRun({
-        run,
-        active,
-        error,
-        resumingThreadId,
-        startedThreadId: () => startedThreadId,
-        terminalOutcome: () => terminalOutcome,
-        terminalError: () => terminalError,
-      }),
-    );
-    this.completions.set(run.id, finalization);
-    void finalization.finally(() => this.completions.delete(run.id)).catch(() => {});
-    return run;
+      const active = { child, threadId, interrupted: false, temporaryDirectory };
+      this.active.set(run.id, active);
+      const finalization = completion.then(
+        (result) => this.#finishRun({
+          run,
+          active,
+          result,
+          resumingThreadId,
+          startedThreadId: () => startedThreadId,
+          terminalOutcome: () => terminalOutcome,
+          terminalError: () => terminalError,
+        }),
+        (error) => this.#finishRun({
+          run,
+          active,
+          error,
+          resumingThreadId,
+          startedThreadId: () => startedThreadId,
+          terminalOutcome: () => terminalOutcome,
+          terminalError: () => terminalError,
+        }),
+      );
+      this.completions.set(run.id, finalization);
+      void finalization.finally(() => this.completions.delete(run.id)).catch(() => {});
+      return run;
+    } catch (error) {
+      if (temporaryDirectory) {
+        await rm(temporaryDirectory, { recursive: true, force: true });
+      }
+      throw error;
+    }
   }
 
   async interrupt(runId) {
@@ -409,13 +437,16 @@ export class AiChatService {
     if (
       !input
       || typeof input.message !== "string"
-      || input.message.trim() === ""
       || input.message.length > 100_000
+      || (
+        input.message.trim() === ""
+        && (!Array.isArray(input.attachments) || input.attachments.length === 0)
+      )
     ) {
       throw new ApiError(
         400,
         "INVALID_MESSAGE",
-        "'message' must be a non-empty string with at most 100000 characters",
+        "A message or at least one image attachment is required",
       );
     }
     if (
@@ -432,6 +463,30 @@ export class AiChatService {
         "INVALID_SKILL",
         "'skillIds' must contain at most 20 unique skill ids",
       );
+    }
+  }
+
+  async #writeTurnImages(attachments) {
+    if (attachments.length === 0) {
+      return { temporaryDirectory: null, imagePaths: [] };
+    }
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "codex-taskboard-ai-turn-"),
+    );
+    try {
+      const imagePaths = [];
+      for (const [index, attachment] of attachments.entries()) {
+        const imagePath = path.join(
+          temporaryDirectory,
+          `image-${index + 1}${IMAGE_EXTENSIONS.get(attachment.contentType)}`,
+        );
+        await writeFile(imagePath, attachment.data, { flag: "wx", mode: 0o600 });
+        imagePaths.push(imagePath);
+      }
+      return { temporaryDirectory, imagePaths };
+    } catch (error) {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+      throw error;
     }
   }
 
@@ -498,6 +553,9 @@ export class AiChatService {
       return updated;
     } finally {
       this.active.delete(run.id);
+      if (active.temporaryDirectory) {
+        await rm(active.temporaryDirectory, { recursive: true, force: true });
+      }
     }
   }
 
