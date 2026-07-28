@@ -510,6 +510,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [skillMention, setSkillMention] = useState<ComposerSkillQuery | null>(null);
+  const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [composerSkillTokens, setComposerSkillTokens] = useState<ComposerSkillToken[]>([]);
   const [pendingDangerInput, setPendingDangerInput] = useState<PendingDangerInput | null>(null);
   const [unread, setUnread] = useState(false);
@@ -523,6 +524,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [panelResizeEdge, setPanelResizeEdge] = useState<PanelResizeEdge | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const skillMentionRangeRef = useRef<Range | null>(null);
+  const skillMenuRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -919,6 +921,23 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     : null;
 
   useEffect(() => {
+    setSelectedSkillIndex(0);
+  }, [skillMention?.query]);
+
+  useEffect(() => {
+    setSelectedSkillIndex((current) => (
+      visibleSkills.length === 0 ? 0 : Math.min(current, visibleSkills.length - 1)
+    ));
+  }, [visibleSkills.length]);
+
+  useEffect(() => {
+    const option = skillMenuRef.current?.querySelector<HTMLElement>(
+      `[data-skill-index="${selectedSkillIndex}"]`,
+    );
+    option?.scrollIntoView({ block: "nearest" });
+  }, [selectedSkillIndex, skillMention?.query, visibleSkills.length]);
+
+  useEffect(() => {
     if (attachmentBlocked) setAttachmentDragActive(false);
   }, [attachmentBlocked]);
 
@@ -1272,6 +1291,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (composerBlocked) return;
+    if (event.key === "Enter" && event.shiftKey) return;
     if (event.key === "Backspace") {
       const token = editorRef.current ? tokenBeforeComposerCaret(editorRef.current) : null;
       if (token) {
@@ -1280,12 +1300,24 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
         return;
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && skillMention && visibleSkills[0]) {
+    if (skillMention && visibleSkills.length > 0 && event.key === "ArrowDown") {
       event.preventDefault();
-      selectSkill(visibleSkills[0]);
+      setSelectedSkillIndex((current) => (current + 1) % visibleSkills.length);
       return;
     }
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (skillMention && visibleSkills.length > 0 && event.key === "ArrowUp") {
+      event.preventDefault();
+      setSelectedSkillIndex((current) => (
+        (current - 1 + visibleSkills.length) % visibleSkills.length
+      ));
+      return;
+    }
+    if (event.key === "Enter" && skillMention && visibleSkills[selectedSkillIndex]) {
+      event.preventDefault();
+      selectSkill(visibleSkills[selectedSkillIndex]);
+      return;
+    }
+    if (event.key === "Enter") {
       event.preventDefault();
       if (primaryAction === "stop") void stopRun(currentRun);
       else if (primaryAction === "send") void startMessage(draft, false);
@@ -1524,6 +1556,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 }}
                 onKeyDown={handleComposerKeyDown}
                 onKeyUp={updateComposerSkillQuery}
+                onBlur={() => setSkillMention(null)}
                 onPaste={handleAttachmentPaste}
               />
               {composerSkillTokens.map((token) => {
@@ -1542,15 +1575,22 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 );
               })}
               {skillMention && visibleSkills.length > 0 && (
-                <div className="ai-chat-skill-menu" role="listbox" aria-label="可用 Skill">
+                <div
+                  ref={skillMenuRef}
+                  className="ai-chat-skill-menu"
+                  role="listbox"
+                  aria-label="可用 Skill"
+                >
                   {visibleSkills.map((skill, index) => (
                     <button
-                      className={index === 0 ? "is-selected" : undefined}
+                      className={index === selectedSkillIndex ? "is-selected" : undefined}
                       type="button"
                       role="option"
-                      aria-selected={index === 0}
+                      aria-selected={index === selectedSkillIndex}
+                      data-skill-index={index}
                       key={skill.id}
                       onPointerDown={(event) => event.preventDefault()}
+                      onPointerEnter={() => setSelectedSkillIndex(index)}
                       onClick={() => selectSkill(skill)}
                     >
                       <LinearIcon name="project" />

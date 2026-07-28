@@ -6463,7 +6463,7 @@ kbd {
 
 .ai-chat-panel {
   --ai-chat-composer-gap: 12px;
-  --ai-chat-composer-radius: 25px;
+  --ai-chat-composer-radius: 13px;
   position: fixed;
   z-index: 50;
   right: 8px;
@@ -7145,7 +7145,8 @@ kbd {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
-  padding: 0 0 10px;
+  margin: -6px -6px 0;
+  padding: 6px 6px 10px;
   overflow-x: auto;
 }
 
@@ -7256,18 +7257,17 @@ kbd {
 .ai-chat-skill-menu {
   position: absolute;
   z-index: 60;
-  right: 0;
-  bottom: calc(100% + 8px);
-  left: 0;
+  right: -12px;
+  bottom: calc(100% + 18px);
+  left: -12px;
+  box-sizing: border-box;
   max-height: 360px;
   padding: 4px;
   overflow: auto;
   border: var(--border-hairline) solid var(--border);
-  border-radius: 18px;
+  border-radius: var(--ai-chat-composer-radius);
   background: var(--surface-raised);
-  box-shadow:
-    0 12px 32px rgba(0, 0, 0, .08),
-    0 2px 7px rgba(0, 0, 0, .04);
+  box-shadow: none;
 }
 
 .ai-chat-skill-menu button {
