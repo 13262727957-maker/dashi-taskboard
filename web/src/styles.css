@@ -6917,7 +6917,7 @@ kbd {
   align-items: center;
   width: fit-content;
   gap: 5px;
-  padding: 8px 12px;
+  padding: 8px 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -6966,7 +6966,7 @@ kbd {
 
 .ai-chat-thinking-list {
   min-height: 0;
-  padding: 2px 12px 0;
+  padding: 2px 0 0;
   overflow: hidden;
   -webkit-user-select: text;
   user-select: text;
