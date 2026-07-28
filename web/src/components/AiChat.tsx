@@ -219,11 +219,41 @@ function serializeComposer(root: HTMLElement): { message: string; skillIds: stri
   return { message, skillIds };
 }
 
+function selectedComposerFragment(root: HTMLElement): {
+  message: string;
+  skillIds: string[];
+} | null {
+  const selection = root.ownerDocument.getSelection();
+  const selectionRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  if (
+    !selection
+    || selection.isCollapsed
+    || !selectionRange
+    || !root.contains(selectionRange.commonAncestorContainer)
+  ) {
+    return null;
+  }
+  const skillReferenceAt = (node: Node): HTMLElement | null => {
+    const element = node instanceof HTMLElement ? node : node.parentElement;
+    const reference = element?.closest<HTMLElement>("[data-skill-id]") ?? null;
+    return reference && root.contains(reference) ? reference : null;
+  };
+  const copyRange = selectionRange.cloneRange();
+  const startSkill = skillReferenceAt(copyRange.startContainer);
+  const endSkill = skillReferenceAt(copyRange.endContainer);
+  if (startSkill) copyRange.setStartBefore(startSkill);
+  if (endSkill) copyRange.setEndAfter(endSkill);
+  const wrapper = root.ownerDocument.createElement("div");
+  wrapper.append(copyRange.cloneContents());
+  const fragment = serializeComposer(wrapper);
+  return fragment.message ? fragment : null;
+}
+
 function composerMarkerCount(message: string): number {
   return message.split(SKILL_MARKER).length - 1;
 }
 
-function readableComposerFragment(
+function canonicalComposerFragment(
   fragment: { message: string; skillIds: string[] },
   skillsById: Map<string, AiChatSkill>,
 ): string {
@@ -232,10 +262,57 @@ function readableComposerFragment(
     const skillId = fragment.skillIds[index] ?? "";
     index += 1;
     const skill = skillsById.get(skillId);
-    return skill
-      ? skillDisplayName(skill)
-      : skillDisplayName({ id: skillId, label: skillId });
+    return skill ? `[$${skill.id}](${skill.path})` : SKILL_MARKER;
   });
+}
+
+function composerFragmentHtml(
+  fragment: { message: string; skillIds: string[] },
+  skillsById: Map<string, AiChatSkill>,
+  document: Document,
+): string {
+  const wrapper = document.createElement("div");
+  const parts = fragment.message.split(SKILL_MARKER);
+  parts.forEach((part, index) => {
+    if (index > 0) {
+      const skill = skillsById.get(fragment.skillIds[index - 1] ?? "");
+      if (skill) {
+        const link = document.createElement("a");
+        link.setAttribute("href", skill.path);
+        link.textContent = skillDisplayName(skill);
+        wrapper.append(link);
+      } else {
+        wrapper.append(SKILL_MARKER);
+      }
+    }
+    const lines = part.split("\n");
+    lines.forEach((line, lineIndex) => {
+      if (lineIndex > 0) wrapper.append(document.createElement("br"));
+      wrapper.append(line);
+    });
+  });
+  return wrapper.innerHTML;
+}
+
+function writeSkillFragmentToClipboard(
+  event: ReactClipboardEvent<HTMLElement>,
+  fragment: { message: string; skillIds: string[] },
+  skillsById: Map<string, AiChatSkill>,
+): boolean {
+  if (
+    fragment.skillIds.length === 0
+    || !fragment.skillIds.every((skillId) => skillsById.has(skillId))
+  ) {
+    return false;
+  }
+  event.preventDefault();
+  event.clipboardData.setData(COMPOSER_FRAGMENT_MIME, JSON.stringify(fragment));
+  event.clipboardData.setData("text/plain", canonicalComposerFragment(fragment, skillsById));
+  event.clipboardData.setData(
+    "text/html",
+    composerFragmentHtml(fragment, skillsById, event.currentTarget.ownerDocument),
+  );
+  return true;
 }
 
 function decodedSkillPath(href: string): string | null {
@@ -292,6 +369,30 @@ function composerFragmentFromHtml(
   };
   for (const child of document.body.childNodes) visit(child);
   return matchedSkill ? { message, skillIds } : null;
+}
+
+function composerFragmentFromPlainText(
+  text: string,
+  skills: AiChatSkill[],
+): { message: string; skillIds: string[] } | null {
+  if (!text || skills.length === 0) return null;
+  const skillsByPath = new Map(skills.map((skill) => [skill.path, skill]));
+  const skillIds: string[] = [];
+  let message = "";
+  let cursor = 0;
+  const referencePattern = /\[\$([^\]\r\n]+)\]\((\/[^)\r\n]*\/SKILL\.md)\)/g;
+  for (const match of text.matchAll(referencePattern)) {
+    const path = decodedSkillPath(match[2]);
+    const skill = path ? skillsByPath.get(path) : null;
+    if (!skill || skill.id !== match[1]) continue;
+    message += text.slice(cursor, match.index).replaceAll(SKILL_MARKER, "\uFFFD");
+    message += SKILL_MARKER;
+    skillIds.push(skill.id);
+    cursor = (match.index ?? 0) + match[0].length;
+  }
+  if (skillIds.length === 0) return null;
+  message += text.slice(cursor).replaceAll(SKILL_MARKER, "\uFFFD");
+  return { message, skillIds };
 }
 
 function composerSkillQueryAt(
@@ -389,7 +490,10 @@ function SkillReference({
   skillId: string;
 }) {
   return (
-    <span className="ai-chat-skill-reference">
+    <span
+      className="ai-chat-skill-reference"
+      data-skill-id={skillId || undefined}
+    >
       <LinearIcon name="project" />
       <span>{skill ? skillDisplayName(skill) : skillDisplayName({ id: skillId, label: skillId })}</span>
     </span>
@@ -557,6 +661,10 @@ function MessageTimeline({
   skills: AiChatSkill[];
 }) {
   const skillsById = new Map(skills.map((skill) => [skill.id, skill]));
+  const handleSkillFragmentCopy = (event: ReactClipboardEvent<HTMLElement>) => {
+    const fragment = selectedComposerFragment(event.currentTarget);
+    if (fragment) writeSkillFragmentToClipboard(event, fragment, skillsById);
+  };
   const timeline = filterVisibleAiEvents(events).reduce<Array<AiChatEvent | AiChatEvent[]>>(
     (items, event) => {
       const isMessage = event.role === "user"
@@ -590,7 +698,11 @@ function MessageTimeline({
         const event = entry;
         if (event.role === "user" || event.type === "user" || event.type === "user_message") {
           return (
-            <article className="ai-chat-user-message" key={event.id}>
+            <article
+              className="ai-chat-user-message"
+              key={event.id}
+              onCopy={handleSkillFragmentCopy}
+            >
               <MarkdownMessage skillsById={skillsById}>
                 {skillMarkdown(event.content, eventSkillIds(event), skillsById)}
               </MarkdownMessage>
@@ -1478,24 +1590,11 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
 
   function handleComposerCopy(event: ReactClipboardEvent<HTMLDivElement>) {
     const editor = editorRef.current;
-    const selection = editor?.ownerDocument.getSelection();
-    if (
-      !editor
-      || !selection
-      || selection.isCollapsed
-      || selection.rangeCount === 0
-      || !editor.contains(selection.getRangeAt(0).commonAncestorContainer)
-    ) {
-      return;
-    }
-    const wrapper = editor.ownerDocument.createElement("div");
-    wrapper.append(selection.getRangeAt(0).cloneContents());
-    const fragment = serializeComposer(wrapper);
-    if (!fragment.message) return;
+    if (!editor) return;
+    const fragment = selectedComposerFragment(editor);
+    if (!fragment) return;
     const skillsById = new Map((activeCatalog?.skills ?? []).map((skill) => [skill.id, skill]));
-    event.preventDefault();
-    event.clipboardData.setData(COMPOSER_FRAGMENT_MIME, JSON.stringify(fragment));
-    event.clipboardData.setData("text/plain", readableComposerFragment(fragment, skillsById));
+    writeSkillFragmentToClipboard(event, fragment, skillsById);
   }
 
   function handleComposerPaste(event: ReactClipboardEvent<HTMLDivElement>) {
@@ -1518,9 +1617,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       skills,
     );
     if (htmlFragment && insertComposerFragment(htmlFragment)) return;
-    const plainText = event.clipboardData
-      .getData("text/plain")
-      .replaceAll(SKILL_MARKER, "\uFFFD");
+    const clipboardText = event.clipboardData.getData("text/plain");
+    const plainFragment = composerFragmentFromPlainText(clipboardText, skills);
+    if (plainFragment && insertComposerFragment(plainFragment)) return;
+    const plainText = clipboardText.replaceAll(SKILL_MARKER, "\uFFFD");
     if (plainText) insertComposerFragment({ message: plainText, skillIds: [] });
   }
 
@@ -1796,7 +1896,9 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   updateComposerSkillQuery(true);
                 }}
                 onClick={(event) => {
-                  const token = (event.target as HTMLElement).closest<HTMLElement>("[data-skill-id]");
+                  const token = (event.target as HTMLElement).closest<HTMLElement>(
+                    ".ai-chat-composer-skill-token",
+                  );
                   if (token && event.currentTarget.contains(token)) {
                     removeComposerSkillToken(token);
                     return;
