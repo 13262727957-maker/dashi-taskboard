@@ -281,7 +281,9 @@ export function TaskEditor({
               onRemove={(index) => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
             />
           )}
+        </div>
 
+        <div className="task-form-dock">
           <div className="property-row">
             <label className="property-control property-status">
               <LinearStatusIcon status={status} className={`status-icon-${STATUS_DETAILS[status].tone}`} />
@@ -387,23 +389,23 @@ export function TaskEditor({
 
           {attachmentError && <div className="form-error" role="alert">{attachmentError}</div>}
           {error && <div className="form-error" role="alert">{error}</div>}
-        </div>
 
-        <footer className="dialog-footer">
-          {!task && (
-            <>
-              <button className="composer-attach-icon" type="button" disabled={saving} onClick={() => attachmentInputRef.current?.click()} aria-label="上传附件">
-                <LinearIcon name="attachment" />{attachments.length > 0 && <span>{attachments.length}</span>}
-              </button>
-              <input ref={attachmentInputRef} type="file" multiple hidden onChange={(event) => { if (event.currentTarget.files) addAttachments(event.currentTarget.files); event.currentTarget.value = ""; }} />
-            </>
-          )}
-          {task && <span aria-hidden="true" />}
-          <div className="dialog-actions">
-            {task && <span className="dialog-updated">编辑 {task.identifier}</span>}
-            <button className="button primary" type="submit" disabled={saving}>{saving ? "正在保存…" : task ? "保存更改" : "创建议题"}</button>
-          </div>
-        </footer>
+          <footer className="dialog-footer">
+            {!task && (
+              <>
+                <button className="composer-attach-icon" type="button" disabled={saving} onClick={() => attachmentInputRef.current?.click()} aria-label="上传附件">
+                  <LinearIcon name="attachment" />{attachments.length > 0 && <span>{attachments.length}</span>}
+                </button>
+                <input ref={attachmentInputRef} type="file" multiple hidden onChange={(event) => { if (event.currentTarget.files) addAttachments(event.currentTarget.files); event.currentTarget.value = ""; }} />
+              </>
+            )}
+            {task && <span aria-hidden="true" />}
+            <div className="dialog-actions">
+              {task && <span className="dialog-updated">编辑 {task.identifier}</span>}
+              <button className="button primary" type="submit" disabled={saving}>{saving ? "正在保存…" : task ? "保存更改" : "创建议题"}</button>
+            </div>
+          </footer>
+        </div>
       </form>
     </dialog>
   );

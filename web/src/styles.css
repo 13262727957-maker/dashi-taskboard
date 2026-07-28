@@ -5768,20 +5768,16 @@ kbd {
   max-height: none;
 }
 
-.task-dialog.is-expanded .task-form,
-.task-dialog.is-expanded .form-body {
+.task-dialog.is-expanded .task-form {
   min-height: 0;
   height: 100%;
-}
-
-.task-dialog.is-expanded .form-body {
-  flex: 1;
 }
 
 .task-form {
   display: flex;
   flex-direction: column;
   min-height: 302px;
+  max-height: inherit;
 }
 
 .dialog-header,
@@ -5823,10 +5819,36 @@ kbd {
 .form-body {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   min-height: 198px;
-  max-height: calc(100vh - 146px);
   padding: 7px 20px 10px;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.task-form-dock {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  min-width: 0;
+  background: var(--surface);
+}
+
+.task-form-dock > .property-row {
+  padding: 4px 20px 0;
+}
+
+.task-form-dock > .form-error {
+  margin-right: 20px;
+  margin-left: 20px;
+}
+
+.task-form-dock .composer-popover {
+  top: auto;
+  bottom: 32px;
 }
 
 .composer-title,
