@@ -26,6 +26,7 @@ import {
   updateAiChatThread,
 } from "../api";
 import {
+  AI_CHAT_SKILL_MARKER,
   aiChatEventStatus,
   buildThreadCreateInput,
   buildTurnInput,
@@ -34,6 +35,7 @@ import {
   filterVisibleAiEvents,
   needsDangerConfirmation,
   normalizeChatSelection,
+  parseAiChatComposerFragment,
   patchAiChatSnapshot,
   settingsForNewAiThread,
 } from "../aiChatState";
@@ -75,6 +77,11 @@ type ComposerSkillToken = {
 type ComposerSkillQuery = {
   query: string;
 };
+type ComposerBeforeInput = {
+  container: Node;
+  offset: number;
+  text: string;
+};
 type PanelResizeEdge = "top" | "left" | "top-left";
 type PanelGeometry = {
   width: number;
@@ -95,8 +102,26 @@ const PANEL_EDGE_GAP = 8;
 const PANEL_MIN_WIDTH = 420;
 const PANEL_MAX_WIDTH = 960;
 const PANEL_MIN_HEIGHT = 360;
-const SKILL_MARKER = "\uFFFC";
+const SKILL_MARKER = AI_CHAT_SKILL_MARKER;
 const SKILL_LINK_PREFIX = "#ai-chat-skill-";
+const COMPOSER_FRAGMENT_MIME = "application/x-codex-taskboard-composer-fragment";
+const COMPOSER_HTML_BLOCKS = new Set([
+  "ADDRESS",
+  "ARTICLE",
+  "BLOCKQUOTE",
+  "DIV",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "LI",
+  "P",
+  "PRE",
+  "SECTION",
+]);
+const COMPOSER_HTML_IGNORED = new Set(["SCRIPT", "STYLE", "SVG"]);
 const SANDBOX_LABELS: Record<AiChatSandbox, string> = {
   "read-only": "请求批准",
   "workspace-write": "替我审批",
@@ -194,20 +219,128 @@ function serializeComposer(root: HTMLElement): { message: string; skillIds: stri
   return { message, skillIds };
 }
 
-function composerSkillQuery(root: HTMLElement): { query: string; range: Range } | null {
-  const selection = root.ownerDocument.getSelection();
-  if (!selection || !selection.isCollapsed || !selection.focusNode) return null;
-  const focusNode = selection.focusNode;
-  if (!root.contains(focusNode) || focusNode.nodeType !== Node.TEXT_NODE) return null;
-  const rawPrefix = (focusNode.textContent ?? "").slice(0, selection.focusOffset);
+function composerMarkerCount(message: string): number {
+  return message.split(SKILL_MARKER).length - 1;
+}
+
+function readableComposerFragment(
+  fragment: { message: string; skillIds: string[] },
+  skillsById: Map<string, AiChatSkill>,
+): string {
+  let index = 0;
+  return fragment.message.replaceAll(SKILL_MARKER, () => {
+    const skillId = fragment.skillIds[index] ?? "";
+    index += 1;
+    const skill = skillsById.get(skillId);
+    return skill
+      ? skillDisplayName(skill)
+      : skillDisplayName({ id: skillId, label: skillId });
+  });
+}
+
+function decodedSkillPath(href: string): string | null {
+  const raw = href.trim();
+  if (!raw) return null;
+  try {
+    if (raw.startsWith("file:")) return decodeURIComponent(new URL(raw).pathname);
+    if (!raw.startsWith("/")) return null;
+    return decodeURIComponent(raw.split(/[?#]/, 1)[0]);
+  } catch {
+    return null;
+  }
+}
+
+function composerFragmentFromHtml(
+  html: string,
+  skills: AiChatSkill[],
+): { message: string; skillIds: string[] } | null {
+  if (!html || skills.length === 0) return null;
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const skillsByPath = new Map(skills.map((skill) => [skill.path, skill]));
+  const skillIds: string[] = [];
+  let message = "";
+  let matchedSkill = false;
+  const appendText = (value: string) => {
+    message += value.replaceAll(SKILL_MARKER, "\uFFFD");
+  };
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      appendText(node.textContent ?? "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as HTMLElement;
+    if (COMPOSER_HTML_IGNORED.has(element.tagName)) return;
+    if (element.tagName === "A") {
+      const path = decodedSkillPath(element.getAttribute("href") ?? "");
+      const skill = path?.endsWith("/SKILL.md") ? skillsByPath.get(path) : null;
+      if (skill) {
+        message += SKILL_MARKER;
+        skillIds.push(skill.id);
+        matchedSkill = true;
+        return;
+      }
+    }
+    if (element.tagName === "BR") {
+      message += "\n";
+      return;
+    }
+    const isBlock = COMPOSER_HTML_BLOCKS.has(element.tagName);
+    if (isBlock && message && !message.endsWith("\n")) message += "\n";
+    for (const child of element.childNodes) visit(child);
+    if (isBlock && element.nextSibling && !message.endsWith("\n")) message += "\n";
+  };
+  for (const child of document.body.childNodes) visit(child);
+  return matchedSkill ? { message, skillIds } : null;
+}
+
+function composerSkillQueryAt(
+  root: HTMLElement,
+  focusNode: Text,
+  focusOffset: number,
+): { query: string; range: Range } | null {
+  if (!root.contains(focusNode)) return null;
+  const rawPrefix = (focusNode.textContent ?? "").slice(0, focusOffset);
   const prefix = rawPrefix.replaceAll("\u200B", "");
   const match = /(?:^|\s)@([^\s@]*)$/.exec(prefix);
   if (!match) return null;
   const at = rawPrefix.lastIndexOf("@");
   const range = root.ownerDocument.createRange();
   range.setStart(focusNode, at);
-  range.setEnd(focusNode, selection.focusOffset);
+  range.setEnd(focusNode, focusOffset);
   return { query: match[1].toLocaleLowerCase(), range };
+}
+
+function composerSkillQuery(root: HTMLElement): { query: string; range: Range } | null {
+  const selection = root.ownerDocument.getSelection();
+  if (!selection || !selection.isCollapsed || selection.focusNode?.nodeType !== Node.TEXT_NODE) {
+    return null;
+  }
+  return composerSkillQueryAt(root, selection.focusNode as Text, selection.focusOffset);
+}
+
+function composerSkillQueryAfterInput(
+  root: HTMLElement,
+  beforeInput: ComposerBeforeInput,
+): { query: string; range: Range } | null {
+  if (beforeInput.container.nodeType === Node.TEXT_NODE) {
+    const textNode = beforeInput.container as Text;
+    return composerSkillQueryAt(
+      root,
+      textNode,
+      Math.min(beforeInput.offset + beforeInput.text.length, textNode.length),
+    );
+  }
+  if (!(beforeInput.container instanceof HTMLElement) || !root.contains(beforeInput.container)) {
+    return null;
+  }
+  const insertedNode = beforeInput.container.childNodes[beforeInput.offset];
+  if (insertedNode?.nodeType !== Node.TEXT_NODE) return null;
+  return composerSkillQueryAt(
+    root,
+    insertedNode as Text,
+    Math.min(beforeInput.text.length, insertedNode.textContent?.length ?? 0),
+  );
 }
 
 function tokenBeforeComposerCaret(root: HTMLElement): HTMLElement | null {
@@ -524,6 +657,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [panelResizeEdge, setPanelResizeEdge] = useState<PanelResizeEdge | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const skillMentionRangeRef = useRef<Range | null>(null);
+  const composerBeforeInputRef = useRef<ComposerBeforeInput | null>(null);
   const skillMenuRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -1068,10 +1202,42 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     if (!next.message && editor.childNodes.length > 0) editor.replaceChildren();
   }
 
-  function updateComposerSkillQuery() {
+  function rememberComposerBeforeInput(event: InputEvent) {
+    const editor = editorRef.current;
+    const selection = editor?.ownerDocument.getSelection();
+    if (
+      !editor
+      || !selection
+      || !selection.isCollapsed
+      || !selection.focusNode
+      || !editor.contains(selection.focusNode)
+      || event.inputType !== "insertText"
+      || event.data === null
+    ) {
+      composerBeforeInputRef.current = null;
+      return;
+    }
+    composerBeforeInputRef.current = {
+      container: selection.focusNode,
+      offset: selection.focusOffset,
+      text: event.data,
+    };
+  }
+
+  function updateComposerSkillQuery(fromInput = false) {
     const editor = editorRef.current;
     if (!editor) return;
-    const next = composerSkillQuery(editor);
+    if (editor.ownerDocument.activeElement !== editor) {
+      composerBeforeInputRef.current = null;
+      skillMentionRangeRef.current = null;
+      setSkillMention(null);
+      return;
+    }
+    const beforeInput = fromInput ? composerBeforeInputRef.current : null;
+    const next = (
+      beforeInput ? composerSkillQueryAfterInput(editor, beforeInput) : null
+    ) ?? composerSkillQuery(editor);
+    composerBeforeInputRef.current = null;
     skillMentionRangeRef.current = next?.range ?? null;
     setSkillMention(next ? { query: next.query } : null);
   }
@@ -1101,32 +1267,74 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     editor.focus();
   }
 
+  function insertComposerFragment(
+    fragment: { message: string; skillIds: string[] },
+    targetRange?: Range,
+  ): boolean {
+    const editor = editorRef.current;
+    if (!editor || composerMarkerCount(fragment.message) !== fragment.skillIds.length) return false;
+    const skillsById = new Map((activeCatalog?.skills ?? []).map((skill) => [skill.id, skill]));
+    if (!fragment.skillIds.every((skillId) => skillsById.has(skillId))) return false;
+    const selection = editor.ownerDocument.getSelection();
+    const range = targetRange ?? (selection?.rangeCount ? selection.getRangeAt(0) : null);
+    if (!range || !editor.contains(range.commonAncestorContainer)) return false;
+
+    const content = editor.ownerDocument.createDocumentFragment();
+    const newTokens: ComposerSkillToken[] = [];
+    let messageOffset = 0;
+    let skillIndex = 0;
+    for (
+      let markerOffset = fragment.message.indexOf(SKILL_MARKER);
+      markerOffset >= 0;
+      markerOffset = fragment.message.indexOf(SKILL_MARKER, messageOffset)
+    ) {
+      if (markerOffset > messageOffset) {
+        content.append(editor.ownerDocument.createTextNode(
+          fragment.message.slice(messageOffset, markerOffset),
+        ));
+      }
+      const skillId = fragment.skillIds[skillIndex];
+      const skill = skillsById.get(skillId);
+      if (!skill) return false;
+      const tokenElement = editor.ownerDocument.createElement("span");
+      tokenElement.className = "ai-chat-composer-skill-token";
+      tokenElement.dataset.skillId = skill.id;
+      tokenElement.contentEditable = "false";
+      tokenElement.title = skillDisplayName(skill);
+      content.append(tokenElement, editor.ownerDocument.createTextNode("\u200B"));
+      newTokens.push({ key: crypto.randomUUID(), id: skill.id, element: tokenElement });
+      skillIndex += 1;
+      messageOffset = markerOffset + SKILL_MARKER.length;
+    }
+    if (messageOffset < fragment.message.length) {
+      content.append(editor.ownerDocument.createTextNode(fragment.message.slice(messageOffset)));
+    }
+    if (!content.lastChild) return false;
+
+    const lastNode = content.lastChild;
+    range.deleteContents();
+    range.insertNode(content);
+    if (lastNode.nodeType === Node.TEXT_NODE) {
+      range.setStart(lastNode, lastNode.textContent?.length ?? 0);
+    } else {
+      range.setStartAfter(lastNode);
+    }
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    syncComposerState();
+    setComposerSkillTokens((current) => [...current, ...newTokens]);
+    setSkillMention(null);
+    skillMentionRangeRef.current = null;
+    editor.focus();
+    return true;
+  }
+
   function selectSkill(skill: AiChatSkill) {
     const editor = editorRef.current;
     const range = skillMentionRangeRef.current;
     if (!skillMention || !editor || !range) return;
-    range.deleteContents();
-    const tokenElement = editor.ownerDocument.createElement("span");
-    tokenElement.className = "ai-chat-composer-skill-token";
-    tokenElement.dataset.skillId = skill.id;
-    tokenElement.contentEditable = "false";
-    tokenElement.title = skillDisplayName(skill);
-    range.insertNode(tokenElement);
-    const spacer = editor.ownerDocument.createTextNode("\u200B");
-    tokenElement.after(spacer);
-    range.setStart(spacer, 1);
-    range.collapse(true);
-    const selection = editor.ownerDocument.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    setComposerSkillTokens((current) => [
-      ...current,
-      { key: crypto.randomUUID(), id: skill.id, element: tokenElement },
-    ]);
-    setSkillMention(null);
-    skillMentionRangeRef.current = null;
-    syncComposerState();
-    editor.focus();
+    insertComposerFragment({ message: SKILL_MARKER, skillIds: [skill.id] }, range);
   }
 
   function realSkillIdsForMessage(): string[] {
@@ -1268,12 +1476,52 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     void addAttachments(files);
   }
 
-  function handleAttachmentPaste(event: ReactClipboardEvent<HTMLDivElement>) {
+  function handleComposerCopy(event: ReactClipboardEvent<HTMLDivElement>) {
+    const editor = editorRef.current;
+    const selection = editor?.ownerDocument.getSelection();
+    if (
+      !editor
+      || !selection
+      || selection.isCollapsed
+      || selection.rangeCount === 0
+      || !editor.contains(selection.getRangeAt(0).commonAncestorContainer)
+    ) {
+      return;
+    }
+    const wrapper = editor.ownerDocument.createElement("div");
+    wrapper.append(selection.getRangeAt(0).cloneContents());
+    const fragment = serializeComposer(wrapper);
+    if (!fragment.message) return;
+    const skillsById = new Map((activeCatalog?.skills ?? []).map((skill) => [skill.id, skill]));
+    event.preventDefault();
+    event.clipboardData.setData(COMPOSER_FRAGMENT_MIME, JSON.stringify(fragment));
+    event.clipboardData.setData("text/plain", readableComposerFragment(fragment, skillsById));
+  }
+
+  function handleComposerPaste(event: ReactClipboardEvent<HTMLDivElement>) {
     if (attachmentBlocked) return;
     const files = attachmentFiles(event.clipboardData.files);
-    if (files.length === 0) return;
     event.preventDefault();
-    void addAttachments(files);
+    if (files.length > 0) {
+      void addAttachments(files);
+      return;
+    }
+    const skills = activeCatalog?.skills ?? [];
+    const skillsById = new Map(skills.map((skill) => [skill.id, skill]));
+    const internalFragment = parseAiChatComposerFragment(
+      event.clipboardData.getData(COMPOSER_FRAGMENT_MIME),
+      skillsById.keys(),
+    );
+    if (internalFragment && insertComposerFragment(internalFragment)) return;
+    const htmlFragment = composerFragmentFromHtml(
+      event.clipboardData.getData("text/html"),
+      skills,
+    );
+    if (htmlFragment && insertComposerFragment(htmlFragment)) return;
+    const plainText = event.clipboardData
+      .getData("text/plain")
+      .replaceAll(SKILL_MARKER, "\uFFFD");
+    if (plainText) insertComposerFragment({ message: plainText, skillIds: [] });
   }
 
   async function stopRun(run: AiChatRun | null) {
@@ -1542,9 +1790,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 aria-label="发送给 Codex 的消息"
                 aria-multiline="true"
                 suppressContentEditableWarning
+                onBeforeInput={(event) => rememberComposerBeforeInput(event.nativeEvent as InputEvent)}
                 onInput={() => {
                   syncComposerState();
-                  updateComposerSkillQuery();
+                  updateComposerSkillQuery(true);
                 }}
                 onClick={(event) => {
                   const token = (event.target as HTMLElement).closest<HTMLElement>("[data-skill-id]");
@@ -1555,9 +1804,22 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   updateComposerSkillQuery();
                 }}
                 onKeyDown={handleComposerKeyDown}
-                onKeyUp={updateComposerSkillQuery}
+                onKeyUp={(event) => {
+                  if (
+                    event.key === "ArrowLeft"
+                    || event.key === "ArrowRight"
+                    || event.key === "Home"
+                    || event.key === "End"
+                    || (!skillMention && (
+                      event.key === "ArrowUp"
+                      || event.key === "ArrowDown"
+                    ))
+                  ) updateComposerSkillQuery();
+                }}
+                onCompositionEnd={() => updateComposerSkillQuery()}
                 onBlur={() => setSkillMention(null)}
-                onPaste={handleAttachmentPaste}
+                onCopy={handleComposerCopy}
+                onPaste={handleComposerPaste}
               />
               {composerSkillTokens.map((token) => {
                 const skill = activeCatalog?.skills.find((candidate) => candidate.id === token.id);

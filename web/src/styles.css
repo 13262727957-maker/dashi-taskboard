@@ -6735,20 +6735,24 @@ kbd {
 }
 
 .ai-chat-skill-reference {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  position: relative;
+  display: inline-block;
+  padding-left: 21px;
   color: var(--accent);
   font-size: 14px;
   font-weight: 520;
   line-height: 22px;
+  vertical-align: baseline;
   white-space: nowrap;
 }
 
 .ai-chat-skill-reference svg {
-  flex: 0 0 16px;
+  position: absolute;
+  top: 50%;
+  left: 0;
   width: 16px;
   height: 16px;
+  transform: translateY(-50%);
 }
 
 .ai-chat-assistant-message {
@@ -7241,13 +7245,26 @@ kbd {
 .ai-chat-composer-skill-token {
   display: inline;
   margin: 0 2px;
+  font: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
   cursor: pointer;
 }
 
 .ai-chat-composer-skill-token > button {
+  display: inline;
   padding: 0;
   border: 0;
   background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+}
+
+.ai-chat-composer-skill-token .ai-chat-skill-reference {
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .ai-chat-composer-skill-token:hover .ai-chat-skill-reference {

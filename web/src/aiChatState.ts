@@ -15,6 +15,31 @@ export interface AiChatRouteState {
   pendingIssueId: string | null;
 }
 
+export const AI_CHAT_SKILL_MARKER = "\uFFFC";
+
+export function parseAiChatComposerFragment(
+  raw: string,
+  validSkillIds: Iterable<string>,
+): { message: string; skillIds: string[] } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { message?: unknown; skillIds?: unknown };
+    const validIds = new Set(validSkillIds);
+    if (
+      typeof parsed.message !== "string"
+      || !Array.isArray(parsed.skillIds)
+      || !parsed.skillIds.every((skillId): skillId is string => typeof skillId === "string")
+      || parsed.message.split(AI_CHAT_SKILL_MARKER).length - 1 !== parsed.skillIds.length
+      || !parsed.skillIds.every((skillId) => validIds.has(skillId))
+    ) {
+      return null;
+    }
+    return { message: parsed.message, skillIds: parsed.skillIds };
+  } catch {
+    return null;
+  }
+}
+
 export function isAiChatCapabilityAvailable(capabilities?: TaskboardCapabilities): boolean {
   return capabilities?.localAiChat === true;
 }
