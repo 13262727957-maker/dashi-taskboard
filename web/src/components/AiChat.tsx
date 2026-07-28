@@ -222,6 +222,7 @@ function serializeComposer(root: HTMLElement): { message: string; skillIds: stri
 function selectedComposerFragment(root: HTMLElement): {
   message: string;
   skillIds: string[];
+  range: Range;
 } | null {
   const selection = root.ownerDocument.getSelection();
   const selectionRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
@@ -235,6 +236,8 @@ function selectedComposerFragment(root: HTMLElement): {
   }
   const skillReferenceAt = (node: Node): HTMLElement | null => {
     const element = node instanceof HTMLElement ? node : node.parentElement;
+    const composerToken = element?.closest<HTMLElement>(".ai-chat-composer-skill-token") ?? null;
+    if (composerToken && root.contains(composerToken)) return composerToken;
     const reference = element?.closest<HTMLElement>("[data-skill-id]") ?? null;
     return reference && root.contains(reference) ? reference : null;
   };
@@ -246,7 +249,7 @@ function selectedComposerFragment(root: HTMLElement): {
   const wrapper = root.ownerDocument.createElement("div");
   wrapper.append(copyRange.cloneContents());
   const fragment = serializeComposer(wrapper);
-  return fragment.message ? fragment : null;
+  return fragment.message ? { ...fragment, range: copyRange } : null;
 }
 
 function composerMarkerCount(message: string): number {
@@ -306,7 +309,10 @@ function writeSkillFragmentToClipboard(
     return false;
   }
   event.preventDefault();
-  event.clipboardData.setData(COMPOSER_FRAGMENT_MIME, JSON.stringify(fragment));
+  event.clipboardData.setData(COMPOSER_FRAGMENT_MIME, JSON.stringify({
+    message: fragment.message,
+    skillIds: fragment.skillIds,
+  }));
   event.clipboardData.setData("text/plain", canonicalComposerFragment(fragment, skillsById));
   event.clipboardData.setData(
     "text/html",
@@ -1600,6 +1606,60 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     writeSkillFragmentToClipboard(event, fragment, skillsById);
   }
 
+  function handleComposerCut(event: ReactClipboardEvent<HTMLDivElement>) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const fragment = selectedComposerFragment(editor);
+    if (!fragment) return;
+    const skillsById = new Map((activeCatalog?.skills ?? []).map((skill) => [skill.id, skill]));
+    if (!writeSkillFragmentToClipboard(event, fragment, skillsById)) return;
+
+    const range = fragment.range;
+    range.deleteContents();
+    range.collapse(true);
+    const { startContainer, startOffset } = range;
+    let sentinel: Text | null = null;
+    let sentinelOffset = 0;
+    if (startContainer.nodeType === Node.TEXT_NODE) {
+      const text = startContainer as Text;
+      if (text.data[startOffset] === "\u200B") {
+        sentinel = text;
+        sentinelOffset = startOffset;
+      } else if (
+        startOffset === text.length
+        && text.nextSibling?.nodeType === Node.TEXT_NODE
+        && (text.nextSibling as Text).data.startsWith("\u200B")
+      ) {
+        sentinel = text.nextSibling as Text;
+      }
+    } else if (
+      startContainer.nodeType === Node.ELEMENT_NODE
+      && startContainer.childNodes[startOffset]?.nodeType === Node.TEXT_NODE
+      && (startContainer.childNodes[startOffset] as Text).data.startsWith("\u200B")
+    ) {
+      sentinel = startContainer.childNodes[startOffset] as Text;
+    }
+    if (sentinel) {
+      sentinel.deleteData(sentinelOffset, 1);
+      if (!sentinel.data && sentinel !== startContainer) sentinel.remove();
+    }
+
+    syncComposerState();
+    const selection = editor.ownerDocument.getSelection();
+    selection?.removeAllRanges();
+    if (range.startContainer === editor || editor.contains(range.startContainer)) {
+      selection?.addRange(range);
+    } else {
+      const caret = editor.ownerDocument.createRange();
+      caret.selectNodeContents(editor);
+      caret.collapse(false);
+      selection?.addRange(caret);
+    }
+    setSkillMention(null);
+    skillMentionRangeRef.current = null;
+    editor.focus();
+  }
+
   function handleComposerPaste(event: ReactClipboardEvent<HTMLDivElement>) {
     if (attachmentBlocked) return;
     const files = attachmentFiles(event.clipboardData.files);
@@ -1921,6 +1981,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 onCompositionEnd={() => updateComposerSkillQuery()}
                 onBlur={() => setSkillMention(null)}
                 onCopy={handleComposerCopy}
+                onCut={handleComposerCut}
                 onPaste={handleComposerPaste}
               />
               {composerSkillTokens.map((token) => {
