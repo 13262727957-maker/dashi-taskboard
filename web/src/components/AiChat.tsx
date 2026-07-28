@@ -759,54 +759,56 @@ function ThinkingSteps({
         className={`ai-chat-thinking-panel${isOpen ? " is-open" : ""}`}
         inert={!isOpen}
       >
-        <div className="ai-chat-thinking-list">
-          {events.map((event, index) => {
-            const eventStatus = aiChatEventStatus(event);
-            const detail = activityDetail(event);
-            const content = detail?.kind === "lines"
-              && (event.type === "file" || event.type === "file_change")
-              ? `${detail.value.length} 个文件`
-              : detail?.kind === "lines"
-                && (event.type === "todo" || event.type === "todo_list")
-                ? `${detail.value.length} 项任务`
-                : event.content.trim();
-            return (
-              <div
-                className="ai-chat-thinking-step-entry"
-                key={typeof event.data?.itemId === "string" && event.data.itemId
-                  ? event.data.itemId
-                  : event.id}
-                style={{ animationDelay: `${Math.min(index * 40, 240)}ms` }}
-              >
-                <div className={`ai-chat-thinking-step is-${eventStatus}${index === events.length - 1 ? " is-last" : ""}`}>
-                  <span className="ai-chat-thinking-step-rail" aria-hidden="true">
-                    <span className="ai-chat-thinking-step-icon">
-                      <LinearIcon name={eventStatus === "failed" ? "alert" : ACTIVITY_ICONS[event.type] ?? "statusTodo"} />
-                    </span>
-                    {index !== events.length - 1 && (
-                      <span className="ai-chat-thinking-step-connector" />
-                    )}
-                  </span>
-                  <div className="ai-chat-thinking-step-content">
-                    <div className="ai-chat-thinking-step-heading">
-                      <span className="ai-chat-thinking-step-label">
-                        {ACTIVITY_LABELS[event.type] ?? "执行活动"}
-                        {eventStatus === "running" && <span aria-hidden="true">…</span>}
+        <div className="ai-chat-thinking-panel-clip">
+          <div className="ai-chat-thinking-list">
+            {events.map((event, index) => {
+              const eventStatus = aiChatEventStatus(event);
+              const detail = activityDetail(event);
+              const content = detail?.kind === "lines"
+                && (event.type === "file" || event.type === "file_change")
+                ? `${detail.value.length} 个文件`
+                : detail?.kind === "lines"
+                  && (event.type === "todo" || event.type === "todo_list")
+                  ? `${detail.value.length} 项任务`
+                  : event.content.trim();
+              return (
+                <div
+                  className="ai-chat-thinking-step-entry"
+                  key={typeof event.data?.itemId === "string" && event.data.itemId
+                    ? event.data.itemId
+                    : event.id}
+                  style={{ animationDelay: `${Math.min(index * 40, 240)}ms` }}
+                >
+                  <div className={`ai-chat-thinking-step is-${eventStatus}${index === events.length - 1 ? " is-last" : ""}`}>
+                    <span className="ai-chat-thinking-step-rail" aria-hidden="true">
+                      <span className="ai-chat-thinking-step-icon">
+                        <LinearIcon name={eventStatus === "failed" ? "alert" : ACTIVITY_ICONS[event.type] ?? "statusTodo"} />
                       </span>
-                      {content && (
-                        <span className="ai-chat-thinking-step-description">
-                          {content}
+                      {index !== events.length - 1 && (
+                        <span className="ai-chat-thinking-step-connector" />
+                      )}
+                    </span>
+                    <div className="ai-chat-thinking-step-content">
+                      <div className="ai-chat-thinking-step-heading">
+                        <span className="ai-chat-thinking-step-label">
+                          {ACTIVITY_LABELS[event.type] ?? "执行活动"}
+                          {eventStatus === "running" && <span aria-hidden="true">…</span>}
                         </span>
+                        {content && (
+                          <span className="ai-chat-thinking-step-description">
+                            {content}
+                          </span>
+                        )}
+                      </div>
+                      {detail && (
+                        <ThinkingStepDetail detail={detail} />
                       )}
                     </div>
-                    {detail && (
-                      <ThinkingStepDetail detail={detail} />
-                    )}
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
     </section>

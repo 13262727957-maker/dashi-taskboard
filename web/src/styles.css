@@ -6922,6 +6922,11 @@ kbd {
   color: var(--text-tertiary);
 }
 
+.ai-chat-messages > * + .ai-chat-thinking-steps,
+.ai-chat-messages > .ai-chat-thinking-steps + * {
+  margin-top: -8px;
+}
+
 .ai-chat-thinking-header {
   display: inline-flex;
   align-items: center;
@@ -6980,10 +6985,13 @@ kbd {
   opacity: 1;
 }
 
-.ai-chat-thinking-list {
+.ai-chat-thinking-panel-clip {
   min-height: 0;
-  padding: 4px 12px 12px;
   overflow: hidden;
+}
+
+.ai-chat-thinking-list {
+  padding: 4px 12px 12px;
   font-size: 13px;
   -webkit-user-select: text;
   user-select: text;
