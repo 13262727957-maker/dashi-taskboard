@@ -7895,6 +7895,11 @@ kbd {
   min-height: 32px;
 }
 
+.ai-chat-model-list > button strong {
+  color: inherit;
+  font-weight: inherit;
+}
+
 .ai-chat-config-submenu > button > span {
   display: flex;
   flex-direction: column;
