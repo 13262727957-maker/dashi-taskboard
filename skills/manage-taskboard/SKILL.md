@@ -21,13 +21,9 @@ Use `taskctl` for every project, issue, and comment operation. Read [references/
 4. Let `taskctl` attribute every issue, relation, or comment mutation to the current Codex conversation through `CODEX_THREAD_ID`. Outside Codex, pass the exact conversation id with `--thread-id`.
 5. To claim a `todo` issue, move it to `in_progress` with `--if-version` from the latest read before starting implementation. If this claim reports a version conflict or a new read shows that its status changed, skip the issue and do not implement it.
 6. Include `--if-version <version>` on every concurrent update, using the version returned by the latest read.
-7. Before implementation, prove the real operation path to the user: entry point, action, data change or other side effect, and observable result. Cite the actual component, API, and file involved, or demonstrate the path in the product. This is not a test.
-8. Make the requested function work with the smallest direct change. Feature implementation is the primary objective; safety, guardrails, and testing must not dominate the work or turn the feature into a surrounding engineering project. Avoid over-design.
-9. After implementation, demonstrate or verify only the direct operation path and give the result to the user for confirmation. Before confirmation, do not proactively add guardrails, mutation or regression tests, legacy compatibility protection, defensive extensions, or speculative fallbacks. After confirmation, add targeted protection or tests only when the user explicitly asks, or when the user reports a concrete failure scenario that requires them.
-   - This workflow supersedes the earlier standing instruction that every feature must be developed test-first. Test-first language in older issues does not apply unless the user restates it for that issue after this rule.
-   - Higher-priority safety and security requirements still apply. Keep validation required at real user-input or external-API boundaries, without expanding it into hypothetical protection beyond the requested path.
-10. After implementation and the direct-path demonstration, add a comment summarizing the key changes, demonstrated path, result, and remaining risks; then move the issue to `in_review`. Never move it directly to `done`.
-11. Move an issue from `in_review` to `done` only when the user explicitly confirms acceptance or explicitly asks to mark it complete. Agent demonstration alone is not sufficient.
-12. Move work that cannot continue to `blocked`, and work that will not continue to `canceled`.
+7. Before requesting review, verify the requested work and acceptance criteria.
+8. After implementation and self-verification, add a comment summarizing the key changes, verification, result, and remaining risks; then move the issue to `in_review`. Never move it directly to `done`.
+9. Move an issue from `in_review` to `done` only when the user explicitly confirms acceptance or explicitly asks to mark it complete. Codex self-verification alone is not sufficient.
+10. Move work that cannot continue to `blocked`, and work that will not continue to `canceled`.
 
 For version conflicts outside the initial claim, read the issue again, reconcile the newer state, and retry with its current version.
