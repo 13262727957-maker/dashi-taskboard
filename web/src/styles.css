@@ -5834,6 +5834,7 @@ kbd {
   z-index: 2;
   flex: 0 0 auto;
   min-width: 0;
+  border-radius: 0 0 22px 22px;
   background: var(--surface);
 }
 
