@@ -719,19 +719,25 @@ function ThinkingStepDetail({
   );
 }
 
-function ThinkingSteps({ events }: { events: AiChatEvent[] }) {
+function ThinkingSteps({
+  events,
+  active,
+}: {
+  events: AiChatEvent[];
+  active: boolean;
+}) {
   const statuses = events.map(aiChatEventStatus);
   const status = statuses.includes("running")
     ? "running"
     : statuses.includes("failed") ? "failed" : "completed";
-  const [isOpen, setIsOpen] = useState(status !== "completed");
-  const previousStatusRef = useRef(status);
+  const [isOpen, setIsOpen] = useState(active);
+  const previousActiveRef = useRef(active);
 
   useEffect(() => {
-    if (previousStatusRef.current === status) return;
-    previousStatusRef.current = status;
-    setIsOpen(status !== "completed");
-  }, [status]);
+    if (previousActiveRef.current === active) return;
+    previousActiveRef.current = active;
+    setIsOpen(active);
+  }, [active]);
 
   const statusLabel = status === "running"
     ? "思考中"
@@ -838,9 +844,11 @@ function EventAttachments({ event }: { event: AiChatEvent }) {
 }
 
 function MessageTimeline({
+  activeRunId,
   events,
   skills,
 }: {
+  activeRunId: string | null;
   events: AiChatEvent[];
   skills: AiChatSkill[];
 }) {
@@ -874,6 +882,10 @@ function MessageTimeline({
         if (Array.isArray(entry)) {
           return (
             <ThinkingSteps
+              active={Boolean(
+                activeRunId
+                && entry.some((event) => event.runId === activeRunId),
+              )}
               events={entry}
               key={`activity-${
                 typeof entry[0]?.data?.itemId === "string" && entry[0].data.itemId
@@ -2035,6 +2047,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             ) : snapshot ? (
               <>
                 <MessageTimeline
+                  activeRunId={currentRun?.id ?? null}
                   events={snapshot.events}
                   skills={activeCatalog?.skills ?? []}
                 />
