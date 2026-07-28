@@ -2279,7 +2279,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   title="停止"
                   onClick={() => void stopRun(currentRun)}
                 >
-                  <LinearIcon name="pause" />
+                  <span className="ai-chat-stop-mark" aria-hidden="true" />
                 </button>
               ) : (
                 <button
