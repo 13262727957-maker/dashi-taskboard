@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { ClipboardEvent, FormEvent } from "react";
 import { ApiError } from "../api";
 import {
   TASK_PRIORITIES,
@@ -23,6 +23,12 @@ import { ActorAvatar } from "./ActorAvatar";
 import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
+import {
+  clipboardImages,
+  fileKey,
+  MAX_ATTACHMENT_SIZE,
+  PendingAttachments,
+} from "./PendingAttachments";
 
 const PRIORITY_LABELS: Record<TaskPriority, string> = {
   none: "无优先级",
@@ -49,18 +55,6 @@ interface TaskEditorProps {
   developmentScanLoading: boolean;
   onCancel: () => void;
   onSave: (draft: TaskDraft, attachments: File[]) => Promise<void>;
-}
-
-const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
-
-function fileKey(file: File): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
-}
-
-function fileSize(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function isoDate(date: Date): string {
@@ -192,7 +186,7 @@ export function TaskEditor({
     }
   }
 
-  function addAttachments(files: FileList) {
+  function addAttachments(files: FileList | File[]) {
     const selected = Array.from(files);
     const oversized = selected.find((file) => file.size > MAX_ATTACHMENT_SIZE);
     if (oversized) {
@@ -204,6 +198,14 @@ export function TaskEditor({
       const existing = new Set(current.map(fileKey));
       return [...current, ...selected.filter((file) => !existing.has(fileKey(file)))];
     });
+  }
+
+  function handleDescriptionPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (task) return;
+    const images = clipboardImages(event.clipboardData);
+    if (images.length === 0) return;
+    event.preventDefault();
+    addAttachments(images);
   }
 
   function chooseDueDate(value: string) {
@@ -246,8 +248,18 @@ export function TaskEditor({
           </label>
           <label className="composer-description">
             <span className="sr-only">描述</span>
-            <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add description…" rows={5} />
+            <textarea value={description} onChange={(event) => setDescription(event.target.value)} onPaste={handleDescriptionPaste} placeholder="Add description…" rows={5} />
           </label>
+
+          {!task && (
+            <PendingAttachments
+              files={attachments}
+              disabled={saving}
+              uploadLabel="保存后上传"
+              ariaLabel="待上传附件"
+              onRemove={(index) => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+            />
+          )}
 
           <div className="property-row">
             <label className="property-control property-status">
@@ -352,22 +364,20 @@ export function TaskEditor({
             </div>
           </div>
 
-          {attachments.length > 0 && (
-            <ul className="composer-attachment-list" aria-label="待上传附件">
-              {attachments.map((file, index) => (
-                <li key={`${fileKey(file)}:${index}`}><span className="composer-attachment-file-icon" aria-hidden="true"><LinearIcon name="file" /></span><span className="composer-attachment-copy"><strong>{file.name}</strong><span>{fileSize(file.size)} · 保存后上传</span></span><button type="button" disabled={saving} aria-label={`移除 ${file.name}`} onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><LinearIcon name="close" /></button></li>
-              ))}
-            </ul>
-          )}
           {attachmentError && <div className="form-error" role="alert">{attachmentError}</div>}
           {error && <div className="form-error" role="alert">{error}</div>}
         </div>
 
         <footer className="dialog-footer">
-          <button className="composer-attach-icon" type="button" disabled={saving} onClick={() => attachmentInputRef.current?.click()} aria-label="上传附件">
-            <LinearIcon name="attachment" />{attachments.length > 0 && <span>{attachments.length}</span>}
-          </button>
-          <input ref={attachmentInputRef} type="file" multiple hidden onChange={(event) => { if (event.currentTarget.files) addAttachments(event.currentTarget.files); event.currentTarget.value = ""; }} />
+          {!task && (
+            <>
+              <button className="composer-attach-icon" type="button" disabled={saving} onClick={() => attachmentInputRef.current?.click()} aria-label="上传附件">
+                <LinearIcon name="attachment" />{attachments.length > 0 && <span>{attachments.length}</span>}
+              </button>
+              <input ref={attachmentInputRef} type="file" multiple hidden onChange={(event) => { if (event.currentTarget.files) addAttachments(event.currentTarget.files); event.currentTarget.value = ""; }} />
+            </>
+          )}
+          {task && <span aria-hidden="true" />}
           <div className="dialog-actions">
             {task && <span className="dialog-updated">编辑 {task.identifier}</span>}
             <button className="button primary" type="submit" disabled={saving}>{saving ? "正在保存…" : task ? "保存更改" : "创建议题"}</button>

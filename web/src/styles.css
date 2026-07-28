@@ -3861,6 +3861,10 @@ kbd {
   padding: 0 12px 12px;
 }
 
+.comment-composer-files .composer-attachment-list {
+  margin-top: 6px;
+}
+
 .composer-footer {
   display: flex;
   align-items: center;
@@ -6045,6 +6049,67 @@ kbd {
 .composer-attachment-list button:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--text-primary);
+}
+
+.pending-attachments {
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.composer-description + .pending-attachments {
+  padding: 0 2px;
+}
+
+.composer-image-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composer-image-preview-list li {
+  position: relative;
+  width: 112px;
+  height: 84px;
+  overflow: visible;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-muted);
+}
+
+.composer-image-preview-list img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.composer-image-preview-list button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--text-primary);
+  color: var(--surface);
+}
+
+.composer-image-preview-list button svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+}
+
+.composer-image-preview-list button:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .codex-link-row {

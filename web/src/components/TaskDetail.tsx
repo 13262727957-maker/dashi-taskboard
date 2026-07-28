@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -39,13 +39,17 @@ import { STATUS_DETAILS } from "./BoardColumn";
 import { LabelPicker } from "./LabelPicker";
 import { LinearIcon, LinearPriorityIcon, LinearStatusIcon } from "./LinearIcon";
 import {
+  clipboardImages,
+  fileKey,
+  MAX_ATTACHMENT_SIZE,
+  PendingAttachments,
+} from "./PendingAttachments";
+import {
   IssueParentLink,
   IssueRelationSidebar,
   IssueSubIssues,
   type RelationMutationResult,
 } from "./IssueRelations";
-
-const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 
 const PRIORITY_DETAILS: Record<TaskPriority, { label: string; bars: number }> = {
   none: { label: "无优先级", bars: 0 },
@@ -120,10 +124,6 @@ function fileSize(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`;
   return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
-
-function fileKey(file: File): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
 }
 
 function contextValue(context: DevelopmentContext | null): string {
@@ -411,7 +411,7 @@ export function TaskDetail({
     }
   }
 
-  function stageCommentFiles(files: FileList) {
+  function stageCommentFiles(files: FileList | File[]) {
     const selected = Array.from(files);
     const oversized = selected.find((file) => file.size > MAX_ATTACHMENT_SIZE);
     if (oversized) {
@@ -424,6 +424,13 @@ export function TaskDetail({
       const existing = new Set(current.map(fileKey));
       return [...current, ...selected.filter((file) => !existing.has(fileKey(file)))];
     });
+  }
+
+  function handleCommentPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const images = clipboardImages(event.clipboardData);
+    if (images.length === 0) return;
+    event.preventDefault();
+    stageCommentFiles(images);
   }
 
   function handleSubmitShortcut(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -875,18 +882,16 @@ export function TaskDetail({
                   aria-label="留下评论"
                   onChange={(event) => setDraft(event.target.value)}
                   onKeyDown={handleSubmitShortcut}
+                  onPaste={handleCommentPaste}
                 />
-                {pendingCommentFiles.length > 0 && (
-                  <ul className="composer-attachment-list comment-composer-files" aria-label="待上传评论附件">
-                    {pendingCommentFiles.map((file, index) => (
-                      <li key={`${fileKey(file)}:${index}`}>
-                        <span className="composer-attachment-file-icon" aria-hidden="true"><LinearIcon name="file" /></span>
-                        <span className="composer-attachment-copy"><strong>{file.name}</strong><span>{fileSize(file.size)} · 发布后上传</span></span>
-                        <button type="button" disabled={submitting} aria-label={`移除 ${file.name}`} onClick={() => setPendingCommentFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}><LinearIcon name="close" /></button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <PendingAttachments
+                  files={pendingCommentFiles}
+                  disabled={submitting}
+                  uploadLabel="发布后上传"
+                  ariaLabel="待上传评论附件"
+                  className="comment-composer-files"
+                  onRemove={(index) => setPendingCommentFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                />
                 <footer className="composer-footer">
                   <div className="composer-footer-leading">
                     <button
