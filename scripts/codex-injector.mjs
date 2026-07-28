@@ -2,7 +2,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -17,11 +17,13 @@ import {
   reconcileInjectionRuntime,
   restartResidentInjector,
 } from "./codex-injector-runtime.mjs";
+import { readCodexQuotaStatus } from "./codex-rate-limits.mjs";
 
 const injectorPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(injectorPath), "..");
 const defaultCodexDebuggingPort = 9229;
 const injectionPath = path.join(projectRoot, "inject", "codex-taskboard.user.js");
+const automationPoliciesPath = path.join(projectRoot, ".data", "codex-automation-policies.json");
 const taskboardOrigin = `http://127.0.0.1:${resolvePort()}`;
 const taskboardHealthUrl = `${taskboardOrigin}/health`;
 const taskboardPageUrl = `${taskboardOrigin}/?host=codex`;
@@ -36,6 +38,12 @@ const codexAutomationMethods = new Set([
   "automation-update",
 ]);
 let codexAutomationRequestSequence = 0;
+const quotaPolicyTimers = new Map();
+const quotaPolicyRecords = new Map();
+const quotaPolicyQueues = new Map();
+let quotaPoliciesLoadPromise = null;
+let quotaPoliciesWritePromise = Promise.resolve();
+let quotaPoliciesRestored = false;
 
 function parseArgs(argv) {
   const options = {
@@ -400,14 +408,14 @@ async function waitForResidentInjectorReady(port, pid, startupToken, expectedSou
           const readiness = await cdp.send("Runtime.evaluate", {
             expression: `({
               token: window[${JSON.stringify(hostStartupTokenName)}],
-              taskboardMounted: Boolean(document.getElementById("codex-taskboard-frame")),
+              taskboardEntryMounted: Boolean(document.getElementById("codex-taskboard-entry")),
               sourceHash: window.__codexTaskboardInjection__?.sourceHash || null
             })`,
             returnByValue: true,
           });
           if (
             readiness.result.value?.token === startupToken
-            && readiness.result.value.taskboardMounted
+            && readiness.result.value.taskboardEntryMounted
             && readiness.result.value.sourceHash === expectedSourceHash
           ) return;
         } finally {
@@ -562,7 +570,7 @@ async function requestCodexAutomationViaCdp(cdp, executionContextId, method, par
         });
       });
     }))()`,
-    contextId: executionContextId,
+    ...(Number.isInteger(executionContextId) ? { contextId: executionContextId } : {}),
     awaitPromise: true,
     returnByValue: true,
   });
@@ -584,6 +592,197 @@ async function requestCodexAutomationViaCdp(cdp, executionContextId, method, par
     return JSON.parse(response.bodyJsonString);
   } catch {
     throw new Error("Codex automation request returned invalid JSON");
+  }
+}
+
+async function applyTaskboardAutomationPolicy(request, rpc, stillCurrent = () => true) {
+  const quota = request.quotaAware
+    ? await readCodexQuotaStatus(request.model)
+    : null;
+  if (!stillCurrent()) return { quota, stale: true };
+  const shouldRun = request.enabledByUser
+    && (!request.quotaAware || quota?.state === "available");
+  const result = await reconcileTaskboardAutomation(
+    { ...request, operation: shouldRun ? "ensure-active" : "pause" },
+    rpc,
+  );
+  if (result?.error === "not-found") {
+    return { ...(quota ? { quota } : {}) };
+  }
+  return { ...result, ...(quota ? { quota } : {}) };
+}
+
+function storedAutomationPolicy(request) {
+  return {
+    taskboardProjectId: request.taskboardProjectId,
+    codexProjectId: request.codexProjectId,
+    projectName: request.projectName,
+    workspacePath: request.workspacePath,
+    skillPath: request.skillPath,
+    ...(request.automationId ? { automationId: request.automationId } : {}),
+    enabledByUser: request.enabledByUser,
+    quotaAware: request.quotaAware,
+    intervalMinutes: request.intervalMinutes,
+    model: request.model,
+    reasoningEffort: request.reasoningEffort,
+  };
+}
+
+function restoredAutomationPolicy(value) {
+  return parseTaskboardAutomationHostRequest({
+    ...value,
+    id: "restored-policy",
+    action: "automation",
+    requestId: "restored-policy",
+    operation: "apply-policy",
+  });
+}
+
+async function ensureQuotaPoliciesLoaded() {
+  if (quotaPoliciesLoadPromise) return quotaPoliciesLoadPromise;
+  quotaPoliciesLoadPromise = (async () => {
+    let stored = {};
+    try {
+      stored = JSON.parse(await readFile(automationPoliciesPath, "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) return;
+    for (const value of Object.values(stored)) {
+      const request = restoredAutomationPolicy(value);
+      if (!request) continue;
+      quotaPolicyRecords.set(request.taskboardProjectId, { version: 1, request });
+    }
+  })();
+  return quotaPoliciesLoadPromise;
+}
+
+function persistQuotaPolicies() {
+  const data = Object.fromEntries(
+    [...quotaPolicyRecords.entries()].map(([projectId, record]) => [
+      projectId,
+      storedAutomationPolicy(record.request),
+    ]),
+  );
+  quotaPoliciesWritePromise = quotaPoliciesWritePromise
+    .catch(() => {})
+    .then(async () => {
+      await mkdir(path.dirname(automationPoliciesPath), { recursive: true });
+      await writeFile(automationPoliciesPath, `${JSON.stringify(data, null, 2)}\n`, {
+        mode: 0o600,
+      });
+    });
+  return quotaPoliciesWritePromise;
+}
+
+function scheduleQuotaPolicyCheck(record, cdp, result) {
+  const { request, version } = record;
+  const key = request.taskboardProjectId;
+  const previous = quotaPolicyTimers.get(key);
+  if (previous) clearTimeout(previous);
+  quotaPolicyTimers.delete(key);
+  if (!request.enabledByUser || !request.quotaAware) return;
+
+  const nextRunAt = Number(result.item?.nextRunAt);
+  const nextRunDelay = Number.isFinite(nextRunAt) && nextRunAt > Date.now()
+    ? Math.max(1_000, nextRunAt - Date.now() - 15_000)
+    : 60_000;
+  const resetDelay = result.quota?.state === "blocked"
+    && Number.isFinite(result.quota.resetsAt)
+    ? Math.max(1_000, result.quota.resetsAt * 1_000 - Date.now() + 1_000)
+    : nextRunDelay;
+  const timer = setTimeout(async () => {
+    if (quotaPolicyRecords.get(key)?.version !== version) return;
+    try {
+      await enqueueCurrentQuotaPolicy(key, cdp);
+    } catch (error) {
+      console.error(`Taskboard quota policy check failed: ${error.message}`);
+      const current = quotaPolicyRecords.get(key);
+      if (current?.version === version) {
+        scheduleQuotaPolicyCheck(current, cdp, { quota: { state: "unknown" } });
+      }
+    }
+  }, Math.min(nextRunDelay, resetDelay));
+  timer.unref();
+  quotaPolicyTimers.set(key, timer);
+}
+
+function enqueueQuotaPolicyMutation(record, cdp, rpc) {
+  const key = record.request.taskboardProjectId;
+  const previous = quotaPolicyQueues.get(key) ?? Promise.resolve();
+  const run = previous
+    .catch(() => {})
+    .then(async () => {
+      const current = quotaPolicyRecords.get(key);
+      if (!current || current.version !== record.version) return { stale: true };
+      const result = await applyTaskboardAutomationPolicy(
+        current.request,
+        rpc,
+        () => quotaPolicyRecords.get(key)?.version === current.version,
+      );
+      if (result.stale) return result;
+      if (result.item?.id && quotaPolicyRecords.get(key)?.version === current.version) {
+        current.request = { ...current.request, automationId: result.item.id };
+        await persistQuotaPolicies();
+      }
+      scheduleQuotaPolicyCheck(current, cdp, result);
+      return result;
+    });
+  const tracked = run.finally(() => {
+    if (quotaPolicyQueues.get(key) === tracked) quotaPolicyQueues.delete(key);
+  });
+  quotaPolicyQueues.set(key, tracked);
+  return tracked;
+}
+
+async function updateAndApplyQuotaPolicy(request, cdp, rpc) {
+  await ensureQuotaPoliciesLoaded();
+  const previous = quotaPolicyRecords.get(request.taskboardProjectId);
+  const record = {
+    version: (previous?.version ?? 0) + 1,
+    request,
+  };
+  quotaPolicyRecords.set(request.taskboardProjectId, record);
+  try {
+    await persistQuotaPolicies();
+    return await enqueueQuotaPolicyMutation(record, cdp, rpc);
+  } catch (error) {
+    if (quotaPolicyRecords.get(request.taskboardProjectId)?.version === record.version) {
+      if (previous) quotaPolicyRecords.set(request.taskboardProjectId, previous);
+      else quotaPolicyRecords.delete(request.taskboardProjectId);
+      await persistQuotaPolicies();
+    }
+    throw error;
+  }
+}
+
+async function readStoredAutomationPolicy(projectId) {
+  await ensureQuotaPoliciesLoaded();
+  const record = quotaPolicyRecords.get(projectId);
+  return record ? storedAutomationPolicy(record.request) : null;
+}
+
+async function enqueueCurrentQuotaPolicy(projectId, cdp) {
+  await ensureQuotaPoliciesLoaded();
+  const record = quotaPolicyRecords.get(projectId);
+  if (!record) return { stale: true };
+  return enqueueQuotaPolicyMutation(
+    record,
+    cdp,
+    (method, body) => requestCodexAutomationViaCdp(cdp, undefined, method, body),
+  );
+}
+
+async function restoreQuotaPolicies(cdp) {
+  if (quotaPoliciesRestored) return;
+  quotaPoliciesRestored = true;
+  await ensureQuotaPoliciesLoaded();
+  for (const [projectId, record] of quotaPolicyRecords) {
+    if (record.request.enabledByUser && record.request.quotaAware) {
+      void enqueueCurrentQuotaPolicy(projectId, cdp).catch((error) => {
+        console.error(`Taskboard quota policy restore failed: ${error.message}`);
+      });
+    }
   }
 }
 
@@ -738,15 +937,22 @@ async function installTaskboardHostBinding(cdp, supervisor) {
       parseAutomationRequest: parseTaskboardAutomationHostRequest,
       ensure: () => supervisor.ensure({ force: true }),
       runAutomation: (request, executionContextId) => (
-        reconcileTaskboardAutomation(
-          request,
-          (method, body) => requestCodexAutomationViaCdp(
+        (async () => {
+          const rpc = (method, body) => requestCodexAutomationViaCdp(
             cdp,
             executionContextId,
             method,
             body,
-          ),
-        )
+          );
+          const result = request.operation === "apply-policy"
+            ? await updateAndApplyQuotaPolicy(request, cdp, rpc)
+            : await reconcileTaskboardAutomation(request, rpc);
+          if (request.operation === "list") {
+            const policy = await readStoredAutomationPolicy(request.taskboardProjectId);
+            return { ...result, ...(policy ? { policy } : {}) };
+          }
+          return result;
+        })()
       ),
       prefill: (request, executionContextId) => (
         prefillTaskComposerViaCdp(cdp, executionContextId, request)
@@ -757,6 +963,7 @@ async function installTaskboardHostBinding(cdp, supervisor) {
     });
   });
   await cdp.send("Runtime.addBinding", { name: hostBindingName });
+  await restoreQuotaPolicies(cdp);
 }
 
 async function publishHostHeartbeat(cdp, startupToken) {

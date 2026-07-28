@@ -117,12 +117,23 @@ interface UndoNotice {
 
 type ColumnVisibilityByProject = Record<string, Partial<Record<TaskStatus, boolean>>>;
 type ProjectAutomationStatus = "ACTIVE" | "PAUSED";
+type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
 type AutomationIntervalMinutes = 5 | 10 | 15 | 30 | 60;
+
+interface AutomationQuotaStatus {
+  state: AutomationQuotaState;
+  checkedAt: number;
+  resetsAt?: number;
+  reason?: "api-key";
+}
 
 interface ProjectAutomationRecord {
   automationId?: string;
   codexProjectId: string;
   status: ProjectAutomationStatus;
+  enabledByUser: boolean;
+  quotaAware: boolean;
+  quota?: AutomationQuotaStatus;
   intervalMinutes: AutomationIntervalMinutes;
   model: AutomationModel;
   reasoningEffort: AutomationReasoningEffort;
@@ -143,6 +154,15 @@ interface AutomationHostResponse {
   ok: boolean;
   item?: AutomationHostItem;
   items?: AutomationHostItem[];
+  quota?: AutomationQuotaStatus;
+  policy?: {
+    automationId?: string;
+    enabledByUser: boolean;
+    quotaAware: boolean;
+    intervalMinutes: AutomationIntervalMinutes;
+    model: AutomationModel;
+    reasoningEffort: AutomationReasoningEffort;
+  };
   error?: string;
 }
 
@@ -166,6 +186,8 @@ const SHOW_EMPTY_COLUMNS_KEY = "taskboard.showEmptyColumns.v1";
 const COLUMN_VISIBILITY_KEY = "taskboard.columnVisibility.v1";
 const PROJECT_AUTOMATIONS_KEY = "taskboard.projectAutomations.v1";
 const DEFAULT_AUTOMATION_OPTIONS = {
+  enabledByUser: false,
+  quotaAware: false,
   intervalMinutes: 5,
   model: "gpt-5.5",
   reasoningEffort: "high",
@@ -234,6 +256,8 @@ function readProjectAutomations(): ProjectAutomations {
       const candidate = record as Partial<ProjectAutomationRecord>;
       const model = candidate.model ?? "gpt-5.5";
       const reasoningEffort = candidate.reasoningEffort ?? "high";
+      const enabledByUser = candidate.enabledByUser ?? candidate.status === "ACTIVE";
+      const quotaAware = candidate.quotaAware ?? false;
       if (
         (candidate.automationId !== undefined && typeof candidate.automationId !== "string")
         || typeof candidate.codexProjectId !== "string"
@@ -243,11 +267,17 @@ function readProjectAutomations(): ProjectAutomations {
         || !isAutomationReasoningEffort(reasoningEffort)
         || !isSupportedModelEffort(model, reasoningEffort)
         || (candidate.status === "ACTIVE" && !candidate.automationId)
+        || typeof enabledByUser !== "boolean"
+        || typeof quotaAware !== "boolean"
       ) continue;
+      const quota = isAutomationQuotaStatus(candidate.quota) ? candidate.quota : undefined;
       result[projectId] = {
         automationId: candidate.automationId,
         codexProjectId: candidate.codexProjectId,
         status: candidate.status,
+        enabledByUser,
+        quotaAware,
+        ...(quota ? { quota } : {}),
         intervalMinutes: candidate.intervalMinutes ?? 5,
         model,
         reasoningEffort,
@@ -257,6 +287,35 @@ function readProjectAutomations(): ProjectAutomations {
   } catch {
     return {};
   }
+}
+
+function isAutomationQuotaStatus(value: unknown): value is AutomationQuotaStatus {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Partial<AutomationQuotaStatus>;
+  return (
+    (candidate.state === "available"
+      || candidate.state === "blocked"
+      || candidate.state === "unknown"
+      || candidate.state === "unavailable")
+    && Number.isFinite(candidate.checkedAt)
+    && (candidate.resetsAt === undefined || Number.isFinite(candidate.resetsAt))
+    && (candidate.reason === undefined || candidate.reason === "api-key")
+  );
+}
+
+function isAutomationHostPolicy(
+  value: AutomationHostResponse["policy"] | undefined,
+): value is NonNullable<AutomationHostResponse["policy"]> {
+  return Boolean(
+    value
+    && (value.automationId === undefined || typeof value.automationId === "string")
+    && typeof value.enabledByUser === "boolean"
+    && typeof value.quotaAware === "boolean"
+    && isAutomationIntervalMinutes(value.intervalMinutes)
+    && isAutomationModel(value.model)
+    && isAutomationReasoningEffort(value.reasoningEffort)
+    && isSupportedModelEffort(value.model, value.reasoningEffort),
+  );
 }
 
 function isAutomationIntervalMinutes(value: unknown): value is AutomationIntervalMinutes {
@@ -400,6 +459,7 @@ export function App() {
   const dragRegionRef = useRef<HTMLDivElement>(null);
   const pendingAutomationRequestsRef = useRef(new Map<string, PendingAutomationRequest>());
   const automationRequestInFlightRef = useRef(false);
+  const projectAutomationsRef = useRef(projectAutomations);
 
   const setAnnouncement = useCallback((message: string) => {
     setUndoNotice(null);
@@ -526,6 +586,9 @@ export function App() {
         && current[projectId]?.automationId === record.automationId
         && current[projectId]?.codexProjectId === record.codexProjectId
         && current[projectId]?.status === record.status
+        && current[projectId]?.enabledByUser === record.enabledByUser
+        && current[projectId]?.quotaAware === record.quotaAware
+        && JSON.stringify(current[projectId]?.quota) === JSON.stringify(record.quota)
         && current[projectId]?.intervalMinutes === record.intervalMinutes
         && current[projectId]?.model === record.model
         && current[projectId]?.reasoningEffort === record.reasoningEffort
@@ -535,14 +598,18 @@ export function App() {
       const next = { ...current };
       if (record) next[projectId] = record;
       else delete next[projectId];
+      projectAutomationsRef.current = next;
       window.localStorage.setItem(PROJECT_AUTOMATIONS_KEY, JSON.stringify(next));
       return next;
     });
   }, []);
 
   const sendAutomationRequest = useCallback((
-    operation: "ensure-active" | "pause" | "list",
-    options: Pick<ProjectAutomationRecord, "intervalMinutes" | "model" | "reasoningEffort">,
+    operation: "ensure-active" | "pause" | "list" | "apply-policy",
+    options: Pick<
+      ProjectAutomationRecord,
+      "enabledByUser" | "quotaAware" | "intervalMinutes" | "model" | "reasoningEffort"
+    >,
     automationId?: string,
   ) => {
     if (
@@ -573,6 +640,8 @@ export function App() {
         workspacePath: automationProjectContext.workspacePath,
         skillPath: manageTaskboardSkillPath,
         ...(automationId ? { automationId } : {}),
+        enabledByUser: options.enabledByUser,
+        quotaAware: options.quotaAware,
         intervalMinutes: options.intervalMinutes,
         model: options.model,
         reasoningEffort: options.reasoningEffort,
@@ -592,7 +661,7 @@ export function App() {
       return;
     }
     if (!selectedProjectId || !automationProjectContext.codexProjectId || automationRequestInFlightRef.current) return;
-    const stored = projectAutomations[selectedProjectId];
+    const stored = projectAutomationsRef.current[selectedProjectId];
     automationRequestInFlightRef.current = true;
     setAutomationPending(true);
     setAutomationError(null);
@@ -601,11 +670,33 @@ export function App() {
         status: "PAUSED" as const,
         ...DEFAULT_AUTOMATION_OPTIONS,
       };
-      const response = await sendAutomationRequest("list", options, stored?.automationId);
+      const response = await sendAutomationRequest(
+        stored ? "apply-policy" : "list",
+        options,
+        stored?.automationId,
+      );
       const items = Array.isArray(response.items)
         ? response.items.filter(isAutomationHostItem)
         : [];
-      const item = items.find((item) => item.id === stored?.automationId)
+      if (!stored) {
+        const policy = isAutomationHostPolicy(response.policy) ? response.policy : null;
+        if (!policy) return;
+        const item = items.find((candidate) => candidate.id === policy.automationId)
+          ?? (items.length === 1 ? items[0] : undefined);
+        writeProjectAutomation(selectedProjectId, {
+          automationId: item?.id ?? policy.automationId,
+          codexProjectId: automationProjectContext.codexProjectId,
+          status: item?.status ?? "PAUSED",
+          enabledByUser: policy.enabledByUser,
+          quotaAware: policy.quotaAware,
+          intervalMinutes: policy.intervalMinutes,
+          model: policy.model,
+          reasoningEffort: policy.reasoningEffort,
+        });
+        return;
+      }
+      const item = (isAutomationHostItem(response.item) ? response.item : undefined)
+        ?? items.find((item) => item.id === stored?.automationId)
         ?? (items.length === 1 ? items[0] : undefined);
       if (!item) {
         if (stored) {
@@ -613,6 +704,7 @@ export function App() {
             ...stored,
             automationId: undefined,
             status: "PAUSED",
+            ...(response.quota ? { quota: response.quota } : {}),
           });
         }
         return;
@@ -623,6 +715,9 @@ export function App() {
         automationId: item.id,
         codexProjectId: automationProjectContext.codexProjectId,
         status: item.status,
+        enabledByUser: stored.enabledByUser,
+        quotaAware: stored.quotaAware,
+        ...(response.quota ? { quota: response.quota } : {}),
         intervalMinutes,
         model: item.model,
         reasoningEffort: item.reasoningEffort,
@@ -635,52 +730,39 @@ export function App() {
     }
   }, [
     automationProjectContext,
-    projectAutomations,
     selectedProjectId,
     sendAutomationRequest,
     writeProjectAutomation,
   ]);
 
   const saveProjectAutomation = useCallback(async (options: {
-    status: ProjectAutomationStatus;
+    enabledByUser: boolean;
+    quotaAware: boolean;
     intervalMinutes: AutomationIntervalMinutes;
     model: AutomationModel;
     reasoningEffort: AutomationReasoningEffort;
   }) => {
     const stored = projectAutomations[selectedProjectId];
-    if (options.status === "PAUSED" && !stored?.automationId) {
-      if (!selectedProjectId || !automationProjectContext.codexProjectId) {
-        setAutomationError(automationProjectContext.unavailableReason ?? "无法读取项目自动化信息");
-        return;
-      }
-      writeProjectAutomation(selectedProjectId, {
-        automationId: undefined,
-        codexProjectId: automationProjectContext.codexProjectId,
-        ...options,
-      });
-      setAutomationError(null);
-      return;
-    }
     if (
       !selectedProjectId
       || automationProjectContext.unavailableReason
       || !automationProjectContext.codexProjectId
       || automationRequestInFlightRef.current
     ) return;
-    const operation = options.status === "ACTIVE" ? "ensure-active" : "pause";
     const previousRecord = stored;
     automationRequestInFlightRef.current = true;
     setAutomationPending(true);
     setAutomationError(null);
     try {
-      const response = await sendAutomationRequest(operation, options, stored?.automationId);
-      if (!isAutomationHostItem(response.item)) {
-        throw new Error("Codex 没有返回自动化状态");
-      }
+      const response = await sendAutomationRequest("apply-policy", options, stored?.automationId);
+      const item = isAutomationHostItem(response.item) ? response.item : undefined;
       writeProjectAutomation(selectedProjectId, {
-        automationId: response.item.id,
+        automationId: item?.id,
         codexProjectId: automationProjectContext.codexProjectId,
-        status: response.item.status,
+        status: item?.status ?? "PAUSED",
+        enabledByUser: options.enabledByUser,
+        quotaAware: options.quotaAware,
+        ...(response.quota ? { quota: response.quota } : {}),
         intervalMinutes: options.intervalMinutes,
         model: options.model,
         reasoningEffort: options.reasoningEffort,

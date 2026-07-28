@@ -737,6 +737,8 @@
       workspacePath: payload.workspacePath,
       skillPath: payload.skillPath,
       ...(payload.automationId === undefined ? {} : { automationId: payload.automationId }),
+      enabledByUser: payload.enabledByUser,
+      quotaAware: payload.quotaAware,
       intervalMinutes: payload.intervalMinutes,
       model: payload.model,
       reasoningEffort: payload.reasoningEffort,
@@ -767,6 +769,8 @@
               ok: true,
               item: response.item,
               items: response.items,
+              quota: response.quota,
+              policy: response.policy,
             },
       });
     } catch (error) {

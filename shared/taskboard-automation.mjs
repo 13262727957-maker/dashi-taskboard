@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isSupportedModelEffort } from "./taskboard-automation-options.mjs";
 
-const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list"]);
+const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list", "apply-policy"]);
 const INTERVAL_MINUTES = new Set([5, 10, 15, 30, 60]);
 const HOST_REQUEST_FIELDS = new Set([
   "id",
@@ -14,6 +14,8 @@ const HOST_REQUEST_FIELDS = new Set([
   "workspacePath",
   "skillPath",
   "automationId",
+  "enabledByUser",
+  "quotaAware",
   "intervalMinutes",
   "model",
   "reasoningEffort",
@@ -31,6 +33,7 @@ export function parseTaskboardAutomationHostRequest(value) {
   if (!INTERVAL_MINUTES.has(value.intervalMinutes)) return null;
   if (!isSupportedModelEffort(value.model, value.reasoningEffort)) return null;
   if (value.automationId !== undefined && !validText(value.automationId, 256)) return null;
+  if (typeof value.enabledByUser !== "boolean" || typeof value.quotaAware !== "boolean") return null;
 
   return {
     id: value.id,
@@ -43,6 +46,8 @@ export function parseTaskboardAutomationHostRequest(value) {
     workspacePath: value.workspacePath,
     skillPath: value.skillPath,
     ...(value.automationId === undefined ? {} : { automationId: value.automationId }),
+    enabledByUser: value.enabledByUser,
+    quotaAware: value.quotaAware,
     intervalMinutes: value.intervalMinutes,
     model: value.model,
     reasoningEffort: value.reasoningEffort,
@@ -127,6 +132,11 @@ function sanitizeAutomation(item) {
     model: item.model,
     reasoningEffort: item.reasoningEffort,
     rrule: item.rrule,
+    ...(
+      item.nextRunAt === null || Number.isFinite(item.nextRunAt)
+        ? { nextRunAt: item.nextRunAt }
+        : {}
+    ),
   };
 }
 
@@ -137,7 +147,11 @@ function validRrule(value) {
 
 function automationMatchesSpec(item, spec, status) {
   return item?.status === status
-    && Object.entries(spec).every(([field, value]) => item[field] === value);
+    && Object.entries(spec).every(([field, value]) => (
+      field === "projectId"
+        ? (item.projectId ?? item.target?.projectId) === value
+        : item[field] === value
+    ));
 }
 
 function validIdentifier(value, maxLength) {
