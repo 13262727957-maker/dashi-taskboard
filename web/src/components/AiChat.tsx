@@ -5,7 +5,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type ChangeEvent,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
@@ -68,6 +70,12 @@ type ComposerAttachment = AiChatImageAttachmentInput & {
 };
 
 const LAST_THREAD_KEY = "taskboard.aiChat.lastThreadId";
+const IMAGE_ATTACHMENT_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
 
 const SANDBOX_LABELS: Record<AiChatSandbox, string> = {
   "read-only": "只读",
@@ -317,6 +325,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [draftSandbox, setDraftSandbox] = useState<AiChatSandbox>("read-only");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+  const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -578,6 +587,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     || settingsSaving
     || deletingThreadId === selectedThreadId
     || Boolean(selectedThreadId && !snapshot);
+  const attachmentBlocked = composerBlocked || snapshot?.thread.status === "running";
   const primaryAction = chatPrimaryAction(
     snapshot?.thread.status ?? "idle",
     draft,
@@ -587,6 +597,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const anyRunning = threads.some((thread) => thread.status === "running");
   const anyFailed = threads.some((thread) => thread.status === "failed");
   const launcherState = anyRunning ? "running" : anyFailed ? "failed" : unread ? "unread" : "idle";
+
+  useEffect(() => {
+    if (attachmentBlocked) setAttachmentDragActive(false);
+  }, [attachmentBlocked]);
 
   async function createThreadForCurrentOrigin(): Promise<AiChatThread | null> {
     const input = buildThreadCreateInput(projectId ?? "", issueId);
@@ -777,12 +791,16 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     }
   }
 
-  async function handleAttachmentSelection(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
-    if (files.length === 0) return;
+  function imageFiles(files: FileList | File[]): File[] {
+    return Array.from(files).filter((file) => IMAGE_ATTACHMENT_TYPES.has(file.type));
+  }
+
+  async function addImageAttachments(files: File[]) {
+    if (attachmentBlocked) return;
+    const acceptedFiles = imageFiles(files);
+    if (acceptedFiles.length === 0) return;
     try {
-      const nextAttachments = await Promise.all(files.map((file, index) => (
+      const nextAttachments = await Promise.all(acceptedFiles.map((file, index) => (
         new Promise<ComposerAttachment>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => {
@@ -808,6 +826,54 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     } catch (nextError) {
       setError(messageFor(nextError));
     }
+  }
+
+  async function handleAttachmentSelection(event: ChangeEvent<HTMLInputElement>) {
+    const files = imageFiles(event.target.files ?? []);
+    event.target.value = "";
+    await addImageAttachments(files);
+  }
+
+  function hasDraggedImage(event: ReactDragEvent<HTMLDivElement>): boolean {
+    return Array.from(event.dataTransfer.items).some((item) => (
+      item.kind === "file" && IMAGE_ATTACHMENT_TYPES.has(item.type)
+    )) || imageFiles(event.dataTransfer.files).length > 0;
+  }
+
+  function handleAttachmentDragEnter(event: ReactDragEvent<HTMLDivElement>) {
+    if (!hasDraggedImage(event)) return;
+    event.preventDefault();
+    if (attachmentBlocked) return;
+    setAttachmentDragActive(true);
+  }
+
+  function handleAttachmentDragOver(event: ReactDragEvent<HTMLDivElement>) {
+    if (!attachmentDragActive && !hasDraggedImage(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = attachmentBlocked ? "none" : "copy";
+  }
+
+  function handleAttachmentDragLeave(event: ReactDragEvent<HTMLDivElement>) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+    setAttachmentDragActive(false);
+  }
+
+  function handleAttachmentDrop(event: ReactDragEvent<HTMLDivElement>) {
+    setAttachmentDragActive(false);
+    const files = imageFiles(event.dataTransfer.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    if (attachmentBlocked) return;
+    void addImageAttachments(files);
+  }
+
+  function handleAttachmentPaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+    if (attachmentBlocked) return;
+    const files = imageFiles(event.clipboardData.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void addImageAttachments(files);
   }
 
   async function stopRun(run: AiChatRun | null) {
@@ -977,7 +1043,18 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             </div>
           )}
 
-          <div className="ai-chat-composer">
+          <div
+            className={`ai-chat-composer${attachmentDragActive ? " is-attachment-drag-active" : ""}`}
+            onDragEnter={handleAttachmentDragEnter}
+            onDragOver={handleAttachmentDragOver}
+            onDragLeave={handleAttachmentDragLeave}
+            onDrop={handleAttachmentDrop}
+          >
+            {attachmentDragActive && (
+              <div className="ai-chat-attachment-drop-hint" aria-hidden="true">
+                松开添加图片
+              </div>
+            )}
             <div className="ai-chat-input-wrap">
               {attachments.length > 0 && (
                 <div className="ai-chat-composer-attachments">
@@ -1019,6 +1096,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   setSkillMention(readSkillMention(target.value, target.selectionStart ?? target.value.length));
                 }}
                 onKeyDown={handleComposerKeyDown}
+                onPaste={handleAttachmentPaste}
               />
               {skillMention && visibleSkills.length > 0 && (
                 <div className="ai-chat-skill-menu" role="listbox" aria-label="可用 Skill">
@@ -1053,7 +1131,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 type="button"
                 aria-label="添加图片附件"
                 title="添加图片"
-                disabled={composerBlocked || snapshot?.thread.status === "running"}
+                disabled={attachmentBlocked}
                 onClick={() => attachmentInputRef.current?.click()}
               >
                 <LinearIcon name="attachment" />

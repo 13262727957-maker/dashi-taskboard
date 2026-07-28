@@ -7058,6 +7058,30 @@ kbd {
     0 0 20px rgba(0, 0, 0, .05);
 }
 
+.ai-chat-composer.is-attachment-drag-active {
+  background: color-mix(in srgb, var(--surface-raised) 92%, var(--accent-soft));
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--accent) 58%, transparent),
+    0 3px 7.5px rgba(0, 0, 0, .04),
+    0 0 20px rgba(0, 0, 0, .05);
+}
+
+.ai-chat-attachment-drop-hint {
+  position: absolute;
+  z-index: 80;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed color-mix(in srgb, var(--accent) 52%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-raised) 86%, var(--accent-soft));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 550;
+  pointer-events: none;
+}
+
 .ai-chat-input-wrap {
   position: relative;
   display: flex;
