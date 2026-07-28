@@ -2224,7 +2224,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   </div>
                 )}
                 {menu === "model-list" && (
-                  <div className="ai-chat-option-menu ai-chat-config-menu ai-chat-config-submenu" role="menu" aria-label="选择模型">
+                  <div className="ai-chat-option-menu ai-chat-config-menu ai-chat-config-submenu ai-chat-model-list" role="menu" aria-label="选择模型">
                     <header>
                       <button type="button" aria-label="返回模型与推理强度" onClick={() => setMenu("model")}>
                         <LinearIcon name="chevronLeft" />
@@ -2241,7 +2241,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                       >
                         <span>
                           <strong>{modelDisplayName(model.displayName)}</strong>
-                          {model.description && <small>{model.description}</small>}
                         </span>
                         {model.slug === draftModel && <LinearIcon name="check" />}
                       </button>

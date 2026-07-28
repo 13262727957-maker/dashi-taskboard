@@ -7737,6 +7737,10 @@ kbd {
   grid-template-columns: minmax(0, 1fr) 16px;
 }
 
+.ai-chat-model-list > button {
+  min-height: 32px;
+}
+
 .ai-chat-config-submenu > button > span {
   display: flex;
   flex-direction: column;
