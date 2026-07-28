@@ -63,7 +63,7 @@ type PendingDangerInput = {
   message: string;
   skillIds: string[];
   attachments: AiChatAttachmentInput[];
-  clearDraftOnSuccess: boolean;
+  clearSubmittedDraft: boolean;
 };
 type ComposerAttachment = AiChatAttachmentInput & {
   id: string;
@@ -1145,7 +1145,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     || settingsSaving
     || deletingThreadId === selectedThreadId
     || Boolean(selectedThreadId && !snapshot);
-  const attachmentBlocked = composerBlocked || snapshot?.thread.status === "running";
+  const attachmentBlocked = composerBlocked;
   const primaryAction = chatPrimaryAction(
     snapshot?.thread.status ?? "idle",
     draft,
@@ -1457,7 +1457,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     message: string,
     dangerConfirmed: boolean,
     boundSkillIds?: string[],
-    clearDraftOnSuccess = true,
+    clearSubmittedDraft = true,
     boundAttachments?: AiChatAttachmentInput[],
   ) {
     if (composerBlocked) return;
@@ -1479,20 +1479,23 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
         message: trimmed,
         skillIds: messageSkillIds,
         attachments: messageAttachments,
-        clearDraftOnSuccess,
+        clearSubmittedDraft,
       });
       return;
     }
     setPendingDangerInput(null);
     setError(null);
     try {
-      const run = await startAiChatTurn(
-        thread.id,
-        buildTurnInput(trimmed, messageSkillIds, dangerConfirmed, messageAttachments),
+      const turnInput = buildTurnInput(
+        trimmed,
+        messageSkillIds,
+        dangerConfirmed,
+        messageAttachments,
       );
-      if (clearDraftOnSuccess) {
+      if (clearSubmittedDraft) {
         resetComposer();
       }
+      const run = await startAiChatTurn(thread.id, turnInput);
       observedRunStatusesRef.current.set(run.id, run.status);
       setSnapshot((current) => current?.thread.id === thread.id ? {
           ...current,
@@ -1666,9 +1669,9 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       return;
     }
     if (event.key === "Enter") {
+      if (primaryAction === "stop") return;
       event.preventDefault();
-      if (primaryAction === "stop") void stopRun(currentRun);
-      else if (primaryAction === "send") void startMessage(draft, false);
+      if (primaryAction === "send") void startMessage(draft, false);
     }
   }
 
@@ -1881,10 +1884,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               <div
                 ref={editorRef}
                 className="ai-chat-composer-editor"
-                contentEditable={
-                  !composerBlocked
-                  && snapshot?.thread.status !== "running"
-                }
+                contentEditable={!composerBlocked}
                 data-placeholder="询问 Codex"
                 role="textbox"
                 aria-label="发送给 Codex 的消息"
@@ -2162,7 +2162,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                         pendingDangerInput.message,
                         true,
                         pendingDangerInput.skillIds,
-                        pendingDangerInput.clearDraftOnSuccess,
+                        pendingDangerInput.clearSubmittedDraft,
                         pendingDangerInput.attachments,
                       );
                     }}
