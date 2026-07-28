@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -12,6 +11,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -32,17 +32,15 @@ import {
   chatPrimaryAction,
   createAiSnapshotRefreshQueue,
   filterVisibleAiEvents,
-  insertSkillMention,
   needsDangerConfirmation,
   normalizeChatSelection,
   patchAiChatSnapshot,
-  readSkillMention,
   settingsForNewAiThread,
 } from "../aiChatState";
 import type {
   AiChatCatalog,
   AiChatEvent,
-  AiChatImageAttachmentInput,
+  AiChatAttachmentInput,
   AiChatModel,
   AiChatRun,
   AiChatSandbox,
@@ -62,12 +60,20 @@ type MenuName = "model" | "model-list" | "effort-list" | "sandbox" | null;
 type PendingDangerInput = {
   message: string;
   skillIds: string[];
-  attachments: AiChatImageAttachmentInput[];
+  attachments: AiChatAttachmentInput[];
   clearDraftOnSuccess: boolean;
 };
-type ComposerAttachment = AiChatImageAttachmentInput & {
+type ComposerAttachment = AiChatAttachmentInput & {
   id: string;
-  previewUrl: string;
+  previewUrl?: string;
+};
+type ComposerSkillToken = {
+  key: string;
+  id: string;
+  element: HTMLSpanElement;
+};
+type ComposerSkillQuery = {
+  query: string;
 };
 type PanelResizeEdge = "top" | "left" | "top-left";
 type PanelGeometry = {
@@ -89,13 +95,8 @@ const PANEL_EDGE_GAP = 8;
 const PANEL_MIN_WIDTH = 420;
 const PANEL_MAX_WIDTH = 960;
 const PANEL_MIN_HEIGHT = 360;
-const IMAGE_ATTACHMENT_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
-]);
-
+const SKILL_MARKER = "\uFFFC";
+const SKILL_LINK_PREFIX = "#ai-chat-skill-";
 const SANDBOX_LABELS: Record<AiChatSandbox, string> = {
   "read-only": "请求批准",
   "workspace-write": "替我审批",
@@ -125,6 +126,141 @@ const EFFORT_LABELS: Record<string, string> = {
 
 function modelDisplayName(value: string): string {
   return value.replace(/^GPT-/i, "").replaceAll("-", " ");
+}
+
+const SKILL_ACRONYMS = new Map([
+  ["ai", "AI"],
+  ["api", "API"],
+  ["cli", "CLI"],
+  ["mcp", "MCP"],
+  ["sdk", "SDK"],
+  ["ui", "UI"],
+]);
+
+function skillDisplayName(skill: Pick<AiChatSkill, "id" | "label">): string {
+  const rawLabel = skill.label === skill.id && skill.id.includes(":")
+    ? skill.id.slice(skill.id.lastIndexOf(":") + 1)
+    : skill.label;
+  return rawLabel
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => (
+      SKILL_ACRONYMS.get(word.toLocaleLowerCase())
+      ?? (/^[A-Z][A-Za-z0-9]*$/.test(word)
+        ? word
+        : `${word.charAt(0).toLocaleUpperCase()}${word.slice(1)}`)
+    ))
+    .join(" ");
+}
+
+function eventSkillIds(event: AiChatEvent): string[] {
+  const values = event.data?.skillIds;
+  if (!Array.isArray(values)) return [];
+  return values.filter((value): value is string => typeof value === "string");
+}
+
+function eventHasAttachments(event: AiChatEvent): boolean {
+  return Array.isArray(event.data?.attachments) && event.data.attachments.length > 0;
+}
+
+function serializeComposer(root: HTMLElement): { message: string; skillIds: string[] } {
+  let message = "";
+  const skillIds: string[] = [];
+  const appendText = (value: string) => {
+    message += value.replaceAll("\u200B", "");
+  };
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      appendText(node.textContent ?? "");
+      return;
+    }
+    if (!(node instanceof HTMLElement)) return;
+    const skillId = node.dataset.skillId;
+    if (skillId) {
+      message += SKILL_MARKER;
+      skillIds.push(skillId);
+      return;
+    }
+    if (node.tagName === "BR") {
+      message += "\n";
+      return;
+    }
+    const isBlock = node.tagName === "DIV" || node.tagName === "P";
+    if (isBlock && message && !message.endsWith("\n")) message += "\n";
+    for (const child of node.childNodes) visit(child);
+    if (isBlock && node.nextSibling && !message.endsWith("\n")) message += "\n";
+  };
+  for (const child of root.childNodes) visit(child);
+  return { message, skillIds };
+}
+
+function composerSkillQuery(root: HTMLElement): { query: string; range: Range } | null {
+  const selection = root.ownerDocument.getSelection();
+  if (!selection || !selection.isCollapsed || !selection.focusNode) return null;
+  const focusNode = selection.focusNode;
+  if (!root.contains(focusNode) || focusNode.nodeType !== Node.TEXT_NODE) return null;
+  const rawPrefix = (focusNode.textContent ?? "").slice(0, selection.focusOffset);
+  const prefix = rawPrefix.replaceAll("\u200B", "");
+  const match = /(?:^|\s)@([^\s@]*)$/.exec(prefix);
+  if (!match) return null;
+  const at = rawPrefix.lastIndexOf("@");
+  const range = root.ownerDocument.createRange();
+  range.setStart(focusNode, at);
+  range.setEnd(focusNode, selection.focusOffset);
+  return { query: match[1].toLocaleLowerCase(), range };
+}
+
+function tokenBeforeComposerCaret(root: HTMLElement): HTMLElement | null {
+  const selection = root.ownerDocument.getSelection();
+  if (!selection || !selection.isCollapsed || !selection.focusNode) return null;
+  const focusNode = selection.focusNode;
+  let candidate: ChildNode | null = null;
+  if (focusNode.nodeType === Node.TEXT_NODE) {
+    const prefix = (focusNode.textContent ?? "").slice(0, selection.focusOffset);
+    if (prefix.replaceAll("\u200B", "").length > 0) return null;
+    candidate = focusNode.previousSibling;
+  } else if (focusNode instanceof HTMLElement) {
+    candidate = focusNode.childNodes[selection.focusOffset - 1] ?? null;
+  }
+  while (
+    candidate?.nodeType === Node.TEXT_NODE
+    && !(candidate.textContent ?? "").replaceAll("\u200B", "")
+  ) {
+    candidate = candidate.previousSibling;
+  }
+  return candidate instanceof HTMLElement && candidate.dataset.skillId ? candidate : null;
+}
+
+function skillMarkdown(
+  content: string,
+  skillIds: string[],
+  skillsById: Map<string, AiChatSkill>,
+): string {
+  let index = 0;
+  return content.replaceAll(SKILL_MARKER, () => {
+    const skillId = skillIds[index] ?? "";
+    index += 1;
+    const skill = skillsById.get(skillId);
+    const label = skill
+      ? skillDisplayName(skill)
+      : skillDisplayName({ id: skillId, label: skillId });
+    return `[${label.replaceAll("[", "\\[").replaceAll("]", "\\]")}](${SKILL_LINK_PREFIX}${encodeURIComponent(skillId)})`;
+  });
+}
+
+function SkillReference({
+  skill,
+  skillId,
+}: {
+  skill?: AiChatSkill;
+  skillId: string;
+}) {
+  return (
+    <span className="ai-chat-skill-reference">
+      <LinearIcon name="project" />
+      <span>{skill ? skillDisplayName(skill) : skillDisplayName({ id: skillId, label: skillId })}</span>
+    </span>
+  );
 }
 
 const ACTIVITY_LABELS: Record<string, string> = {
@@ -178,13 +314,25 @@ function activityDetail(event: AiChatEvent): string | null {
   return null;
 }
 
-function MarkdownMessage({ children }: { children: string }) {
+function MarkdownMessage({
+  children,
+  skillsById,
+}: {
+  children: string;
+  skillsById?: Map<string, AiChatSkill>;
+}) {
   return (
     <div className="ai-chat-markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+          a: ({ node: _node, href, ...props }) => {
+            if (href?.startsWith(SKILL_LINK_PREFIX)) {
+              const skillId = decodeURIComponent(href.slice(SKILL_LINK_PREFIX.length));
+              return <SkillReference skill={skillsById?.get(skillId)} skillId={skillId} />;
+            }
+            return <a {...props} href={href} target="_blank" rel="noreferrer" />;
+          },
         }}
       >
         {children}
@@ -268,7 +416,14 @@ function EventAttachments({ event }: { event: AiChatEvent }) {
   );
 }
 
-function MessageTimeline({ events }: { events: AiChatEvent[] }) {
+function MessageTimeline({
+  events,
+  skills,
+}: {
+  events: AiChatEvent[];
+  skills: AiChatSkill[];
+}) {
+  const skillsById = new Map(skills.map((skill) => [skill.id, skill]));
   const timeline = filterVisibleAiEvents(events).reduce<Array<AiChatEvent | AiChatEvent[]>>(
     (items, event) => {
       const isMessage = event.role === "user"
@@ -303,7 +458,9 @@ function MessageTimeline({ events }: { events: AiChatEvent[] }) {
         if (event.role === "user" || event.type === "user" || event.type === "user_message") {
           return (
             <article className="ai-chat-user-message" key={event.id}>
-              <MarkdownMessage>{event.content}</MarkdownMessage>
+              <MarkdownMessage skillsById={skillsById}>
+                {skillMarkdown(event.content, eventSkillIds(event), skillsById)}
+              </MarkdownMessage>
               <EventAttachments event={event} />
             </article>
           );
@@ -352,7 +509,8 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [skillIds, setSkillIds] = useState<string[]>([]);
-  const [skillMention, setSkillMention] = useState<ReturnType<typeof readSkillMention>>(null);
+  const [skillMention, setSkillMention] = useState<ComposerSkillQuery | null>(null);
+  const [composerSkillTokens, setComposerSkillTokens] = useState<ComposerSkillToken[]>([]);
   const [pendingDangerInput, setPendingDangerInput] = useState<PendingDangerInput | null>(null);
   const [unread, setUnread] = useState(false);
   const [draftModel, setDraftModel] = useState("");
@@ -363,7 +521,8 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [panelGeometry, setPanelGeometry] = useState<PanelGeometry | null>(null);
   const [panelResizeEdge, setPanelResizeEdge] = useState<PanelResizeEdge | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const skillMentionRangeRef = useRef<Range | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -692,13 +851,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     if (defaultSandbox) setDraftSandbox(defaultSandbox);
   }, [activeCatalog, restoreDraftSettings, snapshot?.thread.id]);
 
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(240, Math.max(42, textarea.scrollHeight))}px`;
-  }, [draft]);
-
   useEffect(() => {
     const container = messagesRef.current;
     if (!container || !panelOpen) return;
@@ -736,7 +888,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     )),
     [activeCatalog?.skills, skillMention?.query],
   );
-
   const selectedModel = activeCatalog?.models.find((model) => model.slug === draftModel) ?? null;
   const availableSandboxes = (activeCatalog?.sandboxes ?? []).filter(isAiChatSandbox);
   const currentRun = snapshot?.thread.currentRun
@@ -756,12 +907,37 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const anyRunning = threads.some((thread) => thread.status === "running");
   const anyFailed = threads.some((thread) => thread.status === "failed");
   const launcherState = anyRunning ? "running" : anyFailed ? "failed" : unread ? "unread" : "idle";
+  const lastUserEvent = snapshot?.thread.status === "failed"
+    ? [...snapshot.events].reverse().find((event) => (
+        event.role === "user"
+        || event.type === "user"
+        || event.type === "user_message"
+      )) ?? null
+    : null;
+  const retryableUserEvent = lastUserEvent && !eventHasAttachments(lastUserEvent)
+    ? lastUserEvent
+    : null;
 
   useEffect(() => {
     if (attachmentBlocked) setAttachmentDragActive(false);
   }, [attachmentBlocked]);
 
-  async function createThreadForCurrentOrigin(): Promise<AiChatThread | null> {
+  function resetComposer() {
+    editorRef.current?.replaceChildren();
+    if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+    setDraft("");
+    setAttachments([]);
+    setSkillIds([]);
+    setComposerSkillTokens([]);
+    setSkillMention(null);
+    setPendingDangerInput(null);
+    setAttachmentDragActive(false);
+    skillMentionRangeRef.current = null;
+  }
+
+  async function createThreadForCurrentOrigin(
+    resetComposerOnSuccess = false,
+  ): Promise<AiChatThread | null> {
     const input = buildThreadCreateInput(projectId ?? "", issueId);
     if (!input) {
       setError("请先进入一个已映射的项目，再新建对话");
@@ -787,6 +963,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       setSnapshot({ thread, events: [], runs: [] });
       setHistoryOpen(false);
       setError(null);
+      if (resetComposerOnSuccess) resetComposer();
       return thread;
     } catch (nextError) {
       setError(messageFor(nextError));
@@ -806,6 +983,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       if (selectedThreadRef.current === thread.id) {
         setSnapshot(null);
         selectThread(remainingThreads[0]?.id ?? null);
+        resetComposer();
       }
       setError(null);
     } catch (nextError) {
@@ -861,32 +1039,79 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     await saveThreadSettings({ sandbox });
   }
 
-  function selectSkill(skill: AiChatSkill) {
-    if (!skillMention) return;
-    const next = insertSkillMention(
-      draft,
-      skillMention.start,
-      skillMention.end,
-      skill,
-    );
-    setDraft(next.value);
-    setSkillIds((current) => [...new Set([...current, next.skillId])]);
-    setSkillMention(null);
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(next.caret, next.caret);
-    });
+  function syncComposerState() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const next = serializeComposer(editor);
+    setDraft(next.message);
+    setSkillIds(next.skillIds);
+    setComposerSkillTokens((current) => current.filter((token) => editor.contains(token.element)));
+    if (!next.message && editor.childNodes.length > 0) editor.replaceChildren();
   }
 
-  function realSkillIdsForMessage(message: string): string[] {
-    const visible = (activeCatalog?.skills ?? []).filter((skill) => (
-      skill.id !== "manage-taskboard"
-      && !skill.id.endsWith(":manage-taskboard")
-      && message.includes(`@${skill.label}`)
-    )).map((skill) => skill.id);
-    return [...new Set([...skillIds, ...visible])].filter((id) => (
-      (activeCatalog?.skills ?? []).some((skill) => skill.id === id && message.includes(`@${skill.label}`))
-    ));
+  function updateComposerSkillQuery() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const next = composerSkillQuery(editor);
+    skillMentionRangeRef.current = next?.range ?? null;
+    setSkillMention(next ? { query: next.query } : null);
+  }
+
+  function removeComposerSkillToken(element: HTMLElement) {
+    const editor = editorRef.current;
+    const parent = element.parentNode;
+    if (!editor || !parent) return;
+    const nextSibling = element.nextSibling;
+    const childIndex = Array.prototype.indexOf.call(parent.childNodes, element) as number;
+    if (nextSibling?.nodeType === Node.TEXT_NODE && nextSibling.textContent?.startsWith("\u200B")) {
+      nextSibling.textContent = nextSibling.textContent.slice(1);
+    }
+    element.remove();
+    setComposerSkillTokens((current) => current.filter((token) => token.element !== element));
+    const selection = editor.ownerDocument.getSelection();
+    const range = editor.ownerDocument.createRange();
+    if (nextSibling?.isConnected && nextSibling.nodeType === Node.TEXT_NODE) {
+      range.setStart(nextSibling, 0);
+    } else {
+      range.setStart(parent, Math.min(childIndex, parent.childNodes.length));
+    }
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    syncComposerState();
+    editor.focus();
+  }
+
+  function selectSkill(skill: AiChatSkill) {
+    const editor = editorRef.current;
+    const range = skillMentionRangeRef.current;
+    if (!skillMention || !editor || !range) return;
+    range.deleteContents();
+    const tokenElement = editor.ownerDocument.createElement("span");
+    tokenElement.className = "ai-chat-composer-skill-token";
+    tokenElement.dataset.skillId = skill.id;
+    tokenElement.contentEditable = "false";
+    tokenElement.title = skillDisplayName(skill);
+    range.insertNode(tokenElement);
+    const spacer = editor.ownerDocument.createTextNode("\u200B");
+    tokenElement.after(spacer);
+    range.setStart(spacer, 1);
+    range.collapse(true);
+    const selection = editor.ownerDocument.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    setComposerSkillTokens((current) => [
+      ...current,
+      { key: crypto.randomUUID(), id: skill.id, element: tokenElement },
+    ]);
+    setSkillMention(null);
+    skillMentionRangeRef.current = null;
+    syncComposerState();
+    editor.focus();
+  }
+
+  function realSkillIdsForMessage(): string[] {
+    return skillIds;
   }
 
   async function startMessage(
@@ -894,7 +1119,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     dangerConfirmed: boolean,
     boundSkillIds?: string[],
     clearDraftOnSuccess = true,
-    boundAttachments?: AiChatImageAttachmentInput[],
+    boundAttachments?: AiChatAttachmentInput[],
   ) {
     if (composerBlocked) return;
     const trimmed = message.trim();
@@ -908,7 +1133,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     if (!thread) thread = await createThreadForCurrentOrigin();
     if (!thread) return;
     const messageSkillIds = boundSkillIds ?? (
-      catalogLoadedProjectId === thread.origin.projectId ? realSkillIdsForMessage(trimmed) : []
+      catalogLoadedProjectId === thread.origin.projectId ? realSkillIdsForMessage() : []
     );
     if (needsDangerConfirmation(thread.sandbox, dangerConfirmed)) {
       setPendingDangerInput({
@@ -927,10 +1152,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
         buildTurnInput(trimmed, messageSkillIds, dangerConfirmed, messageAttachments),
       );
       if (clearDraftOnSuccess) {
-        setDraft("");
-        setAttachments([]);
-        setSkillIds([]);
-        setSkillMention(null);
+        resetComposer();
       }
       observedRunStatusesRef.current.set(run.id, run.status);
       setSnapshot((current) => current?.thread.id === thread.id ? {
@@ -950,13 +1172,13 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     }
   }
 
-  function imageFiles(files: FileList | File[]): File[] {
-    return Array.from(files).filter((file) => IMAGE_ATTACHMENT_TYPES.has(file.type));
+  function attachmentFiles(files: FileList | File[]): File[] {
+    return Array.from(files);
   }
 
-  async function addImageAttachments(files: File[]) {
+  async function addAttachments(files: File[]) {
     if (attachmentBlocked) return;
-    const acceptedFiles = imageFiles(files);
+    const acceptedFiles = attachmentFiles(files);
     if (acceptedFiles.length === 0) return;
     try {
       const nextAttachments = await Promise.all(acceptedFiles.map((file, index) => (
@@ -971,9 +1193,9 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             resolve({
               id: `${file.name}-${file.size}-${file.lastModified}-${Date.now()}-${index}`,
               filename: file.name,
-              contentType: file.type,
+              contentType: file.type || "application/octet-stream",
               dataBase64: reader.result.slice(separator + 1),
-              previewUrl: reader.result,
+              ...(file.type.startsWith("image/") ? { previewUrl: reader.result } : {}),
             });
           };
           reader.onerror = () => reject(new Error(`无法读取附件 ${file.name}`));
@@ -988,26 +1210,26 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   }
 
   async function handleAttachmentSelection(event: ChangeEvent<HTMLInputElement>) {
-    const files = imageFiles(event.target.files ?? []);
+    const files = attachmentFiles(event.target.files ?? []);
     event.target.value = "";
-    await addImageAttachments(files);
+    await addAttachments(files);
   }
 
-  function hasDraggedImage(event: ReactDragEvent<HTMLDivElement>): boolean {
+  function hasDraggedFile(event: ReactDragEvent<HTMLDivElement>): boolean {
     return Array.from(event.dataTransfer.items).some((item) => (
-      item.kind === "file" && IMAGE_ATTACHMENT_TYPES.has(item.type)
-    )) || imageFiles(event.dataTransfer.files).length > 0;
+      item.kind === "file"
+    )) || event.dataTransfer.files.length > 0;
   }
 
   function handleAttachmentDragEnter(event: ReactDragEvent<HTMLDivElement>) {
-    if (!hasDraggedImage(event)) return;
+    if (!hasDraggedFile(event)) return;
     event.preventDefault();
     if (attachmentBlocked) return;
     setAttachmentDragActive(true);
   }
 
   function handleAttachmentDragOver(event: ReactDragEvent<HTMLDivElement>) {
-    if (!attachmentDragActive && !hasDraggedImage(event)) return;
+    if (!attachmentDragActive && !hasDraggedFile(event)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = attachmentBlocked ? "none" : "copy";
   }
@@ -1020,19 +1242,19 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
 
   function handleAttachmentDrop(event: ReactDragEvent<HTMLDivElement>) {
     setAttachmentDragActive(false);
-    const files = imageFiles(event.dataTransfer.files);
+    const files = attachmentFiles(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
     if (attachmentBlocked) return;
-    void addImageAttachments(files);
+    void addAttachments(files);
   }
 
-  function handleAttachmentPaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+  function handleAttachmentPaste(event: ReactClipboardEvent<HTMLDivElement>) {
     if (attachmentBlocked) return;
-    const files = imageFiles(event.clipboardData.files);
+    const files = attachmentFiles(event.clipboardData.files);
     if (files.length === 0) return;
     event.preventDefault();
-    void addImageAttachments(files);
+    void addAttachments(files);
   }
 
   async function stopRun(run: AiChatRun | null) {
@@ -1047,10 +1269,18 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     }
   }
 
-  function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+  function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (composerBlocked) return;
-    if (event.key === "Enter" && skillMention && visibleSkills[0]) {
+    if (event.key === "Backspace") {
+      const token = editorRef.current ? tokenBeforeComposerCaret(editorRef.current) : null;
+      if (token) {
+        event.preventDefault();
+        removeComposerSkillToken(token);
+        return;
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey && skillMention && visibleSkills[0]) {
       event.preventDefault();
       selectSkill(visibleSkills[0]);
       return;
@@ -1113,7 +1343,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               aria-label="新建对话"
               title={projectId ? "新建对话" : "请先进入项目"}
               disabled={!projectId || loading}
-              onClick={() => void createThreadForCurrentOrigin()}
+              onClick={() => void createThreadForCurrentOrigin(true)}
             >
               <LinearIcon name="plus" />
             </button>
@@ -1141,6 +1371,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   <button
                     type="button"
                     onClick={() => {
+                      if (thread.id !== selectedThreadRef.current) resetComposer();
                       selectThread(thread.id);
                       setHistoryOpen(false);
                     }}
@@ -1178,26 +1409,28 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               <div className="ai-chat-empty"><span className="ai-chat-spinner" />正在恢复对话…</div>
             ) : snapshot ? (
               <>
-                <MessageTimeline events={snapshot.events} />
+                <MessageTimeline
+                  events={snapshot.events}
+                  skills={activeCatalog?.skills ?? []}
+                />
                 {snapshot.thread.status === "running" && (
                   <div className="ai-chat-running" role="status">
                     <span className="ai-chat-spinner" />
                     Codex 正在处理
                   </div>
                 )}
-                {snapshot.thread.status === "failed" && (
+                {retryableUserEvent && (
                   <button
                     className="ai-chat-retry"
                     type="button"
                     onClick={() => {
-                      const lastUserEvent = [...snapshot.events].reverse().find((event) => (
-                        event.role === "user"
-                        || event.type === "user"
-                        || event.type === "user_message"
-                      ));
-                      if (lastUserEvent) {
-                        void startMessage(lastUserEvent.content, false, undefined, false, []);
-                      }
+                      void startMessage(
+                        retryableUserEvent.content,
+                        false,
+                        eventSkillIds(retryableUserEvent),
+                        false,
+                        [],
+                      );
                     }}
                   >
                     <LinearIcon name="recurrence" />
@@ -1232,15 +1465,25 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
           >
             {attachmentDragActive && (
               <div className="ai-chat-attachment-drop-hint" aria-hidden="true">
-                松开添加图片
+                松开添加文件
               </div>
             )}
             <div className="ai-chat-input-wrap">
               {attachments.length > 0 && (
                 <div className="ai-chat-composer-attachments">
                   {attachments.map((attachment) => (
-                    <div className="ai-chat-composer-attachment" key={attachment.id}>
-                      <img src={attachment.previewUrl} alt="" />
+                    <div
+                      className={`ai-chat-composer-attachment${attachment.previewUrl ? "" : " is-file"}`}
+                      key={attachment.id}
+                    >
+                      {attachment.previewUrl
+                        ? <img src={attachment.previewUrl} alt="" />
+                        : (
+                          <span className="ai-chat-composer-file">
+                            <LinearIcon name="file" />
+                            <span>{attachment.filename}</span>
+                          </span>
+                        )}
                       <button
                         type="button"
                         aria-label={`移除附件 ${attachment.filename}`}
@@ -1255,29 +1498,49 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   ))}
                 </div>
               )}
-              <textarea
-                ref={textareaRef}
-                value={draft}
-                rows={1}
-                placeholder="询问 Codex"
-                aria-label="发送给 Codex 的消息"
-                disabled={
-                  composerBlocked
-                  || snapshot?.thread.status === "running"
+              <div
+                ref={editorRef}
+                className="ai-chat-composer-editor"
+                contentEditable={
+                  !composerBlocked
+                  && snapshot?.thread.status !== "running"
                 }
-                onChange={(event) => {
-                  const next = event.target.value;
-                  const caret = event.target.selectionStart ?? next.length;
-                  setDraft(next);
-                  setSkillMention(readSkillMention(next, caret));
+                data-placeholder="询问 Codex"
+                role="textbox"
+                aria-label="发送给 Codex 的消息"
+                aria-multiline="true"
+                suppressContentEditableWarning
+                onInput={() => {
+                  syncComposerState();
+                  updateComposerSkillQuery();
                 }}
                 onClick={(event) => {
-                  const target = event.currentTarget;
-                  setSkillMention(readSkillMention(target.value, target.selectionStart ?? target.value.length));
+                  const token = (event.target as HTMLElement).closest<HTMLElement>("[data-skill-id]");
+                  if (token && event.currentTarget.contains(token)) {
+                    removeComposerSkillToken(token);
+                    return;
+                  }
+                  updateComposerSkillQuery();
                 }}
                 onKeyDown={handleComposerKeyDown}
+                onKeyUp={updateComposerSkillQuery}
                 onPaste={handleAttachmentPaste}
               />
+              {composerSkillTokens.map((token) => {
+                const skill = activeCatalog?.skills.find((candidate) => candidate.id === token.id);
+                return createPortal(
+                  <button
+                    type="button"
+                    aria-label={`移除 Skill ${skill ? skillDisplayName(skill) : token.id}`}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => removeComposerSkillToken(token.element)}
+                  >
+                    <SkillReference skill={skill} skillId={token.id} />
+                  </button>,
+                  token.element,
+                  token.key,
+                );
+              })}
               {skillMention && visibleSkills.length > 0 && (
                 <div className="ai-chat-skill-menu" role="listbox" aria-label="可用 Skill">
                   {visibleSkills.map((skill, index) => (
@@ -1287,16 +1550,14 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                       role="option"
                       aria-selected={index === 0}
                       key={skill.id}
-                      title={skill.path}
                       onPointerDown={(event) => event.preventDefault()}
                       onClick={() => selectSkill(skill)}
                     >
                       <LinearIcon name="project" />
                       <span>
-                        <strong>{skill.label}</strong>
+                        <strong>{skillDisplayName(skill)}</strong>
                         {skill.description && <small>{skill.description}</small>}
                       </span>
-                      <em>{skill.scope}</em>
                     </button>
                   ))}
                 </div>
@@ -1308,7 +1569,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                 ref={attachmentInputRef}
                 className="ai-chat-attachment-input"
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
                 multiple
                 tabIndex={-1}
                 onChange={(event) => void handleAttachmentSelection(event)}
@@ -1316,8 +1576,8 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               <button
                 className="ai-chat-attachment-button"
                 type="button"
-                aria-label="添加图片附件"
-                title="添加图片"
+                aria-label="添加附件"
+                title="添加附件"
                 disabled={attachmentBlocked}
                 onClick={() => attachmentInputRef.current?.click()}
               >

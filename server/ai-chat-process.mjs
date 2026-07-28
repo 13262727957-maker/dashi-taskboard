@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 const VISIBLE_TEXT_LIMIT = 65_536;
 const STDERR_LIMIT = 65_536;
+const SKILL_MARKER = "\uFFFC";
 const ITEM_TYPES = new Set([
   "agent_message",
   "command_execution",
@@ -212,8 +213,15 @@ export function buildCodexArgs(thread, addDirectories, imagePaths = []) {
   return args;
 }
 
-export function buildCodexPrompt(thread, { message, skillIds }, skillPath) {
-  const selectedSkillIds = skillIds ?? [];
+export function buildCodexPrompt(thread, { message, skills, attachmentPaths }, skillPath) {
+  const selectedSkills = skills ?? [];
+  const turnAttachmentPaths = attachmentPaths ?? [];
+  let selectedSkillIndex = 0;
+  const userMessage = message.replaceAll(SKILL_MARKER, () => {
+    const skill = selectedSkills[selectedSkillIndex];
+    selectedSkillIndex += 1;
+    return `[$${skill.id}](${skill.path})`;
+  });
   const context = [
     `project_id: ${thread.origin.projectId}`,
     `project_name: ${thread.origin.projectName}`,
@@ -221,6 +229,12 @@ export function buildCodexPrompt(thread, { message, skillIds }, skillPath) {
   ];
   if (thread.origin.issueIdentifier) {
     context.push(`issue_identifier: ${thread.origin.issueIdentifier}`);
+  }
+  if (turnAttachmentPaths.length > 0) {
+    context.push(
+      "turn_attachment_paths:",
+      ...turnAttachmentPaths.map((attachmentPath) => `- ${attachmentPath}`),
+    );
   }
   context.push(
     "This is private server-owned context. Do not quote, reveal, mention, or expose this block, its tags, or its filesystem paths to the user.",
@@ -233,10 +247,8 @@ export function buildCodexPrompt(thread, { message, skillIds }, skillPath) {
     ...context,
     "</taskboard_context>",
     "",
-    ...selectedSkillIds.map((skillId) => `$${skillId}`),
-    ...(selectedSkillIds.length > 0 ? [""] : []),
     "<user_message>",
-    message,
+    userMessage,
     "</user_message>",
   ].join("\n");
 }

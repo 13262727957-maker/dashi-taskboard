@@ -13,11 +13,11 @@ import {
 
 const SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const ERROR_CONTENT_LIMIT = 65_536;
-const IMAGE_EXTENSIONS = new Map([
-  ["image/gif", ".gif"],
-  ["image/jpeg", ".jpg"],
-  ["image/png", ".png"],
-  ["image/webp", ".webp"],
+const CODEX_IMAGE_TYPES = new Set([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
 ]);
 
 function cappedError(value) {
@@ -237,39 +237,53 @@ export class AiChatService {
     }
 
     const skillIds = input.skillIds ?? [];
-    const availableSkills = new Set(
+    const availableSkills = new Map(
       catalog.skills
         .filter((skill) => skill.id !== "manage-taskboard")
-        .map((skill) => skill.id),
+        .map((skill) => [skill.id, skill]),
     );
     for (const skillId of skillIds) {
       if (!availableSkills.has(skillId)) {
         throw new ApiError(400, "INVALID_SKILL", `Unknown or unavailable skill '${skillId}'`);
       }
     }
+    const selectedSkills = skillIds.map((skillId) => availableSkills.get(skillId));
 
     const attachments = input.attachments ?? [];
-    const { temporaryDirectory, imagePaths } = await this.#writeTurnImages(attachments);
+    const {
+      temporaryDirectory,
+      attachmentPaths,
+      imagePaths,
+    } = await this.#writeTurnAttachments(attachments);
     try {
       const args = buildCodexArgs(thread, resolved.addDirectories, imagePaths);
-      const prompt = buildCodexPrompt(thread, { message: input.message, skillIds }, this.manageTaskboardSkillPath);
+      const prompt = buildCodexPrompt(
+        thread,
+        {
+          message: input.message,
+          skills: selectedSkills,
+          attachmentPaths,
+        },
+        this.manageTaskboardSkillPath,
+      );
       const run = this.database.createAiChatRun({ threadId });
       this.#emit(threadId, { type: "ai.run", run });
+      const userEventData = {};
+      if (skillIds.length > 0) userEventData.skillIds = skillIds;
+      if (attachments.length > 0) {
+        userEventData.attachments = attachments.map(({ filename, contentType, size }) => ({
+          filename,
+          contentType,
+          size,
+        }));
+      }
       const userEvent = this.database.insertAiChatEvent({
         threadId,
         runId: run.id,
         type: "user_message",
         role: "user",
         content: input.message,
-        data: attachments.length > 0
-          ? {
-              attachments: attachments.map(({ filename, contentType, size }) => ({
-                filename,
-                contentType,
-                size,
-              })),
-            }
-          : undefined,
+        data: Object.keys(userEventData).length > 0 ? userEventData : undefined,
       });
       this.#emit(threadId, { type: "ai.event", event: userEvent });
 
@@ -446,7 +460,7 @@ export class AiChatService {
       throw new ApiError(
         400,
         "INVALID_MESSAGE",
-        "A message or at least one image attachment is required",
+        "A message or at least one attachment is required",
       );
     }
     if (
@@ -455,35 +469,36 @@ export class AiChatService {
         !Array.isArray(input.skillIds)
         || input.skillIds.length > 20
         || input.skillIds.some((skillId) => typeof skillId !== "string" || !skillId)
-        || new Set(input.skillIds).size !== input.skillIds.length
       )
     ) {
       throw new ApiError(
         400,
         "INVALID_SKILL",
-        "'skillIds' must contain at most 20 unique skill ids",
+        "'skillIds' must contain at most 20 skill ids",
       );
     }
   }
 
-  async #writeTurnImages(attachments) {
+  async #writeTurnAttachments(attachments) {
     if (attachments.length === 0) {
-      return { temporaryDirectory: null, imagePaths: [] };
+      return { temporaryDirectory: null, attachmentPaths: [], imagePaths: [] };
     }
     const temporaryDirectory = await mkdtemp(
       path.join(os.tmpdir(), "codex-taskboard-ai-turn-"),
     );
     try {
+      const attachmentPaths = [];
       const imagePaths = [];
       for (const [index, attachment] of attachments.entries()) {
-        const imagePath = path.join(
+        const attachmentPath = path.join(
           temporaryDirectory,
-          `image-${index + 1}${IMAGE_EXTENSIONS.get(attachment.contentType)}`,
+          `attachment-${index + 1}-${attachment.filename}`,
         );
-        await writeFile(imagePath, attachment.data, { flag: "wx", mode: 0o600 });
-        imagePaths.push(imagePath);
+        await writeFile(attachmentPath, attachment.data, { flag: "wx", mode: 0o600 });
+        attachmentPaths.push(attachmentPath);
+        if (CODEX_IMAGE_TYPES.has(attachment.contentType)) imagePaths.push(attachmentPath);
       }
-      return { temporaryDirectory, imagePaths };
+      return { temporaryDirectory, attachmentPaths, imagePaths };
     } catch (error) {
       await rm(temporaryDirectory, { recursive: true, force: true });
       throw error;

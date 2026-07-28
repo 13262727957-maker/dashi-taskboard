@@ -24,12 +24,7 @@ const JSON_BODY_LIMIT = 1024 * 1024;
 const ATTACHMENT_BODY_LIMIT = 25 * 1024 * 1024;
 const AI_CHAT_TURN_BODY_LIMIT = 25 * 1024 * 1024;
 const AI_CHAT_ATTACHMENT_LIMIT = 10;
-const AI_CHAT_IMAGE_TYPES = new Set([
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
+const AI_CHAT_SKILL_MARKER = "\uFFFC";
 const INLINE_ATTACHMENT_TYPES = new Set([
   "application/pdf",
   "image/avif",
@@ -775,9 +770,6 @@ function parseAiSkillIds(value) {
   const skillIds = value.map((skillId, index) => (
     stringField(skillId, `skillIds[${index}]`, { required: true, maxLength: 256 })
   ));
-  if (new Set(skillIds).size !== skillIds.length) {
-    throw new ApiError(400, "INVALID_FIELD", "'skillIds' must not contain duplicates");
-  }
   return skillIds;
 }
 
@@ -787,7 +779,7 @@ function parseAiAttachments(value) {
     throw new ApiError(
       400,
       "INVALID_ATTACHMENT",
-      `'attachments' must be an array with at most ${AI_CHAT_ATTACHMENT_LIMIT} images`,
+      `'attachments' must be an array with at most ${AI_CHAT_ATTACHMENT_LIMIT} files`,
     );
   }
   return value.map((attachment, index) => {
@@ -807,15 +799,8 @@ function parseAiAttachments(value) {
     const contentType = stringField(
       attachment.contentType,
       `attachments[${index}].contentType`,
-      { required: true, maxLength: 64 },
+      { required: true, maxLength: 256 },
     ).toLowerCase();
-    if (!AI_CHAT_IMAGE_TYPES.has(contentType)) {
-      throw new ApiError(
-        415,
-        "UNSUPPORTED_MEDIA_TYPE",
-        `'attachments[${index}].contentType' must be image/png, image/jpeg, image/webp, or image/gif`,
-      );
-    }
     const dataBase64 = stringField(
       attachment.dataBase64,
       `attachments[${index}].dataBase64`,
@@ -858,17 +843,21 @@ function parseAiTurn(body) {
     throw new ApiError(400, "INVALID_FIELD", "'dangerFullAccessConfirmed' must be a boolean");
   }
   const message = stringField(body.message ?? "", "message", { maxLength: 100_000 });
+  const skillIds = parseAiSkillIds(body.skillIds) ?? [];
+  if (message.split(AI_CHAT_SKILL_MARKER).length - 1 !== skillIds.length) {
+    throw new ApiError(400, "INVALID_FIELD", "'skillIds' must match the Skill markers in 'message'");
+  }
   const attachments = parseAiAttachments(body.attachments);
   if (message === "" && attachments.length === 0) {
     throw new ApiError(
       400,
       "INVALID_MESSAGE",
-      "A message or at least one image attachment is required",
+      "A message or at least one attachment is required",
     );
   }
   return {
     message,
-    skillIds: parseAiSkillIds(body.skillIds),
+    skillIds,
     dangerFullAccessConfirmed: body.dangerFullAccessConfirmed,
     attachments,
   };

@@ -1,9 +1,8 @@
 import type {
   AiChatEvent,
-  AiChatImageAttachmentInput,
+  AiChatAttachmentInput,
   AiChatModel,
   AiChatSandbox,
-  AiChatSkill,
   AiChatThread,
   AiChatThreadSnapshot,
   AiChatThreadStatus,
@@ -69,33 +68,11 @@ export function normalizeChatSelection(
   };
 }
 
-export function readSkillMention(value: string, caret: number) {
-  const prefix = value.slice(0, caret);
-  const match = /(?:^|\s)@([^\s@]*)$/.exec(prefix);
-  if (!match) return null;
-  const at = prefix.lastIndexOf("@");
-  return { start: at, end: caret, query: match[1].toLocaleLowerCase() };
-}
-
-export function insertSkillMention(
-  value: string,
-  start: number,
-  end: number,
-  skill: AiChatSkill,
-) {
-  const mention = `@${skill.label}`;
-  return {
-    value: `${value.slice(0, start)}${mention}${value.slice(end)}`,
-    caret: start + mention.length,
-    skillId: skill.id,
-  };
-}
-
 export function buildTurnInput(
   message: string,
   skillIds: string[],
   dangerFullAccessConfirmed: boolean,
-  attachments: AiChatImageAttachmentInput[] = [],
+  attachments: AiChatAttachmentInput[] = [],
 ) {
   return {
     message,
