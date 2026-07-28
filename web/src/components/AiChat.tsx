@@ -598,15 +598,48 @@ function dateLabel(value: string): string {
   }).format(date);
 }
 
-function activityDetail(event: AiChatEvent): string | null {
-  for (const key of ["output", "command", "detail", "path"]) {
-    const value = event.data?.[key];
-    if (typeof value === "string" && value.trim()) return value;
+type ThinkingActivityDetail =
+  | { kind: "lines"; summary: string; value: string[] }
+  | { kind: "pre"; summary: string; value: string };
+
+function parsedTodoLines(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  try {
+    const items = JSON.parse(value);
+    if (!Array.isArray(items)) return [];
+    return items.flatMap((item) => {
+      if (typeof item !== "object" || item === null) return [];
+      const text = (item as Record<string, unknown>).text;
+      return typeof text === "string" && text.trim() ? [text] : [];
+    });
+  } catch {
+    return [];
   }
+}
+
+function activityDetail(event: AiChatEvent): ThinkingActivityDetail | null {
   const files = event.data?.files;
   if (Array.isArray(files)) {
     const visibleFiles = files.filter((value): value is string => typeof value === "string");
-    if (visibleFiles.length > 0) return visibleFiles.join("\n");
+    if (visibleFiles.length > 0) {
+      return { kind: "lines", summary: "查看文件", value: visibleFiles };
+    }
+  }
+  if (event.type === "todo" || event.type === "todo_list") {
+    const lines = parsedTodoLines(event.data?.detail);
+    if (lines.length > 0) {
+      return { kind: "lines", summary: "查看任务", value: lines };
+    }
+  }
+  for (const key of ["output", "command", "detail", "path"]) {
+    const value = event.data?.[key];
+    if (typeof value === "string" && value.trim()) {
+      return {
+        kind: "pre",
+        summary: activityDetailSummary(event),
+        value,
+      };
+    }
   }
   return null;
 }
@@ -643,6 +676,45 @@ function MarkdownMessage({
       >
         {children}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+function ThinkingStepDetail({
+  detail,
+}: {
+  detail: ThinkingActivityDetail;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className={`ai-chat-thinking-detail${isOpen ? " is-open" : ""}`}>
+      <button
+        aria-expanded={isOpen}
+        className="ai-chat-thinking-detail-trigger"
+        onClick={() => setIsOpen((open) => !open)}
+        type="button"
+      >
+        <span>{detail.summary}</span>
+        <LinearIcon name="chevronRight" />
+      </button>
+      <div
+        aria-hidden={!isOpen}
+        className="ai-chat-thinking-detail-panel"
+        inert={!isOpen}
+      >
+        <div className="ai-chat-thinking-detail-panel-inner">
+          {detail.kind === "lines" ? (
+            <div className="ai-chat-thinking-detail-lines">
+              {detail.value.map((line, index) => (
+                <span key={`${line}-${index}`}>{line}</span>
+              ))}
+            </div>
+          ) : (
+            <pre><code>{detail.value}</code></pre>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -685,33 +757,44 @@ function ThinkingSteps({ events }: { events: AiChatEvent[] }) {
           {events.map((event, index) => {
             const eventStatus = aiChatEventStatus(event);
             const detail = activityDetail(event);
-            const content = event.content.trim();
+            const content = detail?.kind === "lines"
+              && (event.type === "file" || event.type === "file_change")
+              ? `${detail.value.length} 个文件`
+              : detail?.kind === "lines"
+                && (event.type === "todo" || event.type === "todo_list")
+                ? `${detail.value.length} 项任务`
+                : event.content.trim();
             return (
               <div
                 className="ai-chat-thinking-step-entry"
-                key={event.id}
+                key={typeof event.data?.itemId === "string" && event.data.itemId
+                  ? event.data.itemId
+                  : event.id}
                 style={{ animationDelay: `${Math.min(index * 40, 240)}ms` }}
               >
                 <div className={`ai-chat-thinking-step is-${eventStatus}${index === events.length - 1 ? " is-last" : ""}`}>
                   <span className="ai-chat-thinking-step-rail" aria-hidden="true">
-                    <LinearIcon name={eventStatus === "failed" ? "alert" : ACTIVITY_ICONS[event.type] ?? "statusTodo"} />
+                    <span className="ai-chat-thinking-step-icon">
+                      <LinearIcon name={eventStatus === "failed" ? "alert" : ACTIVITY_ICONS[event.type] ?? "statusTodo"} />
+                    </span>
+                    {index !== events.length - 1 && (
+                      <span className="ai-chat-thinking-step-connector" />
+                    )}
                   </span>
                   <div className="ai-chat-thinking-step-content">
                     <div className="ai-chat-thinking-step-heading">
-                      <span className="ai-chat-thinking-step-text">
-                        <strong>{ACTIVITY_LABELS[event.type] ?? "执行活动"}</strong>
-                        {content && <span className="ai-chat-thinking-step-description"> · {content}</span>}
+                      <span className="ai-chat-thinking-step-label">
+                        {ACTIVITY_LABELS[event.type] ?? "执行活动"}
                         {eventStatus === "running" && <span aria-hidden="true">…</span>}
                       </span>
+                      {content && (
+                        <span className="ai-chat-thinking-step-description">
+                          {content}
+                        </span>
+                      )}
                     </div>
                     {detail && (
-                      <details className="ai-chat-thinking-detail">
-                        <summary>
-                          <LinearIcon name="chevronRight" />
-                          <span>{activityDetailSummary(event)}</span>
-                        </summary>
-                        <pre><code>{detail}</code></pre>
-                      </details>
+                      <ThinkingStepDetail detail={detail} />
                     )}
                   </div>
                 </div>
@@ -792,7 +875,11 @@ function MessageTimeline({
           return (
             <ThinkingSteps
               events={entry}
-              key={`activity-${entry[0]?.id ?? "empty"}`}
+              key={`activity-${
+                typeof entry[0]?.data?.itemId === "string" && entry[0].data.itemId
+                  ? entry[0].data.itemId
+                  : entry[0]?.id ?? "empty"
+              }`}
             />
           );
         }

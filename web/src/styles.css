@@ -6908,7 +6908,8 @@ kbd {
 }
 
 .ai-chat-thinking-steps {
-  width: 100%;
+  width: calc(100% + 24px);
+  margin-left: -12px;
   color: var(--text-tertiary);
 }
 
@@ -6916,13 +6917,19 @@ kbd {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  gap: 5px;
-  padding: 8px 0;
+  gap: 10px;
+  padding: 8px 12px;
   border: 0;
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   cursor: pointer;
   text-align: left;
+  transition: background-color 80ms ease, color 80ms ease;
+}
+
+.ai-chat-thinking-header:hover {
+  background: var(--surface-muted);
 }
 
 .ai-chat-thinking-header:focus-visible {
@@ -6934,7 +6941,7 @@ kbd {
 .ai-chat-thinking-label {
   color: var(--text-secondary);
   font-size: 13px;
-  font-weight: 510;
+  font-weight: 500;
   line-height: 20px;
   -webkit-user-select: text;
   user-select: text;
@@ -6943,8 +6950,8 @@ kbd {
 
 .ai-chat-thinking-chevron {
   flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   transition: transform 160ms ease;
 }
 
@@ -6966,8 +6973,9 @@ kbd {
 
 .ai-chat-thinking-list {
   min-height: 0;
-  padding: 2px 0 0;
+  padding: 4px 12px 12px;
   overflow: hidden;
+  font-size: 13px;
   -webkit-user-select: text;
   user-select: text;
 }
@@ -6975,6 +6983,7 @@ kbd {
 .ai-chat-thinking-step-entry {
   display: grid;
   grid-template-rows: 1fr;
+  min-height: 0;
   animation: ai-chat-thinking-step-enter 260ms ease-out both;
 }
 
@@ -6983,46 +6992,44 @@ kbd {
   grid-template-columns: 14px minmax(0, 1fr);
   align-items: stretch;
   min-height: 0;
-  gap: 9px;
+  gap: 10px;
+  padding: 6px 8px;
   overflow: hidden;
 }
 
 .ai-chat-thinking-step-rail {
-  position: relative;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
   width: 14px;
   color: var(--text-tertiary);
 }
 
-.ai-chat-thinking-step-rail svg {
-  position: absolute;
-  top: 3px;
-  left: 0;
-  z-index: 1;
+.ai-chat-thinking-step-icon {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 16px;
+  padding-top: 2px;
+}
+
+.ai-chat-thinking-step-icon svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
 
-.ai-chat-thinking-step:not(.is-last) .ai-chat-thinking-step-rail::after {
-  position: absolute;
-  top: 20px;
-  bottom: 0;
-  left: 6.5px;
+.ai-chat-thinking-step-connector {
+  flex: 1 1 auto;
+  min-height: 6px;
+  margin-top: 4px;
+  margin-bottom: -6px;
   width: 1px;
-  background: var(--border-strong);
-  content: "";
-  opacity: .68;
-}
-
-.ai-chat-thinking-step-entry:not(:first-child) .ai-chat-thinking-step-rail::before {
-  position: absolute;
-  top: 0;
-  left: 6.5px;
-  width: 1px;
-  height: 3px;
-  background: var(--border-strong);
-  content: "";
-  opacity: .68;
+  background: var(--border);
+  opacity: .6;
 }
 
 .ai-chat-thinking-step.is-failed .ai-chat-thinking-step-rail {
@@ -7031,100 +7038,143 @@ kbd {
 
 .ai-chat-thinking-step-content {
   min-width: 0;
-  padding-bottom: 7px;
 }
 
 .ai-chat-thinking-step-heading {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
-  min-height: 20px;
-  font-size: 13px;
-  line-height: 20px;
+  gap: 4px;
 }
 
-.ai-chat-thinking-step-text {
+.ai-chat-thinking-step-label {
   display: block;
   min-width: 0;
-  overflow: hidden;
-  color: var(--text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ai-chat-thinking-step-text strong {
-  font-weight: 510;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .ai-chat-thinking-step-description {
-  opacity: .76;
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
-.ai-chat-thinking-step.is-failed .ai-chat-thinking-step-text {
+.ai-chat-thinking-step.is-failed .ai-chat-thinking-step-label {
   color: var(--danger);
 }
 
-.ai-chat-thinking-step.is-running .ai-chat-thinking-step-text {
+.ai-chat-thinking-step.is-running .ai-chat-thinking-step-label {
   background: linear-gradient(
     90deg,
-    var(--text-tertiary) 10%,
-    var(--text-primary) 48%,
-    var(--text-tertiary) 88%
+    var(--text-tertiary) 0%,
+    var(--text-tertiary) 35%,
+    var(--text-primary) 50%,
+    var(--text-tertiary) 65%,
+    var(--text-tertiary) 100%
   );
-  background-size: 220% 100%;
+  background-size: 300% 100%;
   color: transparent;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: ai-chat-thinking-shimmer 1.45s linear infinite;
+  animation: ai-chat-thinking-shimmer 1.5s ease-in-out infinite;
 }
 
 .ai-chat-thinking-detail {
-  margin-top: 2px;
+  margin-top: 4px;
+  margin-left: -12px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: 13px;
 }
 
-.ai-chat-thinking-detail summary {
+.ai-chat-thinking-detail-trigger {
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  gap: 3px;
+  min-height: 26px;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
-  list-style: none;
+  font: inherit;
+  text-align: left;
+  transition: background-color 80ms ease, color 80ms ease;
 }
 
-.ai-chat-thinking-detail summary::-webkit-details-marker {
-  display: none;
+.ai-chat-thinking-detail-trigger:hover {
+  background: var(--surface-muted);
+  color: var(--text-secondary);
 }
 
-.ai-chat-thinking-detail summary:focus-visible {
+.ai-chat-thinking-detail-trigger:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
-.ai-chat-thinking-detail summary svg {
-  width: 10px;
-  height: 10px;
+.ai-chat-thinking-detail-trigger svg {
+  order: 2;
+  width: 12px;
+  height: 12px;
   transition: transform 140ms ease;
 }
 
-.ai-chat-thinking-detail[open] summary svg {
+.ai-chat-thinking-detail.is-open .ai-chat-thinking-detail-trigger svg {
   transform: rotate(90deg);
+}
+
+.ai-chat-thinking-detail-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 180ms ease, opacity 140ms ease;
+}
+
+.ai-chat-thinking-detail.is-open .ai-chat-thinking-detail-panel {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.ai-chat-thinking-detail-panel-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ai-chat-thinking-detail-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 12px 4px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-chat-thinking-detail-lines span {
+  overflow-wrap: anywhere;
 }
 
 .ai-chat-thinking-detail pre {
   max-height: 220px;
-  margin: 4px 0 2px;
-  padding: 8px 9px;
+  margin: 2px 12px 4px;
+  padding: 6px 0 4px;
   overflow: auto;
-  border: var(--border-hairline) solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-muted);
-  color: var(--text-secondary);
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 10px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -7143,8 +7193,8 @@ kbd {
 }
 
 @keyframes ai-chat-thinking-shimmer {
-  from { background-position: 100% 0; }
-  to { background-position: -120% 0; }
+  from { background-position: 0% 0; }
+  to { background-position: 100% 0; }
 }
 
 .ai-chat-running,
@@ -7989,7 +8039,8 @@ kbd {
   .ai-chat-thinking-chevron,
   .ai-chat-thinking-panel,
   .ai-chat-thinking-step-entry,
-  .ai-chat-thinking-step-text {
+  .ai-chat-thinking-step-label,
+  .ai-chat-thinking-detail-panel {
     transition: none;
     animation: none;
   }
