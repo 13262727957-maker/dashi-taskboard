@@ -82,6 +82,10 @@ type ComposerBeforeInput = {
   offset: number;
   text: string;
 };
+type DraftThreadOrigin = {
+  projectId: string;
+  issueId: string | null;
+};
 type PanelResizeEdge = "top" | "left" | "top-left";
 type PanelGeometry = {
   width: number;
@@ -948,6 +952,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     () => window.localStorage.getItem(LAST_THREAD_KEY),
   );
   const [snapshot, setSnapshot] = useState<AiChatThreadSnapshot | null>(null);
+  const [draftOrigin, setDraftOrigin] = useState<DraftThreadOrigin | null>(null);
   const [catalog, setCatalog] = useState<AiChatCatalog | null>(null);
   const [catalogLoadedProjectId, setCatalogLoadedProjectId] = useState<string | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -1249,6 +1254,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const selectedThreadSummary = threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const catalogProjectId = snapshot?.thread.origin.projectId
     ?? selectedThreadSummary?.origin.projectId
+    ?? draftOrigin?.projectId
     ?? projectId;
   const activeCatalog = catalogLoadedProjectId === catalogProjectId ? catalog : null;
   useEffect(() => {
@@ -1298,11 +1304,13 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       setDraftModel(normalized.model);
       setDraftEffort(normalized.reasoningEffort);
     }
-    const defaultSandbox = activeCatalog?.sandboxes.find(
-      (sandbox): sandbox is AiChatSandbox => sandbox === "workspace-write",
-    ) ?? activeCatalog?.sandboxes.find(isAiChatSandbox);
-    if (defaultSandbox) setDraftSandbox(defaultSandbox);
-  }, [activeCatalog, restoreDraftSettings, snapshot?.thread.id]);
+    const sandbox = draftOrigin && activeCatalog?.sandboxes.includes(draftSandbox)
+      ? draftSandbox
+      : activeCatalog?.sandboxes.find(
+          (candidate): candidate is AiChatSandbox => candidate === "workspace-write",
+        ) ?? activeCatalog?.sandboxes.find(isAiChatSandbox);
+    if (sandbox) setDraftSandbox(sandbox);
+  }, [activeCatalog, draftOrigin, restoreDraftSettings, snapshot?.thread.id]);
 
   useEffect(() => {
     const container = messagesRef.current;
@@ -1409,15 +1417,33 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     skillMentionRangeRef.current = null;
   }
 
-  async function createThreadForCurrentOrigin(
-    resetComposerOnStart = false,
-  ): Promise<AiChatThread | null> {
+  function beginNewConversation() {
     const input = buildThreadCreateInput(projectId ?? "", issueId);
+    if (!input) {
+      setError("请先进入一个已映射的项目，再新建对话");
+      return;
+    }
+    resetComposer();
+    setDraftOrigin({
+      projectId: input.projectId,
+      issueId: input.issueId ?? null,
+    });
+    setSnapshot(null);
+    selectThread(null);
+    setHistoryOpen(false);
+    setMenu(null);
+    setError(null);
+  }
+
+  async function createThreadForDraftOrigin(): Promise<AiChatThread | null> {
+    const origin = draftOrigin ?? (
+      projectId ? { projectId, issueId } : null
+    );
+    const input = buildThreadCreateInput(origin?.projectId ?? "", origin?.issueId ?? null);
     if (!input) {
       setError("请先进入一个已映射的项目，再新建对话");
       return null;
     }
-    if (resetComposerOnStart) resetComposer();
     const inheritedSettings = {
       model: draftModel,
       reasoningEffort: draftEffort,
@@ -1450,6 +1476,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       replaceThread(thread);
       selectThread(thread.id);
       setSnapshot({ thread, events: [], runs: [] });
+      setDraftOrigin(null);
       setHistoryOpen(false);
       setError(null);
       return thread;
@@ -1470,6 +1497,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       setThreads(remainingThreads);
       if (selectedThreadRef.current === thread.id) {
         setSnapshot(null);
+        setDraftOrigin(null);
         selectThread(remainingThreads[0]?.id ?? null);
         resetComposer();
       }
@@ -1695,21 +1723,22 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     if (!trimmed && messageAttachments.length === 0) return;
     let thread = snapshot?.thread ?? null;
     const creatingThread = !thread;
+    const messageSandbox = thread?.sandbox ?? draftSandbox;
+    if (needsDangerConfirmation(messageSandbox, dangerConfirmed)) {
+      setPendingDangerInput({
+        message: trimmed,
+        skillIds: submittedSkillIds,
+        attachments: messageAttachments,
+        clearSubmittedDraft,
+      });
+      return;
+    }
     if (creatingThread && clearSubmittedDraft) resetComposer();
-    if (!thread) thread = await createThreadForCurrentOrigin();
+    if (!thread) thread = await createThreadForDraftOrigin();
     if (!thread) return;
     const messageSkillIds = (
       boundSkillIds !== undefined || catalogLoadedProjectId === thread.origin.projectId
     ) ? submittedSkillIds : [];
-    if (needsDangerConfirmation(thread.sandbox, dangerConfirmed)) {
-      setPendingDangerInput({
-        message: trimmed,
-        skillIds: messageSkillIds,
-        attachments: messageAttachments,
-        clearSubmittedDraft: clearSubmittedDraft && !creatingThread,
-      });
-      return;
-    }
     setPendingDangerInput(null);
     setError(null);
     try {
@@ -2007,7 +2036,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               aria-label="新建对话"
               title={projectId ? "新建对话" : "请先进入项目"}
               disabled={!projectId || loading}
-              onClick={() => void createThreadForCurrentOrigin(true)}
+              onClick={beginNewConversation}
             >
               <LinearIcon name="plus" />
             </button>
@@ -2036,6 +2065,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                     type="button"
                     onClick={() => {
                       if (thread.id !== selectedThreadRef.current) resetComposer();
+                      setDraftOrigin(null);
                       selectThread(thread.id);
                       setHistoryOpen(false);
                     }}
