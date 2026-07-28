@@ -2884,6 +2884,19 @@ kbd {
   border-top: var(--border-hairline) solid var(--border);
 }
 
+.issue-sub-issue-list .issue-relation-row {
+  position: relative;
+}
+
+.issue-sub-issue-list .issue-relation-target {
+  padding-right: 8px;
+}
+
+.issue-sub-issue-list .issue-relation-row:hover .issue-relation-target,
+.issue-sub-issue-list .issue-relation-row:focus-within .issue-relation-target {
+  padding-right: 34px;
+}
+
 .issue-relation-row {
   display: flex;
   align-items: center;
@@ -2932,12 +2945,18 @@ kbd {
   white-space: nowrap;
 }
 
-.issue-relation-assignee {
-  width: 16px;
-  height: 16px;
+.issue-sub-issue-list .actor-avatar.issue-relation-assignee {
+  width: 11px;
+  height: 11px;
   margin-left: auto;
   border-width: 1px;
-  font-size: 7px;
+  font-size: 5px;
+}
+
+.issue-sub-issue-list .issue-relation-remove {
+  position: absolute;
+  right: 3px;
+  margin-right: 0;
 }
 
 .issue-relation-remove {
