@@ -94,14 +94,20 @@ type PanelResizeSession = {
   startY: number;
   startWidth: number;
   startHeight: number;
+  geometry: PanelGeometry;
   captureTarget: HTMLElement;
 };
 
 const LAST_THREAD_KEY = "taskboard.aiChat.lastThreadId";
+const PANEL_GEOMETRY_KEY = "taskboard.aiChat.panelGeometry";
 const PANEL_EDGE_GAP = 8;
 const PANEL_MIN_WIDTH = 420;
 const PANEL_MAX_WIDTH = 960;
 const PANEL_MIN_HEIGHT = 360;
+const PANEL_DEFAULT_GEOMETRY: PanelGeometry = {
+  width: 420,
+  height: 700,
+};
 const SKILL_MARKER = AI_CHAT_SKILL_MARKER;
 const SKILL_LINK_PREFIX = "#ai-chat-skill-";
 const COMPOSER_FRAGMENT_MIME = "application/x-codex-taskboard-composer-fragment";
@@ -127,6 +133,37 @@ const SANDBOX_LABELS: Record<AiChatSandbox, string> = {
   "workspace-write": "替我审批",
   "danger-full-access": "完全访问权限",
 };
+
+function clampPanelGeometry(geometry: PanelGeometry): PanelGeometry {
+  const maxWidth = Math.min(
+    PANEL_MAX_WIDTH,
+    window.innerWidth - PANEL_EDGE_GAP * 2,
+  );
+  const minWidth = Math.min(PANEL_MIN_WIDTH, maxWidth);
+  const maxHeight = window.innerHeight - PANEL_EDGE_GAP * 2;
+  const minHeight = Math.min(PANEL_MIN_HEIGHT, maxHeight);
+  return {
+    width: Math.min(maxWidth, Math.max(minWidth, geometry.width)),
+    height: Math.min(maxHeight, Math.max(minHeight, geometry.height)),
+  };
+}
+
+function loadPanelGeometry(): PanelGeometry {
+  const stored = window.localStorage.getItem(PANEL_GEOMETRY_KEY);
+  if (!stored) return clampPanelGeometry(PANEL_DEFAULT_GEOMETRY);
+  try {
+    const geometry = JSON.parse(stored) as PanelGeometry;
+    if (
+      !Number.isFinite(geometry.width)
+      || !Number.isFinite(geometry.height)
+    ) {
+      return clampPanelGeometry(PANEL_DEFAULT_GEOMETRY);
+    }
+    return clampPanelGeometry(geometry);
+  } catch {
+    return clampPanelGeometry(PANEL_DEFAULT_GEOMETRY);
+  }
+}
 
 const SANDBOX_DESCRIPTIONS: Record<AiChatSandbox, string> = {
   "read-only": "编辑外部文件和使用互联网时始终询问",
@@ -771,7 +808,9 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
-  const [panelGeometry, setPanelGeometry] = useState<PanelGeometry | null>(null);
+  const [panelGeometry, setPanelGeometry] = useState<PanelGeometry | null>(
+    () => window.innerWidth <= 719 ? null : loadPanelGeometry(),
+  );
   const [panelResizeEdge, setPanelResizeEdge] = useState<PanelResizeEdge | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const skillMentionRangeRef = useRef<Range | null>(null);
@@ -801,7 +840,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
 
   useEffect(() => {
     panelOpenRef.current = panelOpen;
-    if (panelOpen) setUnread(false);
+    if (panelOpen) {
+      setUnread(false);
+      setPanelGeometry(window.innerWidth <= 719 ? null : loadPanelGeometry());
+    }
   }, [panelOpen]);
 
   useEffect(() => {
@@ -810,6 +852,12 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
       if (session.captureTarget.hasPointerCapture(session.pointerId)) {
         session.captureTarget.releasePointerCapture(session.pointerId);
+      }
+      if (window.innerWidth > 719) {
+        window.localStorage.setItem(
+          PANEL_GEOMETRY_KEY,
+          JSON.stringify(session.geometry),
+        );
       }
       panelResizeSessionRef.current = null;
       setPanelResizeEdge(null);
@@ -841,7 +889,8 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             Math.max(minHeight, session.startHeight - (event.clientY - session.startY)),
           )
         : session.startHeight;
-      setPanelGeometry({ width, height });
+      session.geometry = { width, height };
+      setPanelGeometry(session.geometry);
     }
 
     function handlePointerEnd(event: PointerEvent) {
@@ -859,23 +908,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
         return;
       }
 
-      setPanelGeometry((current) => {
-        if (!current) return current;
-        const maxWidth = Math.min(
-          PANEL_MAX_WIDTH,
-          window.innerWidth - PANEL_EDGE_GAP * 2,
-        );
-        const width = Math.min(
-          maxWidth,
-          Math.max(Math.min(PANEL_MIN_WIDTH, maxWidth), current.width),
-        );
-        const maxHeight = window.innerHeight - PANEL_EDGE_GAP * 2;
-        const height = Math.min(
-          maxHeight,
-          Math.max(Math.min(PANEL_MIN_HEIGHT, maxHeight), current.height),
-        );
-        return { width, height };
-      });
+      setPanelGeometry(loadPanelGeometry());
     }
 
     window.addEventListener("pointermove", resizePanel, { passive: false });
@@ -911,6 +944,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       startY: event.clientY,
       startWidth: rect.width,
       startHeight: rect.height,
+      geometry: {
+        width: rect.width,
+        height: rect.height,
+      },
       captureTarget: event.currentTarget,
     };
     setPanelGeometry({
