@@ -50,7 +50,7 @@ import type {
   AiChatThread,
   AiChatThreadSnapshot,
 } from "../types";
-import { LinearIcon } from "./LinearIcon";
+import { LinearIcon, type LinearIconName } from "./LinearIcon";
 
 interface AiChatProps {
   available: boolean;
@@ -560,6 +560,23 @@ const ACTIVITY_LABELS: Record<string, string> = {
   "turn.failed": "执行失败",
 };
 
+const ACTIVITY_ICONS: Record<string, LinearIconName> = {
+  plan: "write",
+  todo: "status",
+  todo_list: "status",
+  command: "terminal",
+  command_execution: "terminal",
+  file: "file",
+  file_change: "file",
+  mcp: "link",
+  mcp_tool_call: "link",
+  skill: "project",
+  web: "search",
+  web_search: "search",
+  error: "alert",
+  "turn.failed": "alert",
+};
+
 function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : "AI 对话暂时不可用";
 }
@@ -594,6 +611,15 @@ function activityDetail(event: AiChatEvent): string | null {
   return null;
 }
 
+function activityDetailSummary(event: AiChatEvent): string {
+  if (typeof event.data?.output === "string" && event.data.output.trim()) return "查看输出";
+  if (typeof event.data?.command === "string" && event.data.command.trim()) return "查看命令";
+  if (typeof event.data?.detail === "string" && event.data.detail.trim()) return "查看详情";
+  if (typeof event.data?.path === "string" && event.data.path.trim()) return "查看路径";
+  if (Array.isArray(event.data?.files)) return "查看文件";
+  return "查看详情";
+}
+
 function MarkdownMessage({
   children,
   skillsById,
@@ -621,48 +647,80 @@ function MarkdownMessage({
   );
 }
 
-function ActivityGroup({ events }: { events: AiChatEvent[] }) {
+function ThinkingSteps({ events }: { events: AiChatEvent[] }) {
   const statuses = events.map(aiChatEventStatus);
   const status = statuses.includes("running")
     ? "running"
     : statuses.includes("failed") ? "failed" : "completed";
+  const [isOpen, setIsOpen] = useState(status !== "completed");
+  const previousStatusRef = useRef(status);
+
+  useEffect(() => {
+    if (previousStatusRef.current === status) return;
+    previousStatusRef.current = status;
+    setIsOpen(status !== "completed");
+  }, [status]);
+
+  const statusLabel = status === "running"
+    ? "思考中"
+    : status === "failed" ? "思考中断" : "已思考";
+
   return (
-    <details className={`ai-chat-activity-group is-${status}`} open={status !== "completed"}>
-      <summary>
-        <span className="ai-chat-activity-status" aria-hidden="true">
-          {status === "running"
-            ? <span className="ai-chat-spinner" />
-            : <LinearIcon name={status === "failed" ? "alert" : "check"} />}
-        </span>
-        <span className="ai-chat-activity-group-label">
-          {status === "running" ? "处理中" : status === "failed" ? "处理失败" : "已处理"}
-          <span> · {events.length} 项</span>
-        </span>
-        <LinearIcon className="ai-chat-activity-chevron" name="chevronDown" />
-      </summary>
-      <div className="ai-chat-activity-list">
-        {events.map((event) => {
-          const eventStatus = aiChatEventStatus(event);
-          const detail = activityDetail(event);
-          return (
-            <div className={`ai-chat-activity-row is-${eventStatus}`} key={event.id}>
-              <span className="ai-chat-activity-row-icon" aria-hidden="true">
-                {eventStatus === "running"
-                  ? <span className="ai-chat-spinner" />
-                  : <LinearIcon name={eventStatus === "failed" ? "alert" : "check"} />}
-              </span>
-              <div>
-                <div className="ai-chat-activity-row-heading">
-                  <strong>{ACTIVITY_LABELS[event.type] ?? "执行活动"}</strong>
-                  <span>{event.content}</span>
+    <section className={`ai-chat-thinking-steps is-${status}`}>
+      <button
+        aria-expanded={isOpen}
+        className="ai-chat-thinking-header"
+        onClick={() => setIsOpen((open) => !open)}
+        type="button"
+      >
+        <span className="ai-chat-thinking-label">{statusLabel}</span>
+        <LinearIcon className="ai-chat-thinking-chevron" name="chevronRight" />
+      </button>
+      <div
+        aria-hidden={!isOpen}
+        className={`ai-chat-thinking-panel${isOpen ? " is-open" : ""}`}
+        inert={!isOpen}
+      >
+        <div className="ai-chat-thinking-list">
+          {events.map((event, index) => {
+            const eventStatus = aiChatEventStatus(event);
+            const detail = activityDetail(event);
+            const content = event.content.trim();
+            return (
+              <div
+                className="ai-chat-thinking-step-entry"
+                key={event.id}
+                style={{ animationDelay: `${Math.min(index * 40, 240)}ms` }}
+              >
+                <div className={`ai-chat-thinking-step is-${eventStatus}${index === events.length - 1 ? " is-last" : ""}`}>
+                  <span className="ai-chat-thinking-step-rail" aria-hidden="true">
+                    <LinearIcon name={eventStatus === "failed" ? "alert" : ACTIVITY_ICONS[event.type] ?? "statusTodo"} />
+                  </span>
+                  <div className="ai-chat-thinking-step-content">
+                    <div className="ai-chat-thinking-step-heading">
+                      <span className="ai-chat-thinking-step-text">
+                        <strong>{ACTIVITY_LABELS[event.type] ?? "执行活动"}</strong>
+                        {content && <span className="ai-chat-thinking-step-description"> · {content}</span>}
+                        {eventStatus === "running" && <span aria-hidden="true">…</span>}
+                      </span>
+                    </div>
+                    {detail && (
+                      <details className="ai-chat-thinking-detail">
+                        <summary>
+                          <LinearIcon name="chevronRight" />
+                          <span>{activityDetailSummary(event)}</span>
+                        </summary>
+                        <pre><code>{detail}</code></pre>
+                      </details>
+                    )}
+                  </div>
                 </div>
-                {detail && <pre><code>{detail}</code></pre>}
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-    </details>
+    </section>
   );
 }
 
@@ -732,7 +790,7 @@ function MessageTimeline({
       {timeline.map((entry) => {
         if (Array.isArray(entry)) {
           return (
-            <ActivityGroup
+            <ThinkingSteps
               events={entry}
               key={`activity-${entry[0]?.id ?? "empty"}`}
             />
