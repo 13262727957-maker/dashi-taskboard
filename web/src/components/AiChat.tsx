@@ -69,28 +69,25 @@ type ComposerAttachment = AiChatImageAttachmentInput & {
   id: string;
   previewUrl: string;
 };
-type PanelResizeEdge = "top" | "right";
+type PanelResizeEdge = "top" | "left" | "top-left";
 type PanelGeometry = {
   width: number;
   height: number;
-  right: number;
 };
 type PanelResizeSession = {
   edge: PanelResizeEdge;
   pointerId: number;
   startX: number;
   startY: number;
-  startLeft: number;
   startWidth: number;
   startHeight: number;
-  startRight: number;
   captureTarget: HTMLElement;
 };
 
 const LAST_THREAD_KEY = "taskboard.aiChat.lastThreadId";
 const PANEL_EDGE_GAP = 8;
 const PANEL_MIN_WIDTH = 420;
-const PANEL_MAX_WIDTH = 672;
+const PANEL_MAX_WIDTH = 960;
 const PANEL_MIN_HEIGHT = 360;
 const IMAGE_ATTACHMENT_TYPES = new Set([
   "image/png",
@@ -410,35 +407,28 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       if (!session || session.pointerId !== event.pointerId) return;
       event.preventDefault();
 
-      if (session.edge === "top") {
-        const maxHeight = window.innerHeight - PANEL_EDGE_GAP * 2;
-        const minHeight = Math.min(PANEL_MIN_HEIGHT, maxHeight);
-        const height = Math.min(
-          maxHeight,
-          Math.max(minHeight, session.startHeight - (event.clientY - session.startY)),
-        );
-        setPanelGeometry({
-          width: session.startWidth,
-          height,
-          right: session.startRight,
-        });
-        return;
-      }
-
       const maxWidth = Math.min(
         PANEL_MAX_WIDTH,
-        window.innerWidth - PANEL_EDGE_GAP - session.startLeft,
+        window.innerWidth - PANEL_EDGE_GAP * 2,
       );
       const minWidth = Math.min(PANEL_MIN_WIDTH, maxWidth);
-      const width = Math.min(
-        maxWidth,
-        Math.max(minWidth, session.startWidth + (event.clientX - session.startX)),
-      );
-      setPanelGeometry({
-        width,
-        height: session.startHeight,
-        right: window.innerWidth - session.startLeft - width,
-      });
+      const maxHeight = window.innerHeight - PANEL_EDGE_GAP * 2;
+      const minHeight = Math.min(PANEL_MIN_HEIGHT, maxHeight);
+      const resizeWidth = session.edge === "left" || session.edge === "top-left";
+      const resizeHeight = session.edge === "top" || session.edge === "top-left";
+      const width = resizeWidth
+        ? Math.min(
+            maxWidth,
+            Math.max(minWidth, session.startWidth - (event.clientX - session.startX)),
+          )
+        : session.startWidth;
+      const height = resizeHeight
+        ? Math.min(
+            maxHeight,
+            Math.max(minHeight, session.startHeight - (event.clientY - session.startY)),
+          )
+        : session.startHeight;
+      setPanelGeometry({ width, height });
     }
 
     function handlePointerEnd(event: PointerEvent) {
@@ -471,12 +461,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
           maxHeight,
           Math.max(Math.min(PANEL_MIN_HEIGHT, maxHeight), current.height),
         );
-        const maxRight = window.innerWidth - PANEL_EDGE_GAP - width;
-        const right = Math.min(
-          maxRight,
-          Math.max(PANEL_EDGE_GAP, current.right),
-        );
-        return { width, height, right };
+        return { width, height };
       });
     }
 
@@ -511,16 +496,13 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      startLeft: rect.left,
       startWidth: rect.width,
       startHeight: rect.height,
-      startRight: window.innerWidth - rect.right,
       captureTarget: event.currentTarget,
     };
     setPanelGeometry({
       width: rect.width,
       height: rect.height,
-      right: window.innerWidth - rect.right,
     });
     setPanelResizeEdge(edge);
   }
@@ -1103,9 +1085,14 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             onPointerDown={(event) => startPanelResize(event, "top")}
           />
           <div
-            className="ai-chat-resize-handle is-right"
+            className="ai-chat-resize-handle is-left"
             aria-hidden="true"
-            onPointerDown={(event) => startPanelResize(event, "right")}
+            onPointerDown={(event) => startPanelResize(event, "left")}
+          />
+          <div
+            className="ai-chat-resize-handle is-top-left"
+            aria-hidden="true"
+            onPointerDown={(event) => startPanelResize(event, "top-left")}
           />
           <header className="ai-chat-panel-header">
             <div className="ai-chat-panel-title">
