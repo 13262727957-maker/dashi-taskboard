@@ -3315,8 +3315,17 @@ kbd {
 }
 
 .activity-section {
+  position: relative;
   padding: 22px 14px 60px;
+}
+
+.activity-section::before {
+  position: absolute;
+  top: 0;
+  right: 14px;
+  left: 14px;
   border-top: var(--border-hairline) solid var(--border);
+  content: "";
 }
 
 .activity-heading {
@@ -3403,7 +3412,7 @@ kbd {
 .comment-entry {
   position: relative;
   display: block;
-  padding: 8px;
+  padding: 8px 0;
 }
 
 .actor-avatar {
@@ -3780,7 +3789,7 @@ kbd {
 
 .comments-loading {
   display: block;
-  padding: 8px;
+  padding: 8px 0;
 }
 
 .comments-loading i {
@@ -3798,7 +3807,7 @@ kbd {
 }
 
 .comments-error {
-  margin: 5px 8px 10px;
+  margin: 5px 0 10px;
   padding: 7px 9px;
   border-radius: 5px;
   background: var(--danger-soft);
@@ -3807,7 +3816,7 @@ kbd {
 }
 
 .comment-composer {
-  margin: 18px 8px 0;
+  margin: 18px 0 0;
   overflow: hidden;
   border: var(--border-hairline) solid var(--border);
   border-radius: 8px;
@@ -8249,6 +8258,7 @@ kbd {
     padding-left: 8px;
   }
 
+  .issue-sub-issues,
   .issue-attachments {
     padding-right: 8px;
     padding-left: 8px;
@@ -8257,6 +8267,11 @@ kbd {
   .activity-section {
     padding-right: 8px;
     padding-left: 8px;
+  }
+
+  .activity-section::before {
+    right: 8px;
+    left: 8px;
   }
 
   .issue-title-input {
@@ -8270,7 +8285,7 @@ kbd {
 
   .comment-composer {
     margin-right: 0;
-    margin-left: 8px;
+    margin-left: 0;
   }
 
   .composer-footer > span,
