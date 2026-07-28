@@ -985,6 +985,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const panelRef = useRef<HTMLElement>(null);
   const panelResizeSessionRef = useRef<PanelResizeSession | null>(null);
   const selectedThreadRef = useRef(selectedThreadId);
+  const draftReturnThreadIdRef = useRef<string | null>(null);
   const panelOpenRef = useRef(panelOpen);
   const snapshotRequestRef = useRef(0);
   const snapshotLoadingRequestRef = useRef(0);
@@ -1329,11 +1330,14 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       else if (skillMention) setSkillMention(null);
       else if (menu) setMenu(null);
       else if (historyOpen) setHistoryOpen(false);
-      else setPanelOpen(false);
+      else {
+        restorePersistedConversationFromDraft();
+        setPanelOpen(false);
+      }
     }
     document.addEventListener("keydown", closeWithEscape, true);
     return () => document.removeEventListener("keydown", closeWithEscape, true);
-  }, [dangerConfirmOpen, historyOpen, menu, panelOpen, skillMention]);
+  }, [dangerConfirmOpen, draftOrigin, historyOpen, menu, panelOpen, skillMention, threads]);
 
   const visibleSkills = useMemo(
     () => (activeCatalog?.skills ?? []).filter((skill) => (
@@ -1417,12 +1421,37 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     skillMentionRangeRef.current = null;
   }
 
+  function restorePersistedConversationFromDraft() {
+    if (!draftOrigin) return;
+    const previousThreadId = draftReturnThreadIdRef.current;
+    const nextThreadId = previousThreadId && threads.some((thread) => thread.id === previousThreadId)
+      ? previousThreadId
+      : threads[0]?.id ?? null;
+    draftReturnThreadIdRef.current = null;
+    setDraftOrigin(null);
+    setSnapshot(null);
+    selectThread(nextThreadId);
+    resetComposer();
+  }
+
+  useEffect(() => {
+    if (
+      !draftOrigin
+      || (
+        draftOrigin.projectId === projectId
+        && draftOrigin.issueId === (issueId ?? null)
+      )
+    ) return;
+    restorePersistedConversationFromDraft();
+  }, [draftOrigin?.issueId, draftOrigin?.projectId, issueId, projectId]);
+
   function beginNewConversation() {
     const input = buildThreadCreateInput(projectId ?? "", issueId);
     if (!input) {
       setError("请先进入一个已映射的项目，再新建对话");
       return;
     }
+    if (!draftOrigin) draftReturnThreadIdRef.current = selectedThreadRef.current;
     resetComposer();
     setDraftOrigin({
       projectId: input.projectId,
@@ -1476,6 +1505,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       replaceThread(thread);
       selectThread(thread.id);
       setSnapshot({ thread, events: [], runs: [] });
+      draftReturnThreadIdRef.current = null;
       setDraftOrigin(null);
       setHistoryOpen(false);
       setError(null);
@@ -2044,7 +2074,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
               type="button"
               aria-label="关闭 AI 对话"
               title="关闭"
-              onClick={() => setPanelOpen(false)}
+              onClick={() => {
+                restorePersistedConversationFromDraft();
+                setPanelOpen(false);
+              }}
             >
               <LinearIcon name="close" />
             </button>
@@ -2065,6 +2098,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                     type="button"
                     onClick={() => {
                       if (thread.id !== selectedThreadRef.current) resetComposer();
+                      draftReturnThreadIdRef.current = null;
                       setDraftOrigin(null);
                       selectThread(thread.id);
                       setHistoryOpen(false);
