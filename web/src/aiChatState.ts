@@ -52,20 +52,6 @@ export function buildThreadCreateInput(projectId: string, issueId: string | null
   };
 }
 
-interface AiChatThreadSettings {
-  model: string;
-  reasoningEffort: string;
-  sandbox: AiChatSandbox;
-}
-
-export function settingsForNewAiThread(
-  projectId: string,
-  settingsProjectId: string | null,
-  settings: AiChatThreadSettings,
-): Partial<AiChatThreadSettings> {
-  return projectId === settingsProjectId ? settings : {};
-}
-
 export function routeChatState(
   state: AiChatRouteState,
   projectId: string | null,
@@ -87,10 +73,30 @@ export function normalizeChatSelection(
   if (!selectedModel) return null;
   return {
     model: selectedModel.slug,
-    reasoningEffort: selectedModel.supportedReasoningEfforts.includes(reasoningEffort ?? "")
-      ? reasoningEffort as string
-      : selectedModel.defaultReasoningEffort,
+    reasoningEffort: reasoningEffortForModel(selectedModel, reasoningEffort),
   };
+}
+
+const REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+
+export function reasoningEffortForModel(
+  model: AiChatModel,
+  currentEffort: string | null | undefined,
+): string {
+  const current = currentEffort ?? "";
+  const currentIndex = REASONING_EFFORTS.indexOf(current);
+  if (currentIndex < 0) return model.defaultReasoningEffort;
+  if (model.supportedReasoningEfforts.includes(current)) {
+    return current;
+  }
+  const nearestEffort = model.supportedReasoningEfforts
+    .map((effort) => ({ effort, index: REASONING_EFFORTS.indexOf(effort) }))
+    .filter(({ index }) => index >= 0)
+    .sort((left, right) => (
+      Math.abs(left.index - currentIndex) - Math.abs(right.index - currentIndex)
+      || left.index - right.index
+    ))[0];
+  return nearestEffort?.effort ?? model.defaultReasoningEffort;
 }
 
 export function buildTurnInput(

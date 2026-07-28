@@ -37,7 +37,7 @@ import {
   normalizeChatSelection,
   parseAiChatComposerFragment,
   patchAiChatSnapshot,
-  settingsForNewAiThread,
+  reasoningEffortForModel,
 } from "../aiChatState";
 import type {
   AiChatCatalog,
@@ -1246,7 +1246,10 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     selectedThreadId,
   ]);
 
-  const catalogProjectId = snapshot?.thread.origin.projectId ?? projectId;
+  const selectedThreadSummary = threads.find((thread) => thread.id === selectedThreadId) ?? null;
+  const catalogProjectId = snapshot?.thread.origin.projectId
+    ?? selectedThreadSummary?.origin.projectId
+    ?? projectId;
   const activeCatalog = catalogLoadedProjectId === catalogProjectId ? catalog : null;
   useEffect(() => {
     if (!available || !catalogProjectId) {
@@ -1343,15 +1346,19 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const currentRun = snapshot?.thread.currentRun
     ?? snapshot?.runs.find((run) => run.status === "running")
     ?? null;
-  const composerBlocked = loading
+  const composerBlocked = Boolean(
+    selectedThreadId && deletingThreadId === selectedThreadId,
+  );
+  const sendBlocked = loading
     || settingsSaving
-    || deletingThreadId === selectedThreadId
+    || composerBlocked
     || Boolean(selectedThreadId && !snapshot);
+  const threadSettingsBlocked = loading || Boolean(selectedThreadId && !snapshot);
   const attachmentBlocked = composerBlocked;
   const primaryAction = chatPrimaryAction(
     snapshot?.thread.status ?? "idle",
     draft,
-    composerBlocked,
+    sendBlocked,
     attachments.length > 0,
   );
   const anyRunning = threads.some((thread) => thread.status === "running");
@@ -1403,24 +1410,39 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   }
 
   async function createThreadForCurrentOrigin(
-    resetComposerOnSuccess = false,
+    resetComposerOnStart = false,
   ): Promise<AiChatThread | null> {
     const input = buildThreadCreateInput(projectId ?? "", issueId);
     if (!input) {
       setError("请先进入一个已映射的项目，再新建对话");
       return null;
     }
+    if (resetComposerOnStart) resetComposer();
+    const inheritedSettings = {
+      model: draftModel,
+      reasoningEffort: draftEffort,
+      sandbox: draftSandbox,
+    };
     setLoading(true);
     try {
-      const settings = settingsForNewAiThread(
-        input.projectId,
-        activeCatalog ? catalogLoadedProjectId : null,
-        {
-          model: draftModel,
-          reasoningEffort: draftEffort,
-          sandbox: draftSandbox,
-        },
+      const targetCatalog = catalogLoadedProjectId === input.projectId && activeCatalog
+        ? activeCatalog
+        : await getAiChatCatalog(input.projectId);
+      const normalized = normalizeChatSelection(
+        targetCatalog.models,
+        inheritedSettings.model,
+        inheritedSettings.reasoningEffort,
       );
+      const sandbox = targetCatalog.sandboxes.includes(inheritedSettings.sandbox)
+        ? inheritedSettings.sandbox
+        : targetCatalog.sandboxes.find(
+          (candidate): candidate is AiChatSandbox => candidate === "workspace-write",
+        ) ?? targetCatalog.sandboxes.find(isAiChatSandbox) ?? inheritedSettings.sandbox;
+      const settings = {
+        model: normalized?.model ?? inheritedSettings.model,
+        reasoningEffort: normalized?.reasoningEffort ?? inheritedSettings.reasoningEffort,
+        sandbox,
+      };
       const thread = await createAiChatThread({
         ...input,
         ...settings,
@@ -1430,7 +1452,6 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
       setSnapshot({ thread, events: [], runs: [] });
       setHistoryOpen(false);
       setError(null);
-      if (resetComposerOnSuccess) resetComposer();
       return thread;
     } catch (nextError) {
       setError(messageFor(nextError));
@@ -1485,12 +1506,13 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   }
 
   async function chooseModel(model: AiChatModel) {
+    const reasoningEffort = reasoningEffortForModel(model, draftEffort);
     setMenu(null);
     setDraftModel(model.slug);
-    setDraftEffort(model.defaultReasoningEffort);
+    setDraftEffort(reasoningEffort);
     await saveThreadSettings({
       model: model.slug,
-      reasoningEffort: model.defaultReasoningEffort,
+      reasoningEffort,
     });
   }
 
@@ -1662,8 +1684,9 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     clearSubmittedDraft = true,
     boundAttachments?: AiChatAttachmentInput[],
   ) {
-    if (composerBlocked) return;
+    if (sendBlocked) return;
     const trimmed = message.trim();
+    const submittedSkillIds = boundSkillIds ?? [...realSkillIdsForMessage()];
     const messageAttachments = boundAttachments ?? attachments.map((attachment) => ({
       filename: attachment.filename,
       contentType: attachment.contentType,
@@ -1671,17 +1694,19 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     }));
     if (!trimmed && messageAttachments.length === 0) return;
     let thread = snapshot?.thread ?? null;
+    const creatingThread = !thread;
+    if (creatingThread && clearSubmittedDraft) resetComposer();
     if (!thread) thread = await createThreadForCurrentOrigin();
     if (!thread) return;
-    const messageSkillIds = boundSkillIds ?? (
-      catalogLoadedProjectId === thread.origin.projectId ? realSkillIdsForMessage() : []
-    );
+    const messageSkillIds = (
+      boundSkillIds !== undefined || catalogLoadedProjectId === thread.origin.projectId
+    ) ? submittedSkillIds : [];
     if (needsDangerConfirmation(thread.sandbox, dangerConfirmed)) {
       setPendingDangerInput({
         message: trimmed,
         skillIds: messageSkillIds,
         attachments: messageAttachments,
-        clearSubmittedDraft,
+        clearSubmittedDraft: clearSubmittedDraft && !creatingThread,
       });
       return;
     }
@@ -1694,7 +1719,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
         dangerConfirmed,
         messageAttachments,
       );
-      if (clearSubmittedDraft) {
+      if (clearSubmittedDraft && !creatingThread) {
         resetComposer();
       }
       const run = await startAiChatTurn(thread.id, turnInput);
@@ -2251,7 +2276,12 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   type="button"
                   aria-haspopup="menu"
                   aria-expanded={menu === "sandbox"}
-                  disabled={!activeCatalog || snapshot?.thread.status === "running" || settingsSaving}
+                  disabled={
+                    !activeCatalog
+                    || snapshot?.thread.status === "running"
+                    || settingsSaving
+                    || threadSettingsBlocked
+                  }
                   onClick={() => setMenu((current) => current === "sandbox" ? null : "sandbox")}
                 >
                   <LinearIcon name={SANDBOX_ICONS[draftSandbox]} />
@@ -2298,7 +2328,12 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
                   type="button"
                   aria-haspopup="menu"
                   aria-expanded={menu === "model" || menu === "model-list" || menu === "effort-list"}
-                  disabled={!activeCatalog || snapshot?.thread.status === "running" || settingsSaving}
+                  disabled={
+                    !activeCatalog
+                    || snapshot?.thread.status === "running"
+                    || settingsSaving
+                    || threadSettingsBlocked
+                  }
                   onClick={() => setMenu((current) => (
                     current === "model" || current === "model-list" || current === "effort-list"
                       ? null
