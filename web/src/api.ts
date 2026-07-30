@@ -93,6 +93,14 @@ export async function getTaskboardMetadata(signal?: AbortSignal): Promise<Taskbo
   return request<TaskboardMetadata>("/api/meta", { signal });
 }
 
+export async function getTaskboardRevision(
+  since: number,
+  signal?: AbortSignal,
+): Promise<{ changed: boolean; revision: number }> {
+  const query = new URLSearchParams({ since: String(since) });
+  return request<{ changed: boolean; revision: number }>(`/api/revisions?${query}`, { signal });
+}
+
 export async function getAiChatCatalog(
   projectId: string,
   signal?: AbortSignal,
@@ -199,8 +207,13 @@ export function subscribeAiChatThread(
 }
 
 export async function listDeviceWorkspaces(signal?: AbortSignal): Promise<Record<string, string>> {
-  const data = await request<{ workspaces: Record<string, string> }>("/api/device-workspaces", { signal });
-  return data.workspaces;
+  try {
+    const data = await request<{ workspaces: Record<string, string> }>("/api/device-workspaces", { signal });
+    return data.workspaces;
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "LOCAL_COMPANION_REQUIRED") return {};
+    throw error;
+  }
 }
 
 export async function listWorkflowCapabilities(
