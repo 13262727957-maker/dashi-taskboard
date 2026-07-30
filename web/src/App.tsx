@@ -84,6 +84,7 @@ import {
 type ConnectionState = "connecting" | "live" | "reconnecting";
 type Theme = "light" | "dark";
 type BoardView = "issues" | "workflow";
+const SHOW_WORKFLOW_BOARD_ENTRY = false;
 
 const WorkflowBoard = lazy(() => import("./components/WorkflowBoard").then((module) => ({
   default: module.WorkflowBoard,
@@ -1918,14 +1919,16 @@ export function App() {
             >
               议题看板
             </button>
-            <button
-              className={`view-tab${boardView === "workflow" ? " active" : ""}`}
-              type="button"
-              aria-pressed={boardView === "workflow"}
-              onClick={() => selectBoardView("workflow")}
-            >
-              节点模式
-            </button>
+            {SHOW_WORKFLOW_BOARD_ENTRY && (
+              <button
+                className={`view-tab${boardView === "workflow" ? " active" : ""}`}
+                type="button"
+                aria-pressed={boardView === "workflow"}
+                onClick={() => selectBoardView("workflow")}
+              >
+                节点模式
+              </button>
+            )}
           </div>
           {boardView === "issues" && <div className="toolbar-tools">
             <label className={`search-field${search ? " has-value" : ""}`} title="搜索议题 (/)" >
