@@ -69,19 +69,19 @@ If you already cloned the repository, run:
 npm run install:codex-plugin
 ```
 
-Then completely quit Codex/ChatGPT and open it in Taskboard mode:
+The installer tries to open Codex in Taskboard mode at the end. If Codex/ChatGPT is already open in normal mode, completely quit it and run:
 
 ```bash
 dashi-codex
 ```
 
-You can also run the project-local equivalent:
+Use the same command any time you want to reopen Codex with the Taskboard panel. You can also run the project-local equivalent:
 
 ```bash
 npm run open:codex-taskboard
 ```
 
-The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `taskctl` and `dashi-codex` at `~/.local/bin/`, builds the web UI, and writes macOS LaunchAgents for the local server and Codex injector. `dashi-codex` is a small shell command, not a macOS `.app`, so it avoids Gatekeeper quarantine prompts. If Codex/ChatGPT is already running in normal mode, quit it completely before running `dashi-codex`; the injector does not close existing Codex windows for you.
+The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `taskctl` and `dashi-codex` at `~/.local/bin/`, builds the web UI, writes macOS LaunchAgents for the local server and Codex injector, and then tries to open the Taskboard panel. `dashi-codex` is a small shell command, not a macOS `.app`, so it avoids Gatekeeper quarantine prompts. If Codex/ChatGPT is already running in normal mode, quit it completely before running `dashi-codex`; the injector does not close existing Codex windows for you.
 
 Keep the cloned repository in place after installing this basic local-plugin version. The installed plugin and skill live under `~/plugins/dashi-taskboard`, but the local server, injector, and `taskctl` shim still run from the cloned repository path.
 

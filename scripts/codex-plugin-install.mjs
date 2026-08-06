@@ -245,6 +245,20 @@ function installCodexPlugin(marketplaceName) {
   return { ok: true, output: result.stdout.trim() };
 }
 
+function openTaskboardPanel() {
+  const result = spawnSync(nodePath, [openScriptPath], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+  return {
+    ok: result.status === 0,
+    output: result.status === 0 ? output : null,
+    error: result.status === 0 ? null : output,
+  };
+}
+
 async function main() {
   if (process.platform === "win32") {
     await installPluginSource();
@@ -282,6 +296,7 @@ async function main() {
   const marketplaceName = await updateMarketplace();
   const codexPlugin = installCodexPlugin(marketplaceName);
   await installLaunchAgents();
+  const taskboardOpen = openTaskboardPanel();
 
   console.log(JSON.stringify({
     ok: true,
@@ -294,8 +309,11 @@ async function main() {
     taskctlPath: installedTaskctlPath,
     dashiCodexPath: installedDashiCodexPath,
     legacySkillPath: legacySkill,
+    taskboardOpen,
     serviceUrl: "http://127.0.0.1:47823",
-    next: "Quit Codex/ChatGPT completely, then run dashi-codex or npm run open:codex-taskboard.",
+    next: taskboardOpen.ok
+      ? "Taskboard mode opened. If you close Codex later, reopen it with dashi-codex."
+      : "Install completed, but Taskboard mode did not open. If Codex/ChatGPT is open in normal mode, quit it completely, then run dashi-codex.",
   }, null, 2));
 }
 
