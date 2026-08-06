@@ -173,7 +173,7 @@ function injectorRecommendation(state) {
     return "Run dashi-codex or npm run open:codex-taskboard to attach and open the Taskboard panel.";
   }
   if (state === "waiting-for-codex-restart") {
-    return "Codex/ChatGPT is open in normal mode. Completely quit it, then run dashi-codex or npm run open:codex-taskboard.";
+    return "Codex/ChatGPT is open in normal mode. Run dashi-codex or npm run open:codex-taskboard to reopen it in Taskboard mode.";
   }
   return "Run dashi-codex or npm run open:codex-taskboard to launch Codex with the Taskboard panel.";
 }
@@ -190,7 +190,7 @@ async function main() {
   const codexPlugin = codexPluginStatus();
   const taskctl = taskctlStatus();
   const dashiCodex = await dashiCodexStatus();
-  const injectorState = injectorProcesses.length > 0
+  const injectorState = injectorProcesses.length > 0 && debuggablePorts.length > 0
     ? "injected-or-injecting"
     : debuggablePorts.length > 0
       ? "debuggable-codex-detected"

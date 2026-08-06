@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const injectorLabel = "com.dashi-taskboard.codex-injector";
 const candidatePorts = [9229, 9231];
+const appPath = "/Applications/ChatGPT.app";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -63,6 +64,15 @@ async function waitForDebuggableCodex(timeoutMs) {
   return null;
 }
 
+async function waitForNoMainCodex(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (mainCodexProcesses().length === 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
 function launchAgentInstalled() {
   const result = spawnSync("/bin/launchctl", [
     "print",
@@ -74,6 +84,47 @@ function launchAgentInstalled() {
   return result.status === 0;
 }
 
+function quitCodexApps() {
+  for (const appName of ["ChatGPT", "Codex"]) {
+    spawnSync("/usr/bin/osascript", [
+      "-e",
+      `tell application ${JSON.stringify(appName)} to quit`,
+    ], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+  }
+}
+
+function runPanelOpen(port) {
+  run(process.execPath, [
+    path.join(projectRoot, "scripts", "codex-injector.mjs"),
+    "--port",
+    String(port),
+    "--open",
+  ], { stdio: "inherit" });
+}
+
+function runPanelDaemon(port) {
+  run(process.execPath, [
+    path.join(projectRoot, "scripts", "codex-injector.mjs"),
+    "--daemon",
+    "--open",
+    "--port",
+    String(port),
+  ], { stdio: "inherit" });
+}
+
+function launchTaskboardCodex(port) {
+  run("/usr/bin/open", [
+    "-a",
+    appPath,
+    "--args",
+    `--remote-debugging-port=${port}`,
+    `--remote-allow-origins=http://127.0.0.1:${port}`,
+  ]);
+}
+
 async function openTaskboardCodex() {
   if (process.platform !== "darwin") {
     throw new Error("open:codex-taskboard currently supports the macOS installed path.");
@@ -81,23 +132,28 @@ async function openTaskboardCodex() {
 
   const existingPort = await debuggableCodexPort();
   if (existingPort) {
-    run(process.execPath, [
-      path.join(projectRoot, "scripts", "codex-injector.mjs"),
-      "--daemon",
-      "--open",
-      "--port",
-      String(existingPort),
-    ], { stdio: "inherit" });
-    console.log(JSON.stringify({ ok: true, action: "attached", port: existingPort }, null, 2));
+    runPanelOpen(existingPort);
+    runPanelDaemon(existingPort);
+    console.log(JSON.stringify({ ok: true, action: "opened-and-attached", port: existingPort }, null, 2));
     return;
   }
 
   const runningCodex = mainCodexProcesses();
   if (runningCodex.length > 0) {
-    throw new Error([
-      "Codex/ChatGPT is already open in normal mode, so the Taskboard panel cannot be injected.",
-      "Completely quit Codex/ChatGPT first, then run dashi-codex or npm run open:codex-taskboard again.",
-    ].join("\n"));
+    quitCodexApps();
+    if (!(await waitForNoMainCodex(20_000))) {
+      throw new Error("Codex/ChatGPT is still running. Completely quit it, then run dashi-codex again.");
+    }
+    const port = 9229;
+    launchTaskboardCodex(port);
+    const launchedPort = await waitForDebuggableCodex(45_000);
+    if (!launchedPort) {
+      throw new Error("Timed out reopening Codex in Taskboard mode. Run npm run doctor:codex-plugin for details.");
+    }
+    runPanelOpen(launchedPort);
+    runPanelDaemon(launchedPort);
+    console.log(JSON.stringify({ ok: true, action: "restarted-in-taskboard-mode", port: launchedPort }, null, 2));
+    return;
   }
 
   if (!launchAgentInstalled()) {
@@ -109,13 +165,8 @@ async function openTaskboardCodex() {
   if (!launchedPort) {
     throw new Error("Timed out waiting for Codex to open in Taskboard mode. Run npm run doctor:codex-plugin for details.");
   }
-  run(process.execPath, [
-    path.join(projectRoot, "scripts", "codex-injector.mjs"),
-    "--daemon",
-    "--open",
-    "--port",
-    String(launchedPort),
-  ], { stdio: "inherit" });
+  runPanelOpen(launchedPort);
+  runPanelDaemon(launchedPort);
   console.log(JSON.stringify({ ok: true, action: "launched", port: launchedPort }, null, 2));
 }
 
