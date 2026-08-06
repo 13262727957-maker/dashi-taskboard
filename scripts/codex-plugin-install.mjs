@@ -18,11 +18,13 @@ const serverPlistPath = path.join(launchAgentsDir, "com.dashi-taskboard.server.p
 const injectorPlistPath = path.join(launchAgentsDir, "com.dashi-taskboard.codex-injector.plist");
 const userBinDir = path.join(os.homedir(), ".local", "bin");
 const taskctlPath = path.join(userBinDir, "taskctl");
+const dashiCodexPath = path.join(userBinDir, "dashi-codex");
 const codexSkillsDir = path.join(os.homedir(), ".codex", "skills");
 const legacySkillPath = path.join(codexSkillsDir, "manage-taskboard");
 const nodePath = process.execPath;
 const managedMarker = "Managed by dashi-taskboard Codex plugin installer.";
 const taskctlCliPath = path.join(projectRoot, "cli", "taskctl.mjs");
+const openScriptPath = path.join(projectRoot, "scripts", "codex-plugin-open.mjs");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -135,6 +137,24 @@ exec ${JSON.stringify(nodePath)} ${JSON.stringify(taskctlCliPath)} "$@"
   return taskctlPath;
 }
 
+async function installDashiCodexShim() {
+  await mkdir(userBinDir, { recursive: true });
+  const shim = `#!/bin/sh
+# ${managedMarker}
+exec ${JSON.stringify(nodePath)} ${JSON.stringify(openScriptPath)} "$@"
+`;
+  try {
+    const existing = await readFile(dashiCodexPath, "utf8");
+    if (!existing.includes(managedMarker) && !existing.includes(openScriptPath)) {
+      throw new Error(`${dashiCodexPath} already exists and is not managed by this installer. Move it away before installing.`);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  await writeFile(dashiCodexPath, shim, { mode: 0o755 });
+  return dashiCodexPath;
+}
+
 async function updateMarketplace() {
   const marketplace = await readJson(marketplacePath, {
     name: "personal",
@@ -230,6 +250,7 @@ async function main() {
     await installPluginSource();
     const legacySkill = await installLegacySkillLink();
     const installedTaskctlPath = await installTaskctlShim();
+    const installedDashiCodexPath = await installDashiCodexShim();
     const marketplaceName = await updateMarketplace();
     const codexPlugin = installCodexPlugin(marketplaceName);
     console.log(JSON.stringify({
@@ -240,9 +261,10 @@ async function main() {
       marketplaceName,
       codexPlugin,
       taskctlPath: installedTaskctlPath,
+      dashiCodexPath: installedDashiCodexPath,
       legacySkillPath: legacySkill,
       note: "Windows service startup entry is reserved; run npm start and npm run codex:inject manually for now.",
-      next: "On macOS, quit Codex/ChatGPT completely and run npm run open:codex-taskboard.",
+      next: "On macOS, quit Codex/ChatGPT completely and run dashi-codex or npm run open:codex-taskboard.",
     }, null, 2));
     return;
   }
@@ -256,6 +278,7 @@ async function main() {
   await installPluginSource();
   const legacySkill = await installLegacySkillLink();
   const installedTaskctlPath = await installTaskctlShim();
+  const installedDashiCodexPath = await installDashiCodexShim();
   const marketplaceName = await updateMarketplace();
   const codexPlugin = installCodexPlugin(marketplaceName);
   await installLaunchAgents();
@@ -269,9 +292,10 @@ async function main() {
     injectorPlistPath,
     codexPlugin,
     taskctlPath: installedTaskctlPath,
+    dashiCodexPath: installedDashiCodexPath,
     legacySkillPath: legacySkill,
     serviceUrl: "http://127.0.0.1:47823",
-    next: "Quit Codex/ChatGPT completely, then run npm run open:codex-taskboard.",
+    next: "Quit Codex/ChatGPT completely, then run dashi-codex or npm run open:codex-taskboard.",
   }, null, 2));
 }
 

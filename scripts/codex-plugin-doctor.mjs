@@ -13,6 +13,7 @@ const marketplacePath = path.join(os.homedir(), ".agents", "plugins", "marketpla
 const databasePath = path.join(projectRoot, ".data", "taskboard.sqlite");
 const serviceUrl = "http://127.0.0.1:47823";
 const taskctlPath = path.join(os.homedir(), ".local", "bin", "taskctl");
+const dashiCodexPath = path.join(os.homedir(), ".local", "bin", "dashi-codex");
 const legacySkillPath = path.join(os.homedir(), ".codex", "skills", "manage-taskboard");
 
 async function exists(file) {
@@ -157,17 +158,24 @@ function taskctlStatus() {
   };
 }
 
+async function dashiCodexStatus() {
+  return {
+    path: dashiCodexPath,
+    exists: await exists(dashiCodexPath),
+  };
+}
+
 function injectorRecommendation(state) {
   if (state === "injected-or-injecting") {
     return "Taskboard panel injection is active or in progress.";
   }
   if (state === "debuggable-codex-detected") {
-    return "Run npm run open:codex-taskboard to attach and open the Taskboard panel.";
+    return "Run dashi-codex or npm run open:codex-taskboard to attach and open the Taskboard panel.";
   }
   if (state === "waiting-for-codex-restart") {
-    return "Codex/ChatGPT is open in normal mode. Completely quit it, then run npm run open:codex-taskboard.";
+    return "Codex/ChatGPT is open in normal mode. Completely quit it, then run dashi-codex or npm run open:codex-taskboard.";
   }
-  return "Run npm run open:codex-taskboard to launch Codex with the Taskboard panel.";
+  return "Run dashi-codex or npm run open:codex-taskboard to launch Codex with the Taskboard panel.";
 }
 
 async function main() {
@@ -181,6 +189,7 @@ async function main() {
   const data = await taskSummary();
   const codexPlugin = codexPluginStatus();
   const taskctl = taskctlStatus();
+  const dashiCodex = await dashiCodexStatus();
   const injectorState = injectorProcesses.length > 0
     ? "injected-or-injecting"
     : debuggablePorts.length > 0
@@ -204,6 +213,7 @@ async function main() {
     },
     codexPlugin,
     taskctl,
+    dashiCodex,
     launchAgents: {
       server: launchctlPrint("com.dashi-taskboard.server"),
       injector: launchctlPrint("com.dashi-taskboard.codex-injector"),
@@ -230,6 +240,7 @@ async function main() {
     && checks.marketplace.registered
     && checks.codexPlugin.ok
     && checks.taskctl.ok
+    && checks.dashiCodex.exists
     && checks.service.status === "ok"
     && checks.database.exists;
   console.log(JSON.stringify({ ok, checks }, null, 2));

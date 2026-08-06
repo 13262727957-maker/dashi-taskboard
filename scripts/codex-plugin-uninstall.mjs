@@ -9,6 +9,7 @@ const pluginName = "dashi-taskboard";
 const pluginInstallPath = path.join(os.homedir(), "plugins", pluginName);
 const marketplacePath = path.join(os.homedir(), ".agents", "plugins", "marketplace.json");
 const taskctlPath = path.join(os.homedir(), ".local", "bin", "taskctl");
+const dashiCodexPath = path.join(os.homedir(), ".local", "bin", "dashi-codex");
 const legacySkillPath = path.join(os.homedir(), ".codex", "skills", "manage-taskboard");
 const launchAgentsDir = path.join(os.homedir(), "Library", "LaunchAgents");
 const plists = [
@@ -17,6 +18,7 @@ const plists = [
 ];
 const managedMarker = "Managed by dashi-taskboard Codex plugin installer.";
 const taskctlCliSuffix = path.join("dashi-taskboard", "cli", "taskctl.mjs");
+const openScriptSuffix = path.join("dashi-taskboard", "scripts", "codex-plugin-open.mjs");
 
 function launchctl(args) {
   return spawnSync("/bin/launchctl", args, {
@@ -71,6 +73,23 @@ async function removeManagedTaskctlShim() {
   return { removed: true };
 }
 
+async function removeManagedDashiCodexShim() {
+  let existing;
+  try {
+    existing = await readFile(dashiCodexPath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return { removed: false, reason: "missing" };
+    throw error;
+  }
+  if (!existing.includes(managedMarker)) {
+    if (!existing.includes(openScriptSuffix)) {
+      return { removed: false, reason: "not-managed" };
+    }
+  }
+  await rm(dashiCodexPath, { force: true });
+  return { removed: true };
+}
+
 async function removeManagedLegacySkillLink() {
   let existing;
   try {
@@ -102,6 +121,7 @@ async function main() {
   }
   const marketplaceUpdated = await removeMarketplaceEntry();
   const removedTaskctl = await removeManagedTaskctlShim();
+  const removedDashiCodex = await removeManagedDashiCodexShim();
   const removedLegacySkill = await removeManagedLegacySkillLink();
   await rm(pluginInstallPath, { recursive: true, force: true });
   console.log(JSON.stringify({
@@ -111,6 +131,10 @@ async function main() {
     taskctl: {
       path: taskctlPath,
       ...removedTaskctl,
+    },
+    dashiCodex: {
+      path: dashiCodexPath,
+      ...removedDashiCodex,
     },
     legacySkill: {
       path: legacySkillPath,

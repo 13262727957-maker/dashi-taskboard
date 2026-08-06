@@ -96,7 +96,7 @@ async function openTaskboardCodex() {
   if (runningCodex.length > 0) {
     throw new Error([
       "Codex/ChatGPT is already open in normal mode, so the Taskboard panel cannot be injected.",
-      "Completely quit Codex/ChatGPT first, then run npm run open:codex-taskboard again.",
+      "Completely quit Codex/ChatGPT first, then run dashi-codex or npm run open:codex-taskboard again.",
     ].join("\n"));
   }
 

@@ -72,10 +72,16 @@ npm run install:codex-plugin
 Then completely quit Codex/ChatGPT and open it in Taskboard mode:
 
 ```bash
+dashi-codex
+```
+
+You can also run the project-local equivalent:
+
+```bash
 npm run open:codex-taskboard
 ```
 
-The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `taskctl` at `~/.local/bin/taskctl`, builds the web UI, and writes macOS LaunchAgents for the local server and Codex injector. If Codex/ChatGPT is already running in normal mode, quit it completely before running `npm run open:codex-taskboard`; the injector does not close existing Codex windows for you.
+The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `taskctl` and `dashi-codex` at `~/.local/bin/`, builds the web UI, and writes macOS LaunchAgents for the local server and Codex injector. `dashi-codex` is a small shell command, not a macOS `.app`, so it avoids Gatekeeper quarantine prompts. If Codex/ChatGPT is already running in normal mode, quit it completely before running `dashi-codex`; the injector does not close existing Codex windows for you.
 
 Keep the cloned repository in place after installing this basic local-plugin version. The installed plugin and skill live under `~/plugins/dashi-taskboard`, but the local server, injector, and `taskctl` shim still run from the cloned repository path.
 
@@ -101,7 +107,7 @@ npm run verify:codex-panel
 
 This opens the injected Taskboard panel and writes `.data/codex-taskboard-panel-proof.png`.
 
-Uninstall the local plugin, Codex plugin state, managed skill link, `taskctl` shim, and LaunchAgents with:
+Uninstall the local plugin, Codex plugin state, managed skill link, `taskctl`/`dashi-codex` shims, and LaunchAgents with:
 
 ```bash
 npm run uninstall:codex-plugin
