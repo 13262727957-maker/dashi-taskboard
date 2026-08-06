@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { lstat, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const pluginName = "dashi-taskboard";
 const pluginInstallPath = path.join(os.homedir(), "plugins", pluginName);
@@ -19,12 +20,57 @@ const plists = [
 const managedMarker = "Managed by dashi-taskboard Codex plugin installer.";
 const taskctlCliSuffix = path.join("dashi-taskboard", "cli", "taskctl.mjs");
 const openScriptSuffix = path.join("dashi-taskboard", "scripts", "codex-plugin-open.mjs");
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function launchctl(args) {
   return spawnSync("/bin/launchctl", args, {
     encoding: "utf8",
     stdio: "pipe",
   });
+}
+
+function managedRuntimePids() {
+  if (process.platform !== "darwin") return [];
+  const result = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (result.status !== 0) return [];
+  const managedScripts = [
+    path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"),
+    path.join(projectRoot, "scripts", "codex-injector.mjs"),
+    path.join(projectRoot, "server", "index.mjs"),
+  ];
+  return result.stdout.split("\n")
+    .map((line) => line.trim().match(/^(\d+)\s+(.+)$/))
+    .filter(Boolean)
+    .map((match) => ({ pid: Number(match[1]), command: match[2] }))
+    .filter(({ pid, command }) => (
+      pid !== process.pid
+      && managedScripts.some((script) => command.includes(script))
+    ))
+    .map(({ pid }) => pid);
+}
+
+async function stopManagedRuntimeProcesses() {
+  const pids = managedRuntimePids();
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  }
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const remaining = managedRuntimePids().filter((pid) => pids.includes(pid));
+    if (remaining.length === 0) return pids;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  for (const pid of managedRuntimePids().filter((candidate) => pids.includes(candidate))) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+  return pids;
 }
 
 async function removeMarketplaceEntry() {
@@ -119,6 +165,7 @@ async function main() {
       await rm(file, { force: true });
     }
   }
+  const stoppedRuntimePids = await stopManagedRuntimeProcesses();
   const marketplaceUpdated = await removeMarketplaceEntry();
   const removedTaskctl = await removeManagedTaskctlShim();
   const removedDashiCodex = await removeManagedDashiCodexShim();
@@ -140,6 +187,7 @@ async function main() {
       path: legacySkillPath,
       ...removedLegacySkill,
     },
+    stoppedRuntimePids,
     marketplaceUpdated,
     note: "Restart Codex to clear any enabled plugin UI state.",
   }, null, 2));

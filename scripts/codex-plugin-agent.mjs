@@ -8,6 +8,7 @@ const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(scriptPath), "..");
 const nodePath = process.execPath;
 const serviceUrl = `http://127.0.0.1:${process.env.CODEX_TASKBOARD_PORT || "47823"}`;
+const injectorUsesExternalServer = process.env.DASHI_TASKBOARD_EXTERNAL_SERVER === "1";
 let stopping = false;
 let child = null;
 
@@ -93,14 +94,25 @@ async function runInjectorAgent() {
       continue;
     }
     if (await hasDebuggableCodex()) {
-      spawnNode([path.join(projectRoot, "scripts", "codex-injector.mjs"), "--daemon", "--open"]);
+      spawnNode([
+        path.join(projectRoot, "scripts", "codex-injector.mjs"),
+        "--daemon",
+        "--open",
+        ...(injectorUsesExternalServer ? ["--no-server"] : []),
+      ]);
       await waitForChildExit();
       await sleep(5000);
       continue;
     }
     if (!codexIsRunning() && !launchedCodexThisRun) {
       launchedCodexThisRun = true;
-      spawnNode([path.join(projectRoot, "scripts", "codex-injector.mjs"), "--launch", "--watch", "--open"]);
+      spawnNode([
+        path.join(projectRoot, "scripts", "codex-injector.mjs"),
+        "--launch",
+        "--watch",
+        "--open",
+        ...(injectorUsesExternalServer ? ["--no-server"] : []),
+      ]);
       await waitForChildExit();
       await sleep(3000);
       continue;

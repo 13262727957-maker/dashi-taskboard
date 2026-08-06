@@ -7,8 +7,10 @@ import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const injectorLabel = "com.dashi-taskboard.codex-injector";
+const serverLabel = "com.dashi-taskboard.server";
 const candidatePorts = [9229, 9231];
 const appPath = "/Applications/ChatGPT.app";
+const taskboardHealthUrl = "http://127.0.0.1:47823/health";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -73,15 +75,46 @@ async function waitForNoMainCodex(timeoutMs) {
   return false;
 }
 
-function launchAgentInstalled() {
+async function taskboardHealthy() {
+  try {
+    const response = await fetch(taskboardHealthUrl, {
+      signal: AbortSignal.timeout(1000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForTaskboard(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await taskboardHealthy()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return false;
+}
+
+function launchAgentInstalled(label) {
   const result = spawnSync("/bin/launchctl", [
     "print",
-    `gui/${process.getuid()}/${injectorLabel}`,
+    `gui/${process.getuid()}/${label}`,
   ], {
     encoding: "utf8",
     stdio: "pipe",
   });
   return result.status === 0;
+}
+
+async function ensureTaskboardService() {
+  if (await taskboardHealthy()) return;
+  if (!launchAgentInstalled(serverLabel)) {
+    throw new Error("The Dashi Taskboard server LaunchAgent is not installed. Run npm run install:codex-plugin first.");
+  }
+  run("/bin/launchctl", ["kickstart", "-k", `gui/${process.getuid()}/${serverLabel}`]);
+  if (!(await waitForTaskboard(15_000))) {
+    throw new Error("Timed out waiting for the Dashi Taskboard server. Run npm run doctor:codex-plugin for details.");
+  }
 }
 
 function quitCodexApps() {
@@ -102,6 +135,7 @@ function runPanelOpen(port) {
     "--port",
     String(port),
     "--open",
+    "--no-server",
   ], { stdio: "inherit" });
 }
 
@@ -112,6 +146,7 @@ function runPanelDaemon(port) {
     "--open",
     "--port",
     String(port),
+    "--no-server",
   ], { stdio: "inherit" });
 }
 
@@ -129,6 +164,7 @@ async function openTaskboardCodex() {
   if (process.platform !== "darwin") {
     throw new Error("open:codex-taskboard currently supports the macOS installed path.");
   }
+  await ensureTaskboardService();
 
   const existingPort = await debuggableCodexPort();
   if (existingPort) {
@@ -156,7 +192,7 @@ async function openTaskboardCodex() {
     return;
   }
 
-  if (!launchAgentInstalled()) {
+  if (!launchAgentInstalled(injectorLabel)) {
     throw new Error("The Dashi Taskboard injector LaunchAgent is not installed. Run npm run install:codex-plugin first.");
   }
 

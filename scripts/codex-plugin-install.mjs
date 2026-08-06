@@ -39,6 +39,37 @@ function run(command, args, options = {}) {
   return typeof result.stdout === "string" ? result.stdout.trim() : "";
 }
 
+function executablePath(command) {
+  const result = spawnSync("/usr/bin/env", ["which", command], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function requiredExecutablePath(command) {
+  const resolved = executablePath(command);
+  if (!resolved) {
+    throw new Error(`Cannot find ${command}. Make sure it is installed and available in your terminal PATH.`);
+  }
+  return resolved;
+}
+
+function launchAgentPath(codexExecutable) {
+  const entries = [
+    userBinDir,
+    path.dirname(codexExecutable),
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ];
+  return [...new Set(entries.filter(Boolean))].join(":");
+}
+
 function xml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -194,9 +225,53 @@ function launchctl(args) {
   });
 }
 
-async function installLaunchAgents() {
+function managedRuntimePids() {
+  const result = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (result.status !== 0) return [];
+  const managedScripts = [
+    path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"),
+    path.join(projectRoot, "scripts", "codex-injector.mjs"),
+    path.join(projectRoot, "server", "index.mjs"),
+  ];
+  return result.stdout.split("\n")
+    .map((line) => line.trim().match(/^(\d+)\s+(.+)$/))
+    .filter(Boolean)
+    .map((match) => ({ pid: Number(match[1]), command: match[2] }))
+    .filter(({ pid, command }) => (
+      pid !== process.pid
+      && managedScripts.some((script) => command.includes(script))
+    ))
+    .map(({ pid }) => pid);
+}
+
+async function stopManagedRuntimeProcesses() {
+  const pids = managedRuntimePids();
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  }
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const remaining = managedRuntimePids().filter((pid) => pids.includes(pid));
+    if (remaining.length === 0) return pids;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  for (const pid of managedRuntimePids().filter((candidate) => pids.includes(candidate))) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+  return pids;
+}
+
+async function installLaunchAgents(codexExecutable) {
   await mkdir(path.join(projectRoot, ".data"), { recursive: true });
   await mkdir(launchAgentsDir, { recursive: true });
+  const pathValue = launchAgentPath(codexExecutable);
   await writeFile(serverPlistPath, plist(
     "com.dashi-taskboard.server",
     [nodePath, path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"), "server"],
@@ -204,7 +279,8 @@ async function installLaunchAgents() {
       CODEX_TASKBOARD_HOST: "127.0.0.1",
       CODEX_TASKBOARD_PORT: "47823",
       CODEX_TASKBOARD_DATA_DIR: path.join(projectRoot, ".data"),
-      PATH: `${userBinDir}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+      CODEX_EXECUTABLE: codexExecutable,
+      PATH: pathValue,
     },
   ));
   await writeFile(injectorPlistPath, plist(
@@ -217,13 +293,18 @@ async function installLaunchAgents() {
     {
       CODEX_TASKBOARD_HOST: "127.0.0.1",
       CODEX_TASKBOARD_PORT: "47823",
-      PATH: `${userBinDir}:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+      CODEX_EXECUTABLE: codexExecutable,
+      DASHI_TASKBOARD_EXTERNAL_SERVER: "1",
+      PATH: pathValue,
     },
   ));
 
   const guiTarget = `gui/${process.getuid()}`;
   for (const file of [serverPlistPath, injectorPlistPath]) {
     launchctl(["bootout", guiTarget, file]);
+  }
+  await stopManagedRuntimeProcesses();
+  for (const file of [serverPlistPath, injectorPlistPath]) {
     const result = launchctl(["bootstrap", guiTarget, file]);
     if (result.status !== 0) {
       throw new Error(`launchctl bootstrap failed for ${file}\n${result.stderr || result.stdout}`);
@@ -232,8 +313,8 @@ async function installLaunchAgents() {
   }
 }
 
-function installCodexPlugin(marketplaceName) {
-  const result = spawnSync("codex", ["plugin", "add", `${pluginName}@${marketplaceName}`], {
+function installCodexPlugin(marketplaceName, codexExecutable) {
+  const result = spawnSync(codexExecutable, ["plugin", "add", `${pluginName}@${marketplaceName}`], {
     cwd: projectRoot,
     encoding: "utf8",
     stdio: "pipe",
@@ -261,12 +342,13 @@ function openTaskboardPanel() {
 
 async function main() {
   if (process.platform === "win32") {
+    const codexExecutable = requiredExecutablePath("codex");
     await installPluginSource();
     const legacySkill = await installLegacySkillLink();
     const installedTaskctlPath = await installTaskctlShim();
     const installedDashiCodexPath = await installDashiCodexShim();
     const marketplaceName = await updateMarketplace();
-    const codexPlugin = installCodexPlugin(marketplaceName);
+    const codexPlugin = installCodexPlugin(marketplaceName, codexExecutable);
     console.log(JSON.stringify({
       ok: true,
       platform: "win32",
@@ -289,13 +371,14 @@ async function main() {
 
   run("npm", ["install"], { stdio: "inherit" });
   run("npm", ["run", "build:web"], { stdio: "inherit" });
+  const codexExecutable = requiredExecutablePath("codex");
   await installPluginSource();
   const legacySkill = await installLegacySkillLink();
   const installedTaskctlPath = await installTaskctlShim();
   const installedDashiCodexPath = await installDashiCodexShim();
   const marketplaceName = await updateMarketplace();
-  const codexPlugin = installCodexPlugin(marketplaceName);
-  await installLaunchAgents();
+  const codexPlugin = installCodexPlugin(marketplaceName, codexExecutable);
+  await installLaunchAgents(codexExecutable);
   const taskboardOpen = openTaskboardPanel();
 
   console.log(JSON.stringify({

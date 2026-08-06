@@ -57,6 +57,7 @@ function parseArgs(argv) {
     attachExisting: false,
     startupToken: null,
     daemon: false,
+    noServer: false,
     screenshot: null,
     appPath: "/Applications/ChatGPT.app",
   };
@@ -76,6 +77,7 @@ function parseArgs(argv) {
       }
     }
     else if (arg === "--daemon") options.daemon = true;
+    else if (arg === "--no-server") options.noServer = true;
     else if (arg === "--port") {
       options.port = Number(argv[++index]);
       options.portExplicit = true;
@@ -182,6 +184,20 @@ function createTaskboardSupervisor({ detached }) {
   }
 
   return { ensure, stop };
+}
+
+function createExternalTaskboardSupervisor() {
+  async function ensure() {
+    if (await isReachable(taskboardHealthUrl)) {
+      return { status: "ok", restarted: false };
+    }
+    throw new Error("Taskboard service is not reachable. Run npm run install:codex-plugin to restore the server LaunchAgent.");
+  }
+
+  return {
+    ensure,
+    stop() {},
+  };
 }
 
 function codexIsRunning() {
@@ -366,13 +382,22 @@ function startResidentInjector(
   shouldOpen,
   attachExisting = false,
   startupToken = null,
+  noServer = false,
 ) {
-  const [existingPid] = residentInjectorPids(port);
-  if (existingPid) return { pid: existingPid, started: false };
+  const existingPids = residentInjectorPids(port);
+  if (existingPids.length > 0) {
+    for (const duplicatePid of existingPids.slice(1)) {
+      try {
+        process.kill(duplicatePid, "SIGTERM");
+      } catch {}
+    }
+    return { pid: existingPids[0], started: false, stoppedDuplicates: existingPids.slice(1) };
+  }
   const args = [injectorPath, "--watch", "--port", String(port)];
   if (shouldOpen) args.push("--open");
   if (attachExisting) args.push("--attach-existing");
   if (startupToken) args.push("--startup-token", startupToken);
+  if (noServer) args.push("--no-server");
   const child = spawn(process.execPath, args, {
     cwd: projectRoot,
     detached: true,
@@ -1214,7 +1239,7 @@ async function main() {
       if (!activePort) throw new Error("No debuggable Codex window found");
       port = activePort;
     }
-    console.log(JSON.stringify({ launcher: startResidentInjector(port, options.open), port }, null, 2));
+    console.log(JSON.stringify({ launcher: startResidentInjector(port, options.open, false, null, options.noServer), port }, null, 2));
     return;
   }
 
@@ -1241,9 +1266,27 @@ async function main() {
   }
 
   let codexProcess = null;
-  const supervisor = createTaskboardSupervisor({ detached: !options.watch });
+  const supervisor = options.noServer
+    ? createExternalTaskboardSupervisor()
+    : createTaskboardSupervisor({ detached: !options.watch });
 
   try {
+    if (options.watch && !options.attachExisting && !options.startupToken) {
+      const existingPids = residentInjectorPids(options.port);
+      if (existingPids.length > 0) {
+        if (options.launch) {
+          for (const pid of existingPids) {
+            try {
+              await stopResidentInjector(pid);
+            } catch {}
+          }
+        } else {
+          console.log(JSON.stringify({ resident: { pid: existingPids[0], reused: true }, port: options.port }, null, 2));
+          return;
+        }
+      }
+    }
+
     const cdpReachable = await isReachable(cdpVersionUrl);
     if (!cdpReachable) {
       if (!options.launch) {
