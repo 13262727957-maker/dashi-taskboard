@@ -55,6 +55,54 @@ ln -s /absolute/path/to/codex-taskboard/skills/manage-taskboard \
 
 The Skill teaches Codex to inspect an issue, move it to `in_progress`, use optimistic versions, verify the work, and then move it to `in_review`; it moves the issue to `done` only after the user explicitly confirms acceptance or asks to mark it complete.
 
+## Install as a local Codex plugin
+
+From a terminal, run one install command:
+
+```bash
+git clone <repo-url> dashi-taskboard && cd dashi-taskboard && npm run install:codex-plugin
+```
+
+If you already cloned the repository, run:
+
+```bash
+npm run install:codex-plugin
+```
+
+Then completely quit Codex and start it again. The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `taskctl` at `~/.local/bin/taskctl`, builds the web UI, and writes macOS LaunchAgents for the local server and Codex injector. If Codex was already running before installation, the injector waits for this full restart so it can launch Codex with the required local debugging port.
+
+Keep the cloned repository in place after installing this basic local-plugin version. The installed plugin and skill live under `~/plugins/dashi-taskboard`, but the local server, injector, and `taskctl` shim still run from the cloned repository path.
+
+The injector LaunchAgent is persistent, but it only auto-launches Codex once per agent session. If you want to fully quit Codex and keep it closed, temporarily stop just the injector:
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.dashi-taskboard.codex-injector.plist
+```
+
+Restore it later with `npm run install:codex-plugin`.
+
+Run the doctor after install or after restarting Codex:
+
+```bash
+npm run doctor:codex-plugin
+```
+
+After the full Codex restart, capture a direct panel proof:
+
+```bash
+npm run verify:codex-panel
+```
+
+This opens the injected Taskboard panel and writes `.data/codex-taskboard-panel-proof.png`.
+
+Uninstall the local plugin, Codex plugin state, managed skill link, `taskctl` shim, and LaunchAgents with:
+
+```bash
+npm run uninstall:codex-plugin
+```
+
+Windows has the same script entry points, but persistent startup is reserved for the next implementation pass; for now run `npm start` and `npm run codex:inject` manually on Windows.
+
 ## Embed in Codex
 
 ### Recommended: keep your current window and open a separate Taskboard window

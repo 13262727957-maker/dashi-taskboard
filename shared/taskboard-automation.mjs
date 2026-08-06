@@ -33,7 +33,8 @@ export function parseTaskboardAutomationHostRequest(value) {
   if (!INTERVAL_MINUTES.has(value.intervalMinutes)) return null;
   if (!isSupportedModelEffort(value.model, value.reasoningEffort)) return null;
   if (value.automationId !== undefined && !validText(value.automationId, 256)) return null;
-  if (typeof value.enabledByUser !== "boolean" || typeof value.quotaAware !== "boolean") return null;
+  if (value.enabledByUser !== undefined && typeof value.enabledByUser !== "boolean") return null;
+  if (value.quotaAware !== undefined && typeof value.quotaAware !== "boolean") return null;
 
   return {
     id: value.id,
@@ -46,8 +47,8 @@ export function parseTaskboardAutomationHostRequest(value) {
     workspacePath: value.workspacePath,
     skillPath: value.skillPath,
     ...(value.automationId === undefined ? {} : { automationId: value.automationId }),
-    enabledByUser: value.enabledByUser,
-    quotaAware: value.quotaAware,
+    ...(Object.hasOwn(value, "enabledByUser") ? { enabledByUser: value.enabledByUser } : {}),
+    ...(Object.hasOwn(value, "quotaAware") ? { quotaAware: value.quotaAware } : {}),
     intervalMinutes: value.intervalMinutes,
     model: value.model,
     reasoningEffort: value.reasoningEffort,

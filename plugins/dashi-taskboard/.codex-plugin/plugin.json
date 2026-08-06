@@ -1,0 +1,33 @@
+{
+  "name": "dashi-taskboard",
+  "version": "0.1.0",
+  "description": "Local-first Dashi Taskboard integration for Codex.",
+  "author": {
+    "name": "Dashi Taskboard"
+  },
+  "license": "MIT",
+  "keywords": [
+    "taskboard",
+    "codex",
+    "tasks"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Dashi Taskboard",
+    "shortDescription": "Manage local task cards from Codex.",
+    "longDescription": "Installs the manage-taskboard skill and pairs it with the local Dashi Taskboard service and Codex sidebar injector.",
+    "developerName": "Dashi Taskboard",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Show my current Dashi taskboard issue.",
+      "Create a Dashi task card for this request.",
+      "Move this Dashi issue through implementation."
+    ],
+    "brandColor": "#2563EB"
+  }
+}
