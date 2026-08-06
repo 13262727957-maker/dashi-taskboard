@@ -17,6 +17,7 @@
     "install:codex-plugin": "node scripts/codex-plugin-install.mjs",
     "uninstall:codex-plugin": "node scripts/codex-plugin-uninstall.mjs",
     "doctor:codex-plugin": "node scripts/codex-plugin-doctor.mjs",
+    "open:codex-taskboard": "node scripts/codex-plugin-open.mjs",
     "verify:codex-panel": "node scripts/codex-plugin-verify-panel.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:server": "node --watch server/index.mjs --dev",

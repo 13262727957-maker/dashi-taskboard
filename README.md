@@ -69,7 +69,13 @@ If you already cloned the repository, run:
 npm run install:codex-plugin
 ```
 
-Then completely quit Codex and start it again. The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `taskctl` at `~/.local/bin/taskctl`, builds the web UI, and writes macOS LaunchAgents for the local server and Codex injector. If Codex was already running before installation, the injector waits for this full restart so it can launch Codex with the required local debugging port.
+Then completely quit Codex/ChatGPT and open it in Taskboard mode:
+
+```bash
+npm run open:codex-taskboard
+```
+
+The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `taskctl` at `~/.local/bin/taskctl`, builds the web UI, and writes macOS LaunchAgents for the local server and Codex injector. If Codex/ChatGPT is already running in normal mode, quit it completely before running `npm run open:codex-taskboard`; the injector does not close existing Codex windows for you.
 
 Keep the cloned repository in place after installing this basic local-plugin version. The installed plugin and skill live under `~/plugins/dashi-taskboard`, but the local server, injector, and `taskctl` shim still run from the cloned repository path.
 
@@ -81,7 +87,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.dashi-taskboard.codex-
 
 Restore it later with `npm run install:codex-plugin`.
 
-Run the doctor after install or after restarting Codex:
+Run the doctor after install or after opening Codex in Taskboard mode:
 
 ```bash
 npm run doctor:codex-plugin

@@ -242,6 +242,7 @@ async function main() {
       taskctlPath: installedTaskctlPath,
       legacySkillPath: legacySkill,
       note: "Windows service startup entry is reserved; run npm start and npm run codex:inject manually for now.",
+      next: "On macOS, quit Codex/ChatGPT completely and run npm run open:codex-taskboard.",
     }, null, 2));
     return;
   }
@@ -270,7 +271,7 @@ async function main() {
     taskctlPath: installedTaskctlPath,
     legacySkillPath: legacySkill,
     serviceUrl: "http://127.0.0.1:47823",
-    next: "Restart Codex, then enable Dashi Taskboard in Codex Plugins.",
+    next: "Quit Codex/ChatGPT completely, then run npm run open:codex-taskboard.",
   }, null, 2));
 }
 

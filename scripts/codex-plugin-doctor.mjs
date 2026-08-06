@@ -157,6 +157,19 @@ function taskctlStatus() {
   };
 }
 
+function injectorRecommendation(state) {
+  if (state === "injected-or-injecting") {
+    return "Taskboard panel injection is active or in progress.";
+  }
+  if (state === "debuggable-codex-detected") {
+    return "Run npm run open:codex-taskboard to attach and open the Taskboard panel.";
+  }
+  if (state === "waiting-for-codex-restart") {
+    return "Codex/ChatGPT is open in normal mode. Completely quit it, then run npm run open:codex-taskboard.";
+  }
+  return "Run npm run open:codex-taskboard to launch Codex with the Taskboard panel.";
+}
+
 async function main() {
   const marketplace = await jsonFile(marketplacePath);
   const marketplaceEntry = marketplace?.plugins?.find((plugin) => plugin?.name === pluginName);
@@ -168,6 +181,13 @@ async function main() {
   const data = await taskSummary();
   const codexPlugin = codexPluginStatus();
   const taskctl = taskctlStatus();
+  const injectorState = injectorProcesses.length > 0
+    ? "injected-or-injecting"
+    : debuggablePorts.length > 0
+      ? "debuggable-codex-detected"
+      : runningCodexProcesses.length > 0
+        ? "waiting-for-codex-restart"
+        : "will-launch-codex";
   const checks = {
     plugin: {
       path: pluginInstallPath,
@@ -199,13 +219,8 @@ async function main() {
       injectorProcesses,
       codexProcesses: runningCodexProcesses,
       debuggablePorts,
-      state: injectorProcesses.length > 0
-        ? "injected-or-injecting"
-        : debuggablePorts.length > 0
-          ? "debuggable-codex-detected"
-          : runningCodexProcesses.length > 0
-            ? "waiting-for-codex-restart"
-            : "will-launch-codex",
+      state: injectorState,
+      recommendation: injectorRecommendation(injectorState),
     },
     data,
   };
