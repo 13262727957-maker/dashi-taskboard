@@ -1,20 +1,20 @@
 # taskctl CLI
 
-## Dashi Taskboard panel command
+## CJ Task Dashboard panel command
 
-If `dashi-taskboard` is not installed, bootstrap the project first:
+If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard first:
 
 ```bash
 mkdir -p ~/Desktop/Projects
 cd ~/Desktop/Projects
-git clone https://github.com/13262727957-maker/dashi-taskboard.git
-cd dashi-taskboard
+git clone https://git.caijai.com/aiplus/cjtaskdashboard.git
+cd cjtaskdashboard
 npm run install:codex-plugin
 dashi-taskboard doctor
 dashi-taskboard open
 ```
 
-If `~/Desktop/Projects/dashi-taskboard` already exists, pull the latest code there and rerun `npm run install:codex-plugin`.
+If `~/Desktop/Projects/cjtaskdashboard` already exists, pull the latest code there and rerun `npm run install:codex-plugin`.
 
 Use the generic `dashi-taskboard` command for panel and local service operations:
 
@@ -28,7 +28,7 @@ dashi-taskboard start
 
 ## taskctl commands
 
-`taskctl` emits JSON. Add `--json` when making the output contract explicit. The Dashi Taskboard plugin installer creates a user-level command at `~/.local/bin/taskctl`; if `taskctl` is not on PATH, call that absolute path.
+`taskctl` emits JSON. Add `--json` when making the output contract explicit. The CJ Task Dashboard plugin installer creates a user-level command at `~/.local/bin/taskctl`; if `taskctl` is not on PATH, call that absolute path.
 
 ## Context and projects
 

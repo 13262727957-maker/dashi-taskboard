@@ -47,7 +47,8 @@ test("the taskboard skill creates cards before implementation for planning reque
 test("the taskboard skill can bootstrap install then open the standalone panel", () => {
   for (const source of [skillSource, cliReference]) {
     assert.match(source, /command -v dashi-taskboard|dashi-taskboard` is not installed/i);
-    assert.match(source, /git clone https:\/\/github\.com\/13262727957-maker\/dashi-taskboard\.git/);
+    assert.match(source, /git clone https:\/\/git\.caijai\.com\/aiplus\/cjtaskdashboard\.git/);
+    assert.match(source, /CJ Task Dashboard/);
     assert.match(source, /npm run install:codex-plugin/);
     assert.match(source, /dashi-taskboard doctor/);
     assert.match(source, /dashi-taskboard open/);

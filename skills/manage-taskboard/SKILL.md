@@ -1,21 +1,21 @@
 ---
 name: manage-taskboard
-description: Install and use Dashi Taskboard through local CLI tools. Use when an AI agent needs to clone/install Dashi Taskboard, open the standalone Dashi panel window, check the local service, split a requirement into task cards before implementation, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, coordinate concurrent updates, or scan prior project conversations into meaningful task cards.
+description: Install and use CJ Task Dashboard through local CLI tools. Use when an AI agent needs to clone/install CJ Task Dashboard, open the standalone CJ task panel window, check the local service, split a requirement into task cards before implementation, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, coordinate concurrent updates, or scan prior project conversations into meaningful task cards.
 ---
 
 # Manage Taskboard
 
-Use `dashi-taskboard open` when the user asks to open or show the Dashi Taskboard panel. If `dashi-taskboard` is not installed, bootstrap Dashi from the GitHub repository first. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Use `taskctl` for every project, issue, and comment operation. Read [references/cli.md](references/cli.md) before choosing a command or option.
+Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashboard panel. If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard from the GitLab repository first. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Use `taskctl` for every project, issue, and comment operation. Read [references/cli.md](references/cli.md) before choosing a command or option.
 
 ## Install Bootstrap
 
-When `command -v dashi-taskboard` fails, install Dashi before trying panel or task commands:
+When `command -v dashi-taskboard` fails, install CJ Task Dashboard before trying panel or task commands:
 
 ```bash
 mkdir -p ~/Desktop/Projects
 cd ~/Desktop/Projects
-git clone https://github.com/13262727957-maker/dashi-taskboard.git
-cd dashi-taskboard
+git clone https://git.caijai.com/aiplus/cjtaskdashboard.git
+cd cjtaskdashboard
 npm run install:codex-plugin
 dashi-taskboard doctor
 dashi-taskboard open
@@ -23,11 +23,11 @@ dashi-taskboard open
 
 If the repository already exists, `cd` into it and run `git pull` before `npm run install:codex-plugin`. If `dashi-taskboard` is still not on PATH after install, call `~/.local/bin/dashi-taskboard doctor` and `~/.local/bin/dashi-taskboard open`.
 
-The GitHub repository may be private. If `git clone` fails for authentication or network access, report that blocker and ask the user to grant access or clone the repository manually.
+The GitLab repository may be private. If `git clone` fails for authentication or network access, report that blocker and ask the user to grant access or clone the repository manually.
 
 ## Panel Window
 
-When the user asks to open, show, view, or bring up the Dashi Taskboard panel, run:
+When the user asks to open, show, view, or bring up the CJ Task Dashboard panel, run:
 
 ```bash
 dashi-taskboard open
