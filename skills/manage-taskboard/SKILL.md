@@ -3,7 +3,7 @@ name: manage-taskboard
 description: Install and use CJ Task Dashboard through local CLI tools. Use when an AI agent needs to clone/install CJ Task Dashboard, open the standalone CJ task panel window, check the local service, split a requirement into task cards before implementation, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, coordinate concurrent updates, or scan prior project conversations into meaningful task cards.
 ---
 
-# Manage Taskboard
+# CJ Task Dashboard
 
 Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashboard panel. If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard from the GitLab repository first. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Use `taskctl` for every project, issue, and comment operation. Read [references/cli.md](references/cli.md) before choosing a command or option.
 
