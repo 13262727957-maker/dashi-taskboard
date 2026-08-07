@@ -7,6 +7,7 @@
     "node": ">=22.5"
   },
   "bin": {
+    "dashi-taskboard": "./scripts/dashi-taskboard.mjs",
     "taskctl": "./cli/taskctl.mjs"
   },
   "scripts": {
@@ -18,6 +19,7 @@
     "uninstall:codex-plugin": "node scripts/codex-plugin-uninstall.mjs",
     "doctor:codex-plugin": "node scripts/codex-plugin-doctor.mjs",
     "open:codex-taskboard": "node scripts/codex-plugin-open.mjs",
+    "open:taskboard": "node scripts/dashi-taskboard.mjs open",
     "verify:codex-panel": "node scripts/codex-plugin-verify-panel.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:server": "node --watch server/index.mjs --dev",

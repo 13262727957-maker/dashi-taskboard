@@ -6,6 +6,18 @@ const skillSource = await readFile(
   new URL("../skills/manage-taskboard/SKILL.md", import.meta.url),
   "utf8",
 );
+const cliReference = await readFile(
+  new URL("../skills/manage-taskboard/references/cli.md", import.meta.url),
+  "utf8",
+);
+const installerSource = await readFile(
+  new URL("../scripts/codex-plugin-install.mjs", import.meta.url),
+  "utf8",
+);
+const doctorSource = await readFile(
+  new URL("../scripts/codex-plugin-doctor.mjs", import.meta.url),
+  "utf8",
+);
 
 test("the taskboard skill coordinates safe issue execution and review handoff", () => {
   assert.match(skillSource, /read the latest issue content and all comments/i);
@@ -17,4 +29,24 @@ test("the taskboard skill coordinates safe issue execution and review handoff", 
     skillSource,
     /after implementation[^\n]*add a comment[^\n]*key changes[^\n]*verification[^\n]*result[^\n]*risks[^\n]*then move[^\n]*`in_review`/i,
   );
+});
+
+test("the taskboard skill can bootstrap install then open the standalone panel", () => {
+  for (const source of [skillSource, cliReference]) {
+    assert.match(source, /command -v dashi-taskboard|dashi-taskboard` is not installed/i);
+    assert.match(source, /git clone https:\/\/github\.com\/13262727957-maker\/dashi-taskboard\.git/);
+    assert.match(source, /npm run install:codex-plugin/);
+    assert.match(source, /dashi-taskboard doctor/);
+    assert.match(source, /dashi-taskboard open/);
+  }
+  assert.match(skillSource, /private/i);
+});
+
+test("the default installer keeps Codex sidebar injection optional", () => {
+  assert.doesNotMatch(installerSource, /installDashiCodexShim/);
+  assert.match(installerSource, /await rm\(injectorPlistPath, \{ force: true \}\)/);
+  assert.match(installerSource, /installed: false/);
+  assert.doesNotMatch(installerSource, /"com\.dashi-taskboard\.codex-injector",\s*\[/);
+  assert.match(doctorSource, /required: false/);
+  assert.doesNotMatch(doctorSource, /&& checks\.dashiCodex\.exists/);
 });

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(scriptPath), "..");
 const nodePath = process.execPath;
-const serviceUrl = `http://127.0.0.1:${process.env.CODEX_TASKBOARD_PORT || "47823"}`;
+const serviceUrl = `http://127.0.0.1:${process.env.CODEX_TASKBOARD_PORT || "47824"}`;
 const injectorUsesExternalServer = process.env.DASHI_TASKBOARD_EXTERNAL_SERVER === "1";
 let stopping = false;
 let child = null;

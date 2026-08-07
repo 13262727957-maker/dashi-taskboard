@@ -69,6 +69,7 @@ import {
 import {
   TASK_STATUSES,
   type ActorIdentity,
+  type DeviceProject,
   type DevelopmentScan,
   type HostContext,
   type IssueRelationType,
@@ -111,6 +112,7 @@ interface ContextMenuState {
 interface ProjectChoice {
   id: string;
   name: string;
+  workspacePath: string | null;
   issueCount: number;
   inCodex: boolean;
   persisted: boolean;
@@ -540,6 +542,7 @@ export function App() {
   const [taskboardMetadata, setTaskboardMetadata] = useState<TaskboardMetadata | null>(null);
   const [localAiChatAvailable, setLocalAiChatAvailable] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [deviceProjects, setDeviceProjects] = useState<DeviceProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
@@ -669,17 +672,32 @@ export function App() {
   );
   const projectChoices = useMemo<ProjectChoice[]>(() => {
     const persistedById = new Map(projects.map((project) => [project.id, project]));
+    const persistedByWorkspace = new Map(
+      projects
+        .flatMap((project) => {
+          const workspacePath = project.workspacePath ?? deviceWorkspacePaths[project.id] ?? null;
+          return workspacePath ? [[workspacePath, project] as const] : [];
+        }),
+    );
     const seen = new Set<string>();
     const choices: ProjectChoice[] = [];
-    for (const project of hostContext?.projects ?? []) {
-      if (!project.id || !project.name || seen.has(project.id)) continue;
-      seen.add(project.id);
+    for (const project of [...(hostContext?.projects ?? []), ...deviceProjects]) {
+      const deviceProject = project as Partial<DeviceProject>;
+      const workspacePath = typeof deviceProject.workspacePath === "string"
+        ? deviceProject.workspacePath
+        : deviceWorkspacePaths[project.id] ?? null;
+      const persisted = persistedById.get(project.id)
+        ?? (workspacePath ? persistedByWorkspace.get(workspacePath) : undefined);
+      const id = persisted?.id ?? project.id;
+      if (!id || !project.name || seen.has(id)) continue;
+      seen.add(id);
       choices.push({
-        id: project.id,
-        name: persistedById.get(project.id)?.name ?? project.name,
-        issueCount: persistedById.get(project.id)?.issueCount ?? 0,
+        id,
+        name: persisted?.name ?? project.name,
+        workspacePath,
+        issueCount: persisted?.issueCount ?? 0,
         inCodex: true,
-        persisted: persistedById.has(project.id),
+        persisted: Boolean(persisted),
       });
     }
     for (const project of projects) {
@@ -687,6 +705,7 @@ export function App() {
       choices.push({
         id: project.id,
         name: project.name,
+        workspacePath: project.workspacePath,
         issueCount: project.issueCount,
         inCodex: false,
         persisted: true,
@@ -695,7 +714,7 @@ export function App() {
     return choices.sort((left, right) => (
       Number(favoriteProjectIds.has(right.id)) - Number(favoriteProjectIds.has(left.id))
     ));
-  }, [favoriteProjectIds, hostContext?.projects, projects]);
+  }, [deviceProjects, deviceWorkspacePaths, favoriteProjectIds, hostContext?.projects, projects]);
   const projectsWithIssues = useMemo(
     () => projectChoices.filter((project) => project.issueCount > 0),
     [projectChoices],
@@ -1069,7 +1088,7 @@ export function App() {
     setProjectsLoading(true);
     setLoadError(null);
     try {
-      const [nextProjects, metadata, workspaces] = await Promise.all([
+      const [nextProjects, metadata, deviceWorkspaceInfo] = await Promise.all([
         listProjects(signal),
         getTaskboardMetadata(signal),
         listDeviceWorkspaces(signal),
@@ -1086,8 +1105,9 @@ export function App() {
       ));
       setManageTaskboardSkillPath(metadata.manageTaskboardSkillPath ?? "");
       setLocalAiChatAvailable(metadata.capabilities?.localAiChat === true);
+      setDeviceProjects(deviceWorkspaceInfo.projects);
       setDeviceWorkspacePaths((current) => {
-        const next = { ...current, ...workspaces };
+        const next = { ...current, ...deviceWorkspaceInfo.workspaces };
         if (JSON.stringify(next) === JSON.stringify(current)) return current;
         window.localStorage.setItem(DEVICE_WORKSPACE_PATHS_KEY, JSON.stringify(next));
         return next;
@@ -1786,7 +1806,7 @@ export function App() {
           project = await createProjectRequest({
             id: choice.id,
             name: choice.name,
-            workspacePath: null,
+            workspacePath: choice.workspacePath ?? deviceWorkspacePaths[choice.id] ?? null,
           });
           setProjects((current) => [...current, project!]);
         } catch (error) {

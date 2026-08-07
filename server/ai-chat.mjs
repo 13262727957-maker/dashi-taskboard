@@ -49,6 +49,7 @@ export class AiChatService {
     this.database = options.database;
     this.codexExecutable = options.codexExecutable;
     this.codexStatePath = options.codexStatePath;
+    this.projectDiscovery = options.projectDiscovery ?? { codexStatePath: options.codexStatePath };
     this.manageTaskboardSkillPath = options.manageTaskboardSkillPath;
     this.processEnv = options.processEnv ?? process.env;
     this.killGraceMs = options.killGraceMs ?? 1_000;
@@ -106,7 +107,7 @@ export class AiChatService {
   async getCatalog(projectId) {
     return discoverAiCatalog({
       codexExecutable: this.codexExecutable,
-      codexStatePath: this.codexStatePath,
+      projectDiscovery: this.projectDiscovery,
       database: this.database,
       projectId,
       processEnv: this.processEnv,
@@ -116,7 +117,7 @@ export class AiChatService {
   async createThread(input) {
     const [catalog, resolved] = await Promise.all([
       this.getCatalog(input.projectId),
-      resolveAiWorkspace(input.projectId, this.codexStatePath, this.database),
+      resolveAiWorkspace(input.projectId, this.projectDiscovery, this.database),
     ]);
     const model = this.#resolveModel(catalog, input.model);
     const reasoningEffort = input.reasoningEffort ?? model.defaultReasoningEffort;
@@ -208,7 +209,7 @@ export class AiChatService {
 
     const [catalog, resolved] = await Promise.all([
       this.getCatalog(thread.origin.projectId),
-      resolveAiWorkspace(thread.origin.projectId, this.codexStatePath, this.database),
+      resolveAiWorkspace(thread.origin.projectId, this.projectDiscovery, this.database),
     ]);
 
     thread = this.getThread(threadId);

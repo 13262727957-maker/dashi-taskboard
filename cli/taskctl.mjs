@@ -14,7 +14,7 @@ import {
 } from "../shared/domain.mjs";
 
 export const SCHEMA_VERSION = 2;
-export const DEFAULT_API_URL = "http://127.0.0.1:47823";
+export const DEFAULT_API_URL = "http://127.0.0.1:47824";
 
 const BOOLEAN_OPTIONS = new Set(["json"]);
 
@@ -574,16 +574,21 @@ async function mutateIssueRelation(api, action, taskId, options, overrides) {
 
 async function currentContext(api, options, overrides) {
   const cwd = path.resolve(options.cwd ?? overrides.cwd ?? process.cwd());
-  const response = await api.request("GET", "/api/projects");
-  const projects = Array.isArray(response.projects) ? response.projects : [];
-  const matchingProjects = projects
-    .filter((candidate) => workspaceContains(candidate?.workspacePath, cwd))
-    .sort((left, right) => right.workspacePath.length - left.workspacePath.length);
-  const project = matchingProjects[0]
-    ?? projects.find((candidate) => candidate?.id === DEFAULT_PROJECT_ID)
-    ?? projects[0]
-    ?? null;
-  return { cwd, project };
+  try {
+    return await api.request("POST", "/api/local/project-context", { cwd });
+  } catch (error) {
+    if (!(error instanceof TaskctlError) || error.exitCode !== 4) throw error;
+    const response = await api.request("GET", "/api/projects");
+    const projects = Array.isArray(response.projects) ? response.projects : [];
+    const matchingProjects = projects
+      .filter((candidate) => workspaceContains(candidate?.workspacePath, cwd))
+      .sort((left, right) => right.workspacePath.length - left.workspacePath.length);
+    const project = matchingProjects[0]
+      ?? projects.find((candidate) => candidate?.id === DEFAULT_PROJECT_ID)
+      ?? projects[0]
+      ?? null;
+    return { cwd, project };
+  }
 }
 
 function workspaceContains(workspacePath, cwd) {

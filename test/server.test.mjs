@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -1006,23 +1006,126 @@ test("development context scan resolves the current Codex conversation workspace
   assert.equal(deviceResult.body.workspacePath, deviceWorkspace);
 });
 
-test("device workspaces come from this machine's Codex project roots", async () => {
+test("device workspaces come from this machine's Codex and Paseo project roots", async () => {
   const baseUrl = await startServer(async (directory) => {
+    const codexProjectA = path.join(directory, "codex-project-a");
+    const codexProjectB = path.join(directory, "codex-project-b");
+    const paseoProject = path.join(directory, "paseo-project");
+    await mkdir(codexProjectA, { recursive: true });
+    await mkdir(codexProjectB, { recursive: true });
+    await mkdir(paseoProject, { recursive: true });
     const codexStatePath = path.join(directory, "codex-state.json");
+    const paseoProjectsPath = path.join(directory, "paseo-projects.json");
+    const paseoWorkspacesPath = path.join(directory, "paseo-workspaces.json");
     await writeFile(codexStatePath, JSON.stringify({
       "local-projects": {
-        "local-project-a": { rootPaths: ["/Users/alice/project-a"] },
-        "local-project-b": { rootPaths: ["/Users/alice/project-b"] },
+        "local-project-a": { rootPaths: [codexProjectA] },
+        "local-project-b": { rootPaths: [codexProjectB] },
       },
     }));
-    return { codexStatePath };
+    await writeFile(paseoProjectsPath, JSON.stringify([
+      {
+        projectId: "remote:git.example.test/team/paseo-project",
+        rootPath: paseoProject,
+        displayName: "team/paseo-project",
+      },
+    ]));
+    await writeFile(paseoWorkspacesPath, JSON.stringify([]));
+    return { codexStatePath, paseoProjectsPath, paseoWorkspacesPath };
   });
   const result = await request(baseUrl, "/api/device-workspaces");
   assert.equal(result.response.status, 200);
-  assert.deepEqual(result.body.workspaces, {
-    "local-project-a": "/Users/alice/project-a",
-    "local-project-b": "/Users/alice/project-b",
+  assert.equal(result.body.workspaces["local-project-a"].endsWith("codex-project-a"), true);
+  assert.equal(result.body.workspaces["local-project-b"].endsWith("codex-project-b"), true);
+  assert.equal(Object.values(result.body.workspaces).some((value) => value.endsWith("paseo-project")), true);
+  assert.equal(result.body.projects.filter((project) => project.client === "codex").length, 2);
+  assert.equal(result.body.projects.filter((project) => project.client === "paseo").length, 1);
+  assert.match(
+    result.body.projects.find((project) => project.client === "paseo").id,
+    /^paseo-team-paseo-project-[a-f0-9]{12}$/,
+  );
+});
+
+test("project context materializes a matching device project for the current cwd", async () => {
+  let workspace;
+  let cwd;
+  const baseUrl = await startServer(async (directory) => {
+    workspace = path.join(directory, "paseo-project");
+    cwd = path.join(workspace, "packages", "app");
+    await mkdir(cwd, { recursive: true });
+    const codexStatePath = path.join(directory, "codex-state.json");
+    const paseoProjectsPath = path.join(directory, "paseo-projects.json");
+    const paseoWorkspacesPath = path.join(directory, "paseo-workspaces.json");
+    await writeFile(codexStatePath, JSON.stringify({ "local-projects": {} }));
+    await writeFile(paseoProjectsPath, JSON.stringify([
+      {
+        projectId: "remote:git.example.test/team/paseo-project",
+        rootPath: workspace,
+        displayName: "team/paseo-project",
+      },
+    ]));
+    await writeFile(paseoWorkspacesPath, JSON.stringify([]));
+    return { codexStatePath, paseoProjectsPath, paseoWorkspacesPath };
   });
+  const result = await request(baseUrl, "/api/local/project-context", {
+    method: "POST",
+    body: { cwd },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.cwd, cwd);
+  assert.equal(result.body.materialized, true);
+  assert.equal(result.body.source, "paseo");
+  const realWorkspace = await realpath(workspace);
+  assert.equal(result.body.project.workspacePath, realWorkspace);
+  assert.match(result.body.project.id, /^paseo-team-paseo-project-[a-f0-9]{12}$/);
+
+  const projects = await request(baseUrl, "/api/projects");
+  assert.equal(projects.body.projects.some((project) => (
+    project.id === result.body.project.id && project.workspacePath === realWorkspace
+  )), true);
+});
+
+test("project context reuses an existing discovered project before creating a duplicate", async () => {
+  let workspace;
+  let cwd;
+  const baseUrl = await startServer(async (directory) => {
+    workspace = path.join(directory, "shared-project");
+    cwd = path.join(workspace, "packages", "app");
+    await mkdir(cwd, { recursive: true });
+    const codexStatePath = path.join(directory, "codex-state.json");
+    const paseoProjectsPath = path.join(directory, "paseo-projects.json");
+    const paseoWorkspacesPath = path.join(directory, "paseo-workspaces.json");
+    await writeFile(codexStatePath, JSON.stringify({
+      "local-projects": {
+        "local-shared": { name: "Shared", rootPaths: [workspace] },
+      },
+    }));
+    await writeFile(paseoProjectsPath, JSON.stringify([
+      {
+        projectId: "remote:git.example.test/team/shared",
+        rootPath: workspace,
+        displayName: "team/shared",
+      },
+    ]));
+    await writeFile(paseoWorkspacesPath, JSON.stringify([]));
+    return { codexStatePath, paseoProjectsPath, paseoWorkspacesPath };
+  });
+  await request(baseUrl, "/api/projects", {
+    method: "POST",
+    body: { id: "local-shared", name: "Shared", workspacePath: null },
+  });
+
+  const result = await request(baseUrl, "/api/local/project-context", {
+    method: "POST",
+    body: { cwd },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.project.id, "local-shared");
+  assert.equal(result.body.source, "codex");
+  assert.equal(result.body.project.workspacePath, await realpath(workspace));
+
+  const projects = await request(baseUrl, "/api/projects");
+  assert.equal(projects.body.projects.filter((project) => project.workspacePath === result.body.project.workspacePath).length, 1);
 });
 
 test("accepts private LAN requests and rejects public Host and Origin headers", async () => {
@@ -1033,15 +1136,15 @@ test("accepts private LAN requests and rejects public Host and Origin headers", 
   });
   assert.equal(codexOriginResult.response.status, 200);
 
-  const lanHostResult = await requestWithHost(baseUrl, "192.168.1.24:47823");
+  const lanHostResult = await requestWithHost(baseUrl, "192.168.1.24:47824");
   assert.equal(lanHostResult.status, 200);
 
   const lanOriginResult = await request(baseUrl, "/health", {
-    headers: { origin: "http://192.168.1.24:47823" },
+    headers: { origin: "http://192.168.1.24:47824" },
   });
   assert.equal(lanOriginResult.response.status, 200);
 
-  const localHostnameResult = await requestWithHost(baseUrl, "taskboard.local:47823");
+  const localHostnameResult = await requestWithHost(baseUrl, "taskboard.local:47824");
   assert.equal(localHostnameResult.status, 200);
 
   const hostResult = await requestWithHost(baseUrl, "taskboard.example.com");
@@ -1839,8 +1942,8 @@ test("request boundaries reject unknown fields and invalid values", async () => 
 test("task changes from one LAN client are broadcast to another client", async () => {
   const baseUrl = await startServer(undefined, { host: "0.0.0.0" });
   const lanHeaders = {
-    host: "192.168.1.24:47823",
-    origin: "http://192.168.1.24:47823",
+    host: "192.168.1.24:47824",
+    origin: "http://192.168.1.24:47824",
   };
   const eventResponse = await fetch(`${baseUrl}/api/events`, { headers: lanHeaders });
   assert.equal(eventResponse.status, 200);

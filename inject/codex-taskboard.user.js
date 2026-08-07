@@ -4,7 +4,7 @@
   const VERSION = "0.6.8";
   const SOURCE_HASH = window.__CODEX_TASKBOARD_SOURCE_HASH__;
   const SENTINEL_KEY = "__codexTaskboardInjection__";
-  const DEFAULT_TASKBOARD_URL = "http://127.0.0.1:47823/?host=codex";
+  const DEFAULT_TASKBOARD_URL = "http://127.0.0.1:47824/?host=codex";
   const ENTRY_ID = "codex-taskboard-entry";
   const PAGE_ID = "codex-taskboard-page";
   const FRAME_ID = "codex-taskboard-frame";

@@ -18,12 +18,14 @@ const serverPlistPath = path.join(launchAgentsDir, "com.dashi-taskboard.server.p
 const injectorPlistPath = path.join(launchAgentsDir, "com.dashi-taskboard.codex-injector.plist");
 const userBinDir = path.join(os.homedir(), ".local", "bin");
 const taskctlPath = path.join(userBinDir, "taskctl");
+const dashiTaskboardPath = path.join(userBinDir, "dashi-taskboard");
 const dashiCodexPath = path.join(userBinDir, "dashi-codex");
 const codexSkillsDir = path.join(os.homedir(), ".codex", "skills");
 const legacySkillPath = path.join(codexSkillsDir, "manage-taskboard");
 const nodePath = process.execPath;
 const managedMarker = "Managed by dashi-taskboard Codex plugin installer.";
 const taskctlCliPath = path.join(projectRoot, "cli", "taskctl.mjs");
+const dashiTaskboardCliPath = path.join(projectRoot, "scripts", "dashi-taskboard.mjs");
 const openScriptPath = path.join(projectRoot, "scripts", "codex-plugin-open.mjs");
 
 function run(command, args, options = {}) {
@@ -168,22 +170,22 @@ exec ${JSON.stringify(nodePath)} ${JSON.stringify(taskctlCliPath)} "$@"
   return taskctlPath;
 }
 
-async function installDashiCodexShim() {
+async function installDashiTaskboardShim() {
   await mkdir(userBinDir, { recursive: true });
   const shim = `#!/bin/sh
 # ${managedMarker}
-exec ${JSON.stringify(nodePath)} ${JSON.stringify(openScriptPath)} "$@"
+exec ${JSON.stringify(nodePath)} ${JSON.stringify(dashiTaskboardCliPath)} "$@"
 `;
   try {
-    const existing = await readFile(dashiCodexPath, "utf8");
-    if (!existing.includes(managedMarker) && !existing.includes(openScriptPath)) {
-      throw new Error(`${dashiCodexPath} already exists and is not managed by this installer. Move it away before installing.`);
+    const existing = await readFile(dashiTaskboardPath, "utf8");
+    if (!existing.includes(managedMarker) && !existing.includes(dashiTaskboardCliPath)) {
+      throw new Error(`${dashiTaskboardPath} already exists and is not managed by this installer. Move it away before installing.`);
     }
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  await writeFile(dashiCodexPath, shim, { mode: 0o755 });
-  return dashiCodexPath;
+  await writeFile(dashiTaskboardPath, shim, { mode: 0o755 });
+  return dashiTaskboardPath;
 }
 
 async function updateMarketplace() {
@@ -247,8 +249,29 @@ function managedRuntimePids() {
     .map(({ pid }) => pid);
 }
 
-async function stopManagedRuntimeProcesses() {
-  const pids = managedRuntimePids();
+function managedInjectorPids() {
+  const result = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (result.status !== 0) return [];
+  const injectorScripts = [
+    path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"),
+    path.join(projectRoot, "scripts", "codex-injector.mjs"),
+  ];
+  return result.stdout.split("\n")
+    .map((line) => line.trim().match(/^(\d+)\s+(.+)$/))
+    .filter(Boolean)
+    .map((match) => ({ pid: Number(match[1]), command: match[2] }))
+    .filter(({ pid, command }) => (
+      pid !== process.pid
+      && injectorScripts.some((script) => command.includes(script))
+      && (command.includes(" injector") || command.includes("codex-injector.mjs"))
+    ))
+    .map(({ pid }) => pid);
+}
+
+async function stopPids(pids, currentPids) {
   for (const pid of pids) {
     try {
       process.kill(pid, "SIGTERM");
@@ -256,16 +279,36 @@ async function stopManagedRuntimeProcesses() {
   }
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const remaining = managedRuntimePids().filter((pid) => pids.includes(pid));
+    const remaining = currentPids().filter((pid) => pids.includes(pid));
     if (remaining.length === 0) return pids;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  for (const pid of managedRuntimePids().filter((candidate) => pids.includes(candidate))) {
+  for (const pid of currentPids().filter((candidate) => pids.includes(candidate))) {
     try {
       process.kill(pid, "SIGKILL");
     } catch {}
   }
   return pids;
+}
+
+async function stopManagedRuntimeProcesses() {
+  return stopPids(managedRuntimePids(), managedRuntimePids);
+}
+
+async function stopManagedInjectorProcesses() {
+  return stopPids(managedInjectorPids(), managedInjectorPids);
+}
+
+async function removeManagedDashiCodexShim() {
+  try {
+    const existing = await readFile(dashiCodexPath, "utf8");
+    if (!existing.includes(managedMarker) && !existing.includes(openScriptPath)) return { removed: false };
+    await rm(dashiCodexPath, { force: true });
+    return { removed: true };
+  } catch (error) {
+    if (error.code === "ENOENT") return { removed: false };
+    throw error;
+  }
 }
 
 async function installLaunchAgents(codexExecutable) {
@@ -277,40 +320,24 @@ async function installLaunchAgents(codexExecutable) {
     [nodePath, path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"), "server"],
     {
       CODEX_TASKBOARD_HOST: "127.0.0.1",
-      CODEX_TASKBOARD_PORT: "47823",
+      CODEX_TASKBOARD_PORT: "47824",
       CODEX_TASKBOARD_DATA_DIR: path.join(projectRoot, ".data"),
       CODEX_EXECUTABLE: codexExecutable,
       PATH: pathValue,
     },
   ));
-  await writeFile(injectorPlistPath, plist(
-    "com.dashi-taskboard.codex-injector",
-    [
-      nodePath,
-      path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"),
-      "injector",
-    ],
-    {
-      CODEX_TASKBOARD_HOST: "127.0.0.1",
-      CODEX_TASKBOARD_PORT: "47823",
-      CODEX_EXECUTABLE: codexExecutable,
-      DASHI_TASKBOARD_EXTERNAL_SERVER: "1",
-      PATH: pathValue,
-    },
-  ));
 
   const guiTarget = `gui/${process.getuid()}`;
-  for (const file of [serverPlistPath, injectorPlistPath]) {
-    launchctl(["bootout", guiTarget, file]);
-  }
+  launchctl(["bootout", guiTarget, serverPlistPath]);
+  launchctl(["bootout", guiTarget, injectorPlistPath]);
+  await rm(injectorPlistPath, { force: true });
+  await stopManagedInjectorProcesses();
   await stopManagedRuntimeProcesses();
-  for (const file of [serverPlistPath, injectorPlistPath]) {
-    const result = launchctl(["bootstrap", guiTarget, file]);
-    if (result.status !== 0) {
-      throw new Error(`launchctl bootstrap failed for ${file}\n${result.stderr || result.stdout}`);
-    }
-    launchctl(["enable", `${guiTarget}/${path.basename(file, ".plist")}`]);
+  const result = launchctl(["bootstrap", guiTarget, serverPlistPath]);
+  if (result.status !== 0) {
+    throw new Error(`launchctl bootstrap failed for ${serverPlistPath}\n${result.stderr || result.stdout}`);
   }
+  launchctl(["enable", `${guiTarget}/com.dashi-taskboard.server`]);
 }
 
 function installCodexPlugin(marketplaceName, codexExecutable) {
@@ -326,8 +353,8 @@ function installCodexPlugin(marketplaceName, codexExecutable) {
   return { ok: true, output: result.stdout.trim() };
 }
 
-function openTaskboardPanel() {
-  const result = spawnSync(nodePath, [openScriptPath], {
+function openStandaloneTaskboardPanel() {
+  const result = spawnSync(nodePath, [dashiTaskboardCliPath, "open"], {
     cwd: projectRoot,
     encoding: "utf8",
     stdio: "pipe",
@@ -346,7 +373,8 @@ async function main() {
     await installPluginSource();
     const legacySkill = await installLegacySkillLink();
     const installedTaskctlPath = await installTaskctlShim();
-    const installedDashiCodexPath = await installDashiCodexShim();
+    const installedDashiTaskboardPath = await installDashiTaskboardShim();
+    const removedDashiCodex = await removeManagedDashiCodexShim();
     const marketplaceName = await updateMarketplace();
     const codexPlugin = installCodexPlugin(marketplaceName, codexExecutable);
     console.log(JSON.stringify({
@@ -357,10 +385,11 @@ async function main() {
       marketplaceName,
       codexPlugin,
       taskctlPath: installedTaskctlPath,
-      dashiCodexPath: installedDashiCodexPath,
+      dashiTaskboardPath: installedDashiTaskboardPath,
+      dashiCodex: removedDashiCodex,
       legacySkillPath: legacySkill,
-      note: "Windows service startup entry is reserved; run npm start and npm run codex:inject manually for now.",
-      next: "On macOS, quit Codex/ChatGPT completely and run dashi-codex or npm run open:codex-taskboard.",
+      note: "Windows service startup entry is reserved; run npm start manually for now.",
+      next: "Run dashi-taskboard open to open the standalone Taskboard panel.",
     }, null, 2));
     return;
   }
@@ -375,11 +404,12 @@ async function main() {
   await installPluginSource();
   const legacySkill = await installLegacySkillLink();
   const installedTaskctlPath = await installTaskctlShim();
-  const installedDashiCodexPath = await installDashiCodexShim();
+  const installedDashiTaskboardPath = await installDashiTaskboardShim();
+  const removedDashiCodex = await removeManagedDashiCodexShim();
   const marketplaceName = await updateMarketplace();
   const codexPlugin = installCodexPlugin(marketplaceName, codexExecutable);
   await installLaunchAgents(codexExecutable);
-  const taskboardOpen = openTaskboardPanel();
+  const taskboardOpen = openStandaloneTaskboardPanel();
 
   console.log(JSON.stringify({
     ok: true,
@@ -387,16 +417,20 @@ async function main() {
     marketplacePath,
     marketplaceName,
     serverPlistPath,
-    injectorPlistPath,
+    injector: {
+      installed: false,
+      removedPlistPath: injectorPlistPath,
+    },
     codexPlugin,
     taskctlPath: installedTaskctlPath,
-    dashiCodexPath: installedDashiCodexPath,
+    dashiTaskboardPath: installedDashiTaskboardPath,
+    dashiCodex: removedDashiCodex,
     legacySkillPath: legacySkill,
     taskboardOpen,
-    serviceUrl: "http://127.0.0.1:47823",
+    serviceUrl: "http://127.0.0.1:47824",
     next: taskboardOpen.ok
-      ? "Taskboard mode opened. If you close Codex later, reopen it with dashi-codex."
-      : "Install completed, but Taskboard mode did not open. If Codex/ChatGPT is open in normal mode, quit it completely, then run dashi-codex.",
+      ? "Standalone Taskboard panel opened. In any AI app with this skill, ask it to run dashi-taskboard open."
+      : "Install completed, but the standalone panel did not open. Run dashi-taskboard open when you are ready.",
   }, null, 2));
 }
 

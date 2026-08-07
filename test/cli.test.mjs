@@ -56,7 +56,7 @@ test("project list uses the default local service and adds schemaVersion", async
     projects: [{ id: "local", name: "Local" }],
     schemaVersion: 2,
   });
-  assert.equal(calls[0].url, "http://127.0.0.1:47823/api/projects");
+  assert.equal(calls[0].url, "http://127.0.0.1:47824/api/projects");
   assert.equal(calls[0].init.method, "GET");
   assert.equal(calls[0].init.headers["x-taskboard-client"], "taskctl");
 });
@@ -430,31 +430,49 @@ test("comment update and delete require an explicit version", async () => {
 });
 
 test("context current selects the project with the most specific matching workspace", async () => {
+  const calls = [];
   const result = await run(
     ["context", "current", "--cwd", "/work/repo/packages/app"],
-    async () => response({ projects: [
-      { id: "local", name: "Local", workspacePath: null },
-      { id: "repo", workspacePath: "/work/repo" },
-      { id: "app", workspacePath: "/work/repo/packages/app" },
-    ] }),
+    async (url, init) => {
+      calls.push({ url: url.toString(), init });
+      return response({
+        cwd: "/work/repo/packages/app",
+        project: { id: "app", workspacePath: "/work/repo/packages/app" },
+        materialized: false,
+        source: "codex",
+      });
+    },
     { cwd: "/unused" },
   );
 
   assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].url, "http://127.0.0.1:47824/api/local/project-context");
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { cwd: "/work/repo/packages/app" });
   assert.equal(result.stdout.cwd, "/work/repo/packages/app");
   assert.deepEqual(result.stdout.project, { id: "app", workspacePath: "/work/repo/packages/app" });
+  assert.equal(result.stdout.source, "codex");
 });
 
 test("context current falls back to the local project", async () => {
+  const calls = [];
   const result = await run(
     ["context", "current", "--cwd", "/unmatched"],
-    async () => response({ projects: [
-      { id: "other", workspacePath: "/work/other" },
-      { id: "local", name: "Local", workspacePath: null },
-    ] }),
+    async (url, init) => {
+      calls.push({ url: url.toString(), init });
+      if (url.pathname === "/api/local/project-context") {
+        return response({ error: { code: "NOT_FOUND", message: "not found" } }, 404);
+      }
+      return response({ projects: [
+        { id: "other", workspacePath: "/work/other" },
+        { id: "local", name: "Local", workspacePath: null },
+      ] });
+    },
   );
 
   assert.equal(result.exitCode, 0);
+  assert.equal(calls[0].url, "http://127.0.0.1:47824/api/local/project-context");
+  assert.equal(calls[1].url, "http://127.0.0.1:47824/api/projects");
   assert.equal(result.stdout.project.id, "local");
 });
 

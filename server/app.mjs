@@ -24,6 +24,10 @@ import {
   isLocalCompanionRoute,
 } from "./cloud-proxy.mjs";
 import { ApiError, TaskboardDatabase } from "./database.mjs";
+import {
+  readDeviceProjects,
+  resolveMaterializedProjectForPath,
+} from "./project-discovery.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -1019,27 +1023,6 @@ function methodNotAllowed(response, allowed) {
   }, { allow: allowed.join(", ") });
 }
 
-function codexProjectRoot(state, projectId) {
-  if (!projectId || !state || typeof state !== "object") return null;
-  const project = state["local-projects"]?.[projectId];
-  const root = Array.isArray(project?.rootPaths) ? project.rootPaths[0] : null;
-  return typeof root === "string" && root.trim() ? root : null;
-}
-
-async function readCodexProjectWorkspaces(codexStatePath) {
-  try {
-    const state = JSON.parse(await readFile(codexStatePath, "utf8"));
-    const projects = state["local-projects"];
-    if (!projects || typeof projects !== "object" || Array.isArray(projects)) return {};
-    return Object.fromEntries(Object.keys(projects).flatMap((projectId) => {
-      const root = codexProjectRoot(state, projectId);
-      return root ? [[projectId, root]] : [];
-    }));
-  } catch {
-    return {};
-  }
-}
-
 function latestThreadCwd(value, threadId) {
   const matches = [];
   const stack = [value];
@@ -1274,6 +1257,7 @@ export function resolveServerOptions(options = {}) {
     ? path.resolve(configuredDataDirectory)
     : path.join(PROJECT_ROOT, ".data");
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const paseoHome = process.env.PASEO_HOME || path.join(os.homedir(), ".paseo");
   return {
     dataDirectory,
     databasePath: options.databasePath ?? path.join(dataDirectory, "taskboard.sqlite"),
@@ -1286,10 +1270,14 @@ export function resolveServerOptions(options = {}) {
       ?? path.join(codexHome, ".codex-global-state.json"),
     codexProcessesPath: options.codexProcessesPath
       ?? path.join(codexHome, "process_manager", "chat_processes.json"),
+    paseoProjectsPath: options.paseoProjectsPath
+      ?? path.join(paseoHome, "projects", "projects.json"),
+    paseoWorkspacesPath: options.paseoWorkspacesPath
+      ?? path.join(paseoHome, "projects", "workspaces.json"),
   };
 }
 
-export function resolvePort(value = process.env.CODEX_TASKBOARD_PORT ?? "47823") {
+export function resolvePort(value = process.env.CODEX_TASKBOARD_PORT ?? "47824") {
   const port = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("CODEX_TASKBOARD_PORT must be an integer between 1 and 65535");
@@ -1330,6 +1318,7 @@ export function createTaskboardServer(options = {}) {
     database,
     codexExecutable: resolved.codexExecutable,
     codexStatePath: resolved.codexStatePath,
+    projectDiscovery: resolved,
     manageTaskboardSkillPath: resolved.skillPath,
   });
   const aiEventResponses = new Set();
@@ -1543,8 +1532,24 @@ export function createTaskboardServer(options = {}) {
         if ([...url.searchParams.keys()].length > 0) {
           throw new ApiError(400, "UNKNOWN_QUERY_PARAMETER", "GET /api/device-workspaces does not accept query parameters");
         }
+        return sendJson(response, 200, await readDeviceProjects(resolved));
+      }
+
+      if (pathname === "/api/local/project-context") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const body = await readJson(request);
+        assertAllowedKeys(body, new Set(["cwd"]));
+        const cwd = pathField(body.cwd, "cwd");
+        if (!cwd || !path.isAbsolute(cwd)) {
+          throw new ApiError(400, "INVALID_FIELD", "'cwd' must be absolute");
+        }
+        const result = await resolveMaterializedProjectForPath(database, resolved, cwd);
+        if (result.materialized) events.emit("project.created", { project: result.project });
         return sendJson(response, 200, {
-          workspaces: await readCodexProjectWorkspaces(resolved.codexStatePath),
+          cwd: result.cwd,
+          project: result.project,
+          materialized: result.materialized,
+          source: result.source,
         });
       }
 

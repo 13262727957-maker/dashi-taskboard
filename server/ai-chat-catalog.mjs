@@ -1,9 +1,10 @@
 import { execFile, spawn } from "node:child_process";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
 import { ApiError } from "./database.mjs";
+import { readDeviceProjects } from "./project-discovery.mjs";
 
 const execFileAsync = promisify(execFile);
 const CATALOG_TIMEOUT_MS = 10_000;
@@ -19,28 +20,12 @@ async function existingDirectory(value) {
   }
 }
 
-export async function loadDeviceWorkspaces(codexStatePath, database) {
+export async function loadDeviceWorkspaces(projectDiscovery, database) {
   const workspaces = new Map();
-  let localProjects = {};
-  try {
-    const state = JSON.parse(await readFile(codexStatePath, "utf8"));
-    if (
-      state?.["local-projects"]
-      && typeof state["local-projects"] === "object"
-      && !Array.isArray(state["local-projects"])
-    ) {
-      localProjects = state["local-projects"];
-    }
-  } catch {}
-
-  for (const [projectId, project] of Object.entries(localProjects)) {
-    if (!Array.isArray(project?.rootPaths)) continue;
-    for (const rootPath of project.rootPaths) {
-      const workspacePath = await existingDirectory(rootPath);
-      if (!workspacePath) continue;
-      workspaces.set(projectId, workspacePath);
-      break;
-    }
+  const device = await readDeviceProjects(projectDiscovery);
+  for (const [projectId, workspacePath] of Object.entries(device.workspaces ?? {})) {
+    const existing = await existingDirectory(workspacePath);
+    if (existing) workspaces.set(projectId, existing);
   }
 
   for (const project of await database.listProjects()) {
@@ -51,12 +36,12 @@ export async function loadDeviceWorkspaces(codexStatePath, database) {
   return workspaces;
 }
 
-export async function resolveAiWorkspace(projectId, codexStatePath, database) {
+export async function resolveAiWorkspace(projectId, projectDiscovery, database) {
   const project = await database.getProject(projectId);
   if (!project) {
     throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
   }
-  const workspaces = await loadDeviceWorkspaces(codexStatePath, database);
+  const workspaces = await loadDeviceWorkspaces(projectDiscovery, database);
   const workspacePath = workspaces.get(projectId);
   if (!workspacePath) {
     throw new ApiError(
@@ -231,12 +216,12 @@ function sanitizeSkills(entries) {
 
 export async function discoverAiCatalog({
   codexExecutable,
-  codexStatePath,
+  projectDiscovery,
   database,
   projectId,
   processEnv,
 }) {
-  const { workspacePath } = await resolveAiWorkspace(projectId, codexStatePath, database);
+  const { workspacePath } = await resolveAiWorkspace(projectId, projectDiscovery, database);
   const [modelResult, skillEntries] = await Promise.all([
     execFileAsync(codexExecutable, ["debug", "models"], {
       cwd: workspacePath,

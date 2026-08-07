@@ -1,5 +1,33 @@
 # taskctl CLI
 
+## Dashi Taskboard panel command
+
+If `dashi-taskboard` is not installed, bootstrap the project first:
+
+```bash
+mkdir -p ~/Desktop/Projects
+cd ~/Desktop/Projects
+git clone https://github.com/13262727957-maker/dashi-taskboard.git
+cd dashi-taskboard
+npm run install:codex-plugin
+dashi-taskboard doctor
+dashi-taskboard open
+```
+
+If `~/Desktop/Projects/dashi-taskboard` already exists, pull the latest code there and rerun `npm run install:codex-plugin`.
+
+Use the generic `dashi-taskboard` command for panel and local service operations:
+
+```bash
+dashi-taskboard open
+dashi-taskboard doctor
+dashi-taskboard start
+```
+
+`open` starts or reuses the local server and opens the standalone panel at `http://127.0.0.1:47824/?host=agent`. On macOS it prefers a Chrome/Chromium-style app-mode window before falling back to the default browser. If the command is not on PATH, call `~/.local/bin/dashi-taskboard`.
+
+## taskctl commands
+
 `taskctl` emits JSON. Add `--json` when making the output contract explicit. The Dashi Taskboard plugin installer creates a user-level command at `~/.local/bin/taskctl`; if `taskctl` is not on PATH, call that absolute path.
 
 ## Context and projects
@@ -13,7 +41,7 @@ taskctl project map PROJECT_ID --workspace-path PATH [--json]
 
 Use `--workspace-path` to associate a project with a local repository. `context current` chooses the most specific project whose workspace contains the current directory, then falls back to the `local` project.
 
-Set `CODEX_TASKBOARD_URL` to override the default local API origin, `http://127.0.0.1:47823`.
+Set `CODEX_TASKBOARD_URL` to override the default local API origin, `http://127.0.0.1:47824`.
 
 For a shared cloud board, keep `taskctl` pointed at the loopback companion and configure the upstream HTTPS origin through it:
 

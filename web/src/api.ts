@@ -17,6 +17,7 @@ import type {
   TaskStatus,
   WorkflowCapabilities,
   WorkflowWorkspaceRecord,
+  DeviceProject,
 } from "./types";
 
 const DEFAULT_USER_ACTOR: ActorIdentity = {
@@ -206,12 +207,20 @@ export function subscribeAiChatThread(
   return () => source.close();
 }
 
-export async function listDeviceWorkspaces(signal?: AbortSignal): Promise<Record<string, string>> {
+export async function listDeviceWorkspaces(signal?: AbortSignal): Promise<{
+  workspaces: Record<string, string>;
+  projects: DeviceProject[];
+}> {
   try {
-    const data = await request<{ workspaces: Record<string, string> }>("/api/device-workspaces", { signal });
-    return data.workspaces;
+    const data = await request<{
+      workspaces: Record<string, string>;
+      projects?: DeviceProject[];
+    }>("/api/device-workspaces", { signal });
+    return { workspaces: data.workspaces, projects: data.projects ?? [] };
   } catch (error) {
-    if (error instanceof ApiError && error.code === "LOCAL_COMPANION_REQUIRED") return {};
+    if (error instanceof ApiError && error.code === "LOCAL_COMPANION_REQUIRED") {
+      return { workspaces: {}, projects: [] };
+    }
     throw error;
   }
 }

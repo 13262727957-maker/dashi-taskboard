@@ -1,11 +1,61 @@
 ---
 name: manage-taskboard
-description: Manage taskboard projects, issues, issue relations, and comments through the taskctl CLI. Use when Codex needs to track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, or coordinate concurrent updates.
+description: Install and use Dashi Taskboard through local CLI tools. Use when an AI agent needs to clone/install Dashi Taskboard, open the standalone Dashi panel window, check the local service, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, coordinate concurrent updates, or scan prior project conversations into meaningful task cards.
 ---
 
 # Manage Taskboard
 
-Use `taskctl` for every project, issue, and comment operation. Read [references/cli.md](references/cli.md) before choosing a command or option.
+Use `dashi-taskboard open` when the user asks to open or show the Dashi Taskboard panel. If `dashi-taskboard` is not installed, bootstrap Dashi from the GitHub repository first. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Use `taskctl` for every project, issue, and comment operation. Read [references/cli.md](references/cli.md) before choosing a command or option.
+
+## Install Bootstrap
+
+When `command -v dashi-taskboard` fails, install Dashi before trying panel or task commands:
+
+```bash
+mkdir -p ~/Desktop/Projects
+cd ~/Desktop/Projects
+git clone https://github.com/13262727957-maker/dashi-taskboard.git
+cd dashi-taskboard
+npm run install:codex-plugin
+dashi-taskboard doctor
+dashi-taskboard open
+```
+
+If the repository already exists, `cd` into it and run `git pull` before `npm run install:codex-plugin`. If `dashi-taskboard` is still not on PATH after install, call `~/.local/bin/dashi-taskboard doctor` and `~/.local/bin/dashi-taskboard open`.
+
+The GitHub repository may be private. If `git clone` fails for authentication or network access, report that blocker and ask the user to grant access or clone the repository manually.
+
+## Panel Window
+
+When the user asks to open, show, view, or bring up the Dashi Taskboard panel, run:
+
+```bash
+dashi-taskboard open
+```
+
+If `dashi-taskboard` is not on PATH, call `~/.local/bin/dashi-taskboard open`. This opens the standalone local panel window backed by `http://127.0.0.1:47824/?host=agent`; on macOS it prefers a Chrome/Chromium-style app-mode window before falling back to the default browser. It does not require Codex sidebar injection or a debug port.
+
+For health checks, run:
+
+```bash
+dashi-taskboard doctor
+```
+
+## Prior Conversation Scans
+
+When the user asks to scan previous, prior, or historical project conversations and turn them into task cards, run a standard scan before creating or updating issues:
+
+1. Gather relevant prior project conversations and group repeated discussion into coherent work items.
+2. For each candidate work item, run a lightweight repository evidence scan using likely feature, route, component, migration, test, config, and API keywords. Prefer `rg`/`rg --files`; do not read broad unrelated files unless the scan points to them.
+3. Classify status from the strongest evidence, not conversation alone:
+   - `backlog`: only an idea/request is present, with no clear commitment or repository evidence.
+   - `todo`: the work is committed or partially present, but gaps, acceptance criteria, or verification remain unclear.
+   - `in_progress`: recent implementation is active and not yet self-verified.
+   - `in_review`: implementation evidence plus self-verification exists, but the user has not accepted it.
+   - `done`: the user explicitly confirms acceptance or asks to mark complete.
+   - `blocked`: progress cannot continue because required environment, credentials, data, dependency, or decision is missing.
+4. Record evidence in each issue description or a comment using compact tags such as `evidence:conversation`, `evidence:code`, `evidence:test`, `evidence:runtime`, `acceptance:pending`, and `confidence:low|medium|high`.
+5. If evidence conflicts, choose the less-final status and describe the uncertainty. Prefer `todo` for "implemented but possibly incomplete"; use `in_review` only when self-verification evidence is present.
 
 ## Workflow
 

@@ -10,6 +10,7 @@ const pluginName = "dashi-taskboard";
 const pluginInstallPath = path.join(os.homedir(), "plugins", pluginName);
 const marketplacePath = path.join(os.homedir(), ".agents", "plugins", "marketplace.json");
 const taskctlPath = path.join(os.homedir(), ".local", "bin", "taskctl");
+const dashiTaskboardPath = path.join(os.homedir(), ".local", "bin", "dashi-taskboard");
 const dashiCodexPath = path.join(os.homedir(), ".local", "bin", "dashi-codex");
 const legacySkillPath = path.join(os.homedir(), ".codex", "skills", "manage-taskboard");
 const launchAgentsDir = path.join(os.homedir(), "Library", "LaunchAgents");
@@ -19,6 +20,7 @@ const plists = [
 ];
 const managedMarker = "Managed by dashi-taskboard Codex plugin installer.";
 const taskctlCliSuffix = path.join("dashi-taskboard", "cli", "taskctl.mjs");
+const dashiTaskboardCliSuffix = path.join("dashi-taskboard", "scripts", "dashi-taskboard.mjs");
 const openScriptSuffix = path.join("dashi-taskboard", "scripts", "codex-plugin-open.mjs");
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -119,6 +121,23 @@ async function removeManagedTaskctlShim() {
   return { removed: true };
 }
 
+async function removeManagedDashiTaskboardShim() {
+  let existing;
+  try {
+    existing = await readFile(dashiTaskboardPath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return { removed: false, reason: "missing" };
+    throw error;
+  }
+  if (!existing.includes(managedMarker)) {
+    if (!existing.includes(dashiTaskboardCliSuffix)) {
+      return { removed: false, reason: "not-managed" };
+    }
+  }
+  await rm(dashiTaskboardPath, { force: true });
+  return { removed: true };
+}
+
 async function removeManagedDashiCodexShim() {
   let existing;
   try {
@@ -168,6 +187,7 @@ async function main() {
   const stoppedRuntimePids = await stopManagedRuntimeProcesses();
   const marketplaceUpdated = await removeMarketplaceEntry();
   const removedTaskctl = await removeManagedTaskctlShim();
+  const removedDashiTaskboard = await removeManagedDashiTaskboardShim();
   const removedDashiCodex = await removeManagedDashiCodexShim();
   const removedLegacySkill = await removeManagedLegacySkillLink();
   await rm(pluginInstallPath, { recursive: true, force: true });
@@ -178,6 +198,10 @@ async function main() {
     taskctl: {
       path: taskctlPath,
       ...removedTaskctl,
+    },
+    dashiTaskboard: {
+      path: dashiTaskboardPath,
+      ...removedDashiTaskboard,
     },
     dashiCodex: {
       path: dashiCodexPath,

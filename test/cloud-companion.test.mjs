@@ -160,7 +160,7 @@ test("cloud proxy replaces client identity with Basic Auth and makes exactly one
   });
 
   const response = await proxy.forward(new Request(
-    "http://127.0.0.1:47823/api/tasks?source=taskctl",
+    "http://127.0.0.1:47824/api/tasks?source=taskctl",
     {
       method: "POST",
       headers: {
@@ -216,7 +216,7 @@ test("configured cloud mode fails explicitly and never falls back to the local d
   });
 
   await assert.rejects(
-    proxy.forward(new Request("http://127.0.0.1:47823/api/projects")),
+    proxy.forward(new Request("http://127.0.0.1:47824/api/projects")),
     (error) => error?.code === "REMOTE_UNAVAILABLE",
   );
   assert.equal(upstreamCalls, 1);
@@ -241,13 +241,13 @@ test("cloud proxy preserves upstream 401 responses and binary attachment streams
   });
 
   const authResponse = await proxy.forward(
-    new Request("http://127.0.0.1:47823/api/projects"),
+    new Request("http://127.0.0.1:47824/api/projects"),
   );
   assert.equal(authResponse, unauthorized);
   assert.equal(await authResponse.text(), "invalid shared key");
 
   const attachmentResponse = await proxy.forward(
-    new Request("http://127.0.0.1:47823/api/attachments/file/content"),
+    new Request("http://127.0.0.1:47824/api/attachments/file/content"),
   );
   assert.deepEqual(
     [...new Uint8Array(await attachmentResponse.arrayBuffer())],
@@ -304,7 +304,7 @@ test("project creation stores workspacePath locally and never sends it to cloud"
   });
 
   const response = await proxy.forward(new Request(
-    "http://127.0.0.1:47823/api/projects",
+    "http://127.0.0.1:47824/api/projects",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -349,7 +349,7 @@ test("project lists overlay this device's workspace mappings and discard remote 
   });
 
   const response = await proxy.forward(
-    new Request("http://127.0.0.1:47823/api/projects"),
+    new Request("http://127.0.0.1:47824/api/projects"),
   );
   assert.deepEqual((await response.json()).projects, [
     {
@@ -377,7 +377,7 @@ test("task mutations do not send absolute worktree paths to cloud", async () => 
   });
 
   await proxy.forward(new Request(
-    "http://127.0.0.1:47823/api/tasks/PORTFOLIO-1",
+    "http://127.0.0.1:47824/api/tasks/PORTFOLIO-1",
     {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -413,7 +413,7 @@ test("workflow mutations remove structured git worktree paths without altering o
   });
 
   await proxy.forward(new Request(
-    "http://127.0.0.1:47823/api/projects/portfolio/workflow-workspace",
+    "http://127.0.0.1:47824/api/projects/portfolio/workflow-workspace",
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -634,7 +634,7 @@ test("taskctl cloud login reads the shared key privately and sends it to the loc
   assert.equal(secretReads, 1);
   assert.equal(execCalled, false);
   assert.equal(fetchCalls.length, 1);
-  assert.equal(fetchCalls[0].url, "http://127.0.0.1:47823/api/local/cloud-session");
+  assert.equal(fetchCalls[0].url, "http://127.0.0.1:47824/api/local/cloud-session");
   assert.equal(fetchCalls[0].init.method, "PUT");
   assert.deepEqual(JSON.parse(fetchCalls[0].init.body), {
     remoteUrl: "https://tasks.example.test",
@@ -753,7 +753,7 @@ test("without cloud configuration taskctl keeps using the local companion", asyn
   });
 
   assert.equal(result.exitCode, 0);
-  assert.equal(requestedUrl, "http://127.0.0.1:47823/api/projects");
+  assert.equal(requestedUrl, "http://127.0.0.1:47824/api/projects");
   assert.equal(execCalled, false);
   assert.deepEqual(result.stdout.json(), {
     projects: [{ id: "local", name: "Local" }],

@@ -11,8 +11,9 @@ const pluginName = "dashi-taskboard";
 const pluginInstallPath = path.join(os.homedir(), "plugins", pluginName);
 const marketplacePath = path.join(os.homedir(), ".agents", "plugins", "marketplace.json");
 const databasePath = path.join(projectRoot, ".data", "taskboard.sqlite");
-const serviceUrl = "http://127.0.0.1:47823";
+const serviceUrl = "http://127.0.0.1:47824";
 const taskctlPath = path.join(os.homedir(), ".local", "bin", "taskctl");
+const dashiTaskboardPath = path.join(os.homedir(), ".local", "bin", "dashi-taskboard");
 const dashiCodexPath = path.join(os.homedir(), ".local", "bin", "dashi-codex");
 const legacySkillPath = path.join(os.homedir(), ".codex", "skills", "manage-taskboard");
 
@@ -165,17 +166,31 @@ async function dashiCodexStatus() {
   };
 }
 
+function dashiTaskboardStatus() {
+  const result = spawnSync(dashiTaskboardPath, ["doctor"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  return {
+    path: dashiTaskboardPath,
+    exists: result.status !== null && result.error === undefined,
+    ok: result.status === 0,
+    error: result.status === 0 ? null : (result.stderr || result.error?.message || "").trim(),
+  };
+}
+
 function injectorRecommendation(state) {
   if (state === "injected-or-injecting") {
     return "Taskboard panel injection is active or in progress.";
   }
   if (state === "debuggable-codex-detected") {
-    return "Run dashi-codex or npm run open:codex-taskboard to attach and open the Taskboard panel.";
+    return "Codex sidebar injection is optional. Use dashi-taskboard open for the default standalone panel.";
   }
   if (state === "waiting-for-codex-restart") {
-    return "Codex/ChatGPT is open in normal mode. Run dashi-codex or npm run open:codex-taskboard to reopen it in Taskboard mode.";
+    return "Codex/ChatGPT is open in normal mode. Use dashi-taskboard open for the default standalone panel.";
   }
-  return "Run dashi-codex or npm run open:codex-taskboard to launch Codex with the Taskboard panel.";
+  return "Use dashi-taskboard open to launch the standalone Taskboard panel.";
 }
 
 async function main() {
@@ -189,6 +204,7 @@ async function main() {
   const data = await taskSummary();
   const codexPlugin = codexPluginStatus();
   const taskctl = taskctlStatus();
+  const dashiTaskboard = dashiTaskboardStatus();
   const dashiCodex = await dashiCodexStatus();
   const injectorState = injectorProcesses.length > 0 && debuggablePorts.length > 0
     ? "injected-or-injecting"
@@ -213,10 +229,17 @@ async function main() {
     },
     codexPlugin,
     taskctl,
-    dashiCodex,
+    dashiTaskboard,
+    dashiCodex: {
+      ...dashiCodex,
+      required: false,
+    },
     launchAgents: {
       server: launchctlPrint("com.dashi-taskboard.server"),
-      injector: launchctlPrint("com.dashi-taskboard.codex-injector"),
+      injector: {
+        ...launchctlPrint("com.dashi-taskboard.codex-injector"),
+        required: false,
+      },
     },
     service: await health(),
     database: {
@@ -240,7 +263,7 @@ async function main() {
     && checks.marketplace.registered
     && checks.codexPlugin.ok
     && checks.taskctl.ok
-    && checks.dashiCodex.exists
+    && checks.dashiTaskboard.ok
     && checks.service.status === "ok"
     && checks.database.exists;
   console.log(JSON.stringify({ ok, checks }, null, 2));

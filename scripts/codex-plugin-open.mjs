@@ -10,7 +10,7 @@ const injectorLabel = "com.dashi-taskboard.codex-injector";
 const serverLabel = "com.dashi-taskboard.server";
 const candidatePorts = [9229, 9231];
 const appPath = "/Applications/ChatGPT.app";
-const taskboardHealthUrl = "http://127.0.0.1:47823/health";
+const taskboardHealthUrl = "http://127.0.0.1:47824/health";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {

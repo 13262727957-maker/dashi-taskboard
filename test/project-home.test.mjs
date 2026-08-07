@@ -11,7 +11,7 @@ const labelPickerSource = await readFile(new URL("../web/src/components/LabelPic
 const labelsSource = await readFile(new URL("../web/src/labels.ts", import.meta.url), "utf8");
 
 test("the project home merges live Codex projects with persisted Taskboard projects", () => {
-  assert.match(appSource, /hostContext\?\.projects \?\? \[\]/);
+  assert.match(appSource, /\.\.\.\(hostContext\?\.projects \?\? \[\]\), \.\.\.deviceProjects/);
   assert.match(appSource, /persistedById/);
   assert.match(appSource, /project\.inCodex \? "Codex 项目" : "已保存的项目"/);
   assert.match(appSource, /createProjectRequest/);
@@ -22,8 +22,9 @@ test("each device stores an independent workspace path for every project", () =>
   assert.match(appSource, /const DEVICE_WORKSPACE_PATHS_KEY = "taskboard\.deviceWorkspacePaths\.v1"/);
   assert.match(appSource, /function readDeviceWorkspacePaths\(\)/);
   assert.match(appSource, /rememberDeviceWorkspacePath/);
-  assert.match(appSource, /const \[nextProjects, metadata, workspaces\] = await Promise\.all\(\[/);
+  assert.match(appSource, /const \[nextProjects, metadata, deviceWorkspaceInfo\] = await Promise\.all\(\[/);
   assert.match(appSource, /listDeviceWorkspaces\(signal\)/);
+  assert.match(appSource, /setDeviceProjects\(deviceWorkspaceInfo\.projects\)/);
   assert.match(appSource, /placeholder="设置此设备的项目目录"/);
   assert.match(appSource, /deviceWorkspacePaths\[selectedProjectId\]/);
   assert.match(apiSource, /query\.set\("workspacePath", workspacePath\)/);

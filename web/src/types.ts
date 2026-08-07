@@ -173,6 +173,15 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface DeviceProject {
+  id: string;
+  name: string;
+  workspacePath: string;
+  client?: "codex" | "paseo";
+  sourceProjectId?: string;
+  confidence?: "high" | "medium";
+}
+
 export interface TaskRelationSummary {
   id: string;
   identifier: string;

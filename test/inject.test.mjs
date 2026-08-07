@@ -22,7 +22,7 @@ test("injection is an idempotent IIFE guarded by its current source hash", () =>
 });
 
 test("embedded page uses the local taskboard URL and supports a runtime override", () => {
-  assert.match(source, /http:\/\/127\.0\.0\.1:47823\/\?host=codex/);
+  assert.match(source, /http:\/\/127\.0\.0\.1:47824\/\?host=codex/);
   assert.match(source, /window\.__CODEX_TASKBOARD_URL__/);
   assert.match(source, /nextFrame\.src = taskboardUrl\.href/);
   assert.match(source, /frameOrigin = taskboardUrl\.origin/);

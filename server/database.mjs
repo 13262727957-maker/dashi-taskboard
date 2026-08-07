@@ -602,6 +602,19 @@ export class TaskboardDatabase {
     return this.getProject(input.id);
   }
 
+  updateProjectWorkspace(id, workspacePath) {
+    const timestamp = now();
+    const result = this.database.prepare(`
+      UPDATE projects
+      SET workspace_path = ?, updated_at = ?
+      WHERE id = ?
+    `).run(workspacePath, timestamp, id);
+    if (result.changes === 0) {
+      throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${id}' does not exist`);
+    }
+    return this.getProject(id);
+  }
+
   getProject(id) {
     const row = this.database.prepare(`
       SELECT

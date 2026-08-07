@@ -14,7 +14,7 @@ npm run build
 npm start
 ```
 
-Open <http://127.0.0.1:47823>. The SQLite database is stored at `.data/taskboard.sqlite`.
+Open <http://127.0.0.1:47824>. The SQLite database is stored at `.data/taskboard.sqlite`.
 
 For development with live frontend reload:
 
@@ -69,23 +69,43 @@ If you already cloned the repository, run:
 npm run install:codex-plugin
 ```
 
-The installer tries to open Codex in Taskboard mode at the end. If Codex/ChatGPT is already open in normal mode, completely quit it and run:
+The installer opens the standalone Taskboard panel at the end. You can reopen the same panel from any terminal or any AI skill that can run shell commands:
 
 ```bash
-dashi-codex
+dashi-taskboard open
 ```
 
-Use the same command any time you want to reopen Codex with the Taskboard panel. You can also run the project-local equivalent:
+Use the doctor when an AI agent or teammate needs to check the local service and panel entry:
 
 ```bash
-npm run open:codex-taskboard
+dashi-taskboard doctor
 ```
 
-The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `taskctl` and `dashi-codex` at `~/.local/bin/`, builds the web UI, writes macOS LaunchAgents for the local server and Codex injector, and then tries to open the Taskboard panel. `dashi-codex` is a small shell command, not a macOS `.app`, so it avoids Gatekeeper quarantine prompts. If Codex/ChatGPT is already running in normal mode, `dashi-codex` asks it to quit and reopens it in Taskboard mode.
+The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `dashi-taskboard` and `taskctl` at `~/.local/bin/`, builds the web UI, writes the macOS LaunchAgent for the local server, removes any previously managed Codex injector LaunchAgent, and then tries to open the standalone Taskboard panel. `dashi-taskboard open` starts or reuses the local server and opens `http://127.0.0.1:47824/?host=agent`; on macOS it prefers a Chrome/Chromium-style app-mode window before falling back to the default browser. It does not require Codex sidebar injection, a debug port, or changes to any AI app bundle.
 
-Keep the cloned repository in place after installing this basic local-plugin version. The installed plugin and skill live under `~/plugins/dashi-taskboard`, but the local server, injector, and `taskctl` shim still run from the cloned repository path.
+Keep the cloned repository in place after installing this basic local-plugin version. The installed plugin and skill live under `~/plugins/dashi-taskboard`, but the local server, `dashi-taskboard`, and `taskctl` shims still run from the cloned repository path.
 
-The injector LaunchAgent is persistent, but it only auto-launches Codex once per agent session. If you want to fully quit Codex and keep it closed, temporarily stop just the injector:
+The bundled `manage-taskboard` skill treats the standalone panel as the default UI path. When the user asks an AI agent to open the task panel, the skill should run:
+
+```bash
+dashi-taskboard open
+```
+
+### Optional Codex Sidebar Injection
+
+Codex sidebar injection remains available only as a manual enhanced mode. The one-click installer does not install or start it by default. If you deliberately want the embedded Codex sidebar panel for local development, run the project-local launcher and keep that terminal open:
+
+```bash
+npm run codex
+```
+
+You can also attach to a Codex instance that was already launched with CDP:
+
+```bash
+npm run codex:inject -- --port 9229 --open
+```
+
+If an older install left the injector LaunchAgent behind, rerun the installer or stop it directly:
 
 ```bash
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.dashi-taskboard.codex-injector.plist
@@ -93,7 +113,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.dashi-taskboard.codex-
 
 Restore it later with `npm run install:codex-plugin`.
 
-Run the doctor after install or after opening Codex in Taskboard mode:
+Run the Codex plugin doctor after install or after opening Codex in Taskboard mode:
 
 ```bash
 npm run doctor:codex-plugin
@@ -107,7 +127,7 @@ npm run verify:codex-panel
 
 This opens the injected Taskboard panel and writes `.data/codex-taskboard-panel-proof.png`.
 
-Uninstall the local plugin, Codex plugin state, managed skill link, `taskctl`/`dashi-codex` shims, and LaunchAgents with:
+Uninstall the local plugin, Codex plugin state, managed skill link, `dashi-taskboard`/`taskctl`/`dashi-codex` shims, and LaunchAgents with:
 
 ```bash
 npm run uninstall:codex-plugin
@@ -167,11 +187,11 @@ To use a different UI origin, set `window.__CODEX_TASKBOARD_URL__` before the us
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CODEX_TASKBOARD_HOST` | `0.0.0.0` | HTTP bind address; use `127.0.0.1` to disable LAN access |
-| `CODEX_TASKBOARD_PORT` | `47823` | Local HTTP port |
+| `CODEX_TASKBOARD_PORT` | `47824` | Local HTTP port |
 | `CODEX_TASKBOARD_DATA_DIR` | `.data` | SQLite data directory |
-| `CODEX_TASKBOARD_URL` | `http://127.0.0.1:47823` | CLI API origin |
+| `CODEX_TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI API origin |
 
-`npm start` prints both the local URL and the available LAN URLs. Teammates on the same trusted network can open one of those LAN URLs and use the same taskboard service. Task, comment, and attachment changes are broadcast to every open client through server-sent events; reconnecting clients perform a full refresh so changes made while disconnected are not missed. A teammate using `taskctl` can point it at the shared service with `CODEX_TASKBOARD_URL=http://<host-ip>:47823`.
+`npm start` prints both the local URL and the available LAN URLs. Teammates on the same trusted network can open one of those LAN URLs and use the same taskboard service. Task, comment, and attachment changes are broadcast to every open client through server-sent events; reconnecting clients perform a full refresh so changes made while disconnected are not missed. A teammate using `taskctl` can point it at the shared service with `CODEX_TASKBOARD_URL=http://<host-ip>:47824`.
 
 LAN mode has no account authentication: anyone on the trusted local network who can reach the URL can read and write the taskboard. Public internet and cloud deployment require an authenticated deployment boundary.
 

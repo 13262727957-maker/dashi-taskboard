@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Taskboard"
-  short_description: "Manage projects and issues with taskctl CLI"
-  default_prompt: "Use $manage-taskboard to manage this project and its issues with taskctl."
+  short_description: "Install Dashi, open the panel, manage issues, and scan prior project conversations"
+  default_prompt: "Use $manage-taskboard to install Dashi Taskboard if needed, open the standalone panel window, manage this project and its issues, and run prior-conversation task card scans."
