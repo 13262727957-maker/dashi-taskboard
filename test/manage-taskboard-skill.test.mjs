@@ -31,6 +31,19 @@ test("the taskboard skill coordinates safe issue execution and review handoff", 
   );
 });
 
+test("the taskboard skill creates cards before implementation for planning requests", () => {
+  assert.match(skillSource, /## Planning First/);
+  assert.match(skillSource, /create or update task cards before doing implementation work/i);
+  assert.match(skillSource, /Do not start editing code/i);
+  assert.match(skillSource, /taskctl context current --cwd <cwd> --json/);
+  assert.match(skillSource, /taskctl issue list --project <projectId> --json/);
+  assert.match(skillSource, /parent card/i);
+  assert.match(skillSource, /child cards/i);
+  assert.match(skillSource, /issue relation add --type parent/);
+  assert.match(skillSource, /Stop and summarize the created or updated cards/i);
+  assert.match(skillSource, /unless the user explicitly asked to create cards and then start/i);
+});
+
 test("the taskboard skill can bootstrap install then open the standalone panel", () => {
   for (const source of [skillSource, cliReference]) {
     assert.match(source, /command -v dashi-taskboard|dashi-taskboard` is not installed/i);

@@ -1,6 +1,6 @@
 ---
 name: manage-taskboard
-description: Install and use Dashi Taskboard through local CLI tools. Use when an AI agent needs to clone/install Dashi Taskboard, open the standalone Dashi panel window, check the local service, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, or coordinate concurrent updates.
+description: Install and use Dashi Taskboard through local CLI tools. Use when an AI agent needs to clone/install Dashi Taskboard, open the standalone Dashi panel window, check the local service, split a requirement into task cards before implementation, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, or coordinate concurrent updates.
 ---
 
 # Manage Taskboard
@@ -40,6 +40,23 @@ For health checks, run:
 ```bash
 dashi-taskboard doctor
 ```
+
+## Planning First
+
+When the user is asking to plan, test, validate, review scope, adapt to a client, split requirements, organize work, or turn an idea into tasks, create or update task cards before doing implementation work. Do not start editing code, running a long implementation, or executing a task just because the request contains an action verb.
+
+Treat these as planning/card-creation requests unless the user explicitly says not to create cards: "拆解", "分成任务卡", "需求", "验收", "测试这个技能", "验证", "适配", "方案", "计划", "下一步", "roadmap", "todo", "backlog", "review what to do", or any multi-part feature request.
+
+Required planning sequence:
+
+1. Run `taskctl context current --cwd <cwd> --json`.
+2. Run `taskctl issue list --project <projectId> --json` and check for existing cards.
+3. Create or update a parent card for the overall requirement when the request has multiple parts.
+4. Create child cards for concrete test cases, implementation slices, acceptance checks, and documentation/boundary decisions.
+5. Relate the child cards to the parent with `issue relation add --type parent`.
+6. Stop and summarize the created or updated cards. Do not implement them in the same turn unless the user explicitly asked to create cards and then start a specific first card.
+
+Only execute implementation work when the user clearly asks to start/fix/implement a named issue, asks to continue after cards already exist, or makes a tiny request that does not benefit from durable tracking. If the user asks both to split work and execute it, create the cards first, then read and claim the named or first card with `--if-version` before implementing.
 
 ## Workflow
 

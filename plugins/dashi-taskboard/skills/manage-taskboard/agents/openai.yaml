@@ -1,4 +1,4 @@
 interface:
   display_name: "Manage Taskboard"
-  short_description: "Install Dashi, open the panel, and manage projects and issues"
-  default_prompt: "Use $manage-taskboard to install Dashi Taskboard if needed, open the standalone panel window, and manage this project and its issues."
+  short_description: "Install Dashi, open the panel, split requirements into task cards, and manage issues"
+  default_prompt: "Use $manage-taskboard to install Dashi Taskboard if needed, open the standalone panel window, split requirements into task cards before implementation, and manage this project and its issues."
