@@ -6,11 +6,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { defaultTaskboardDataDirectory } from "../shared/taskboard-paths.mjs";
+
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pluginName = "dashi-taskboard";
 const pluginInstallPath = path.join(os.homedir(), "plugins", pluginName);
 const marketplacePath = path.join(os.homedir(), ".agents", "plugins", "marketplace.json");
-const databasePath = path.join(projectRoot, ".data", "taskboard.sqlite");
+const dataDir = process.env.CODEX_TASKBOARD_DATA_DIR
+  ? path.resolve(process.env.CODEX_TASKBOARD_DATA_DIR)
+  : defaultTaskboardDataDirectory();
+const databasePath = path.join(dataDir, "taskboard.sqlite");
 const serviceUrl = "http://127.0.0.1:47824";
 const taskctlPath = path.join(os.homedir(), ".local", "bin", "taskctl");
 const dashiTaskboardPath = path.join(os.homedir(), ".local", "bin", "dashi-taskboard");

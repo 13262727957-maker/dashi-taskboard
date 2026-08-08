@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readCodexQuotaStatus } from "../scripts/codex-rate-limits.mjs";
+import { defaultTaskboardDataDirectory } from "../shared/taskboard-paths.mjs";
 import {
   parseTaskboardAutomationHostRequest,
   reconcileTaskboardAutomation,
@@ -12,7 +13,7 @@ import {
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_CODEX_DEBUGGING_PORT = 9229;
-const AUTOMATION_POLICIES_PATH = path.join(PROJECT_ROOT, ".data", "codex-automation-policies.json");
+const AUTOMATION_POLICIES_PATH = path.join(defaultTaskboardDataDirectory(), "codex-automation-policies.json");
 const CODEX_AUTOMATION_METHODS = new Set([
   "list-automations",
   "automation-create",
@@ -210,8 +211,27 @@ function automationUnavailableMessage(failures) {
   const detail = failures.length > 0 ? `：${failures.join("；")}` : "";
   return [
     `没有找到可用的 Codex 自动化接口${detail}`,
-    "请先打开带调试端口的 Codex/ChatGPT，或运行 npm run codex:daemon 后再重试。",
+    "为了避免影响当前 ChatGPT/Codex 窗口，任务面板不会自动关闭或重启主应用。",
   ].join("。");
+}
+
+export async function launchLocalAutomationMode() {
+  const status = await getLocalAutomationStatus();
+  if (status.available) {
+    return {
+      ok: true,
+      action: "attached-existing",
+      port: status.port,
+      status,
+    };
+  }
+  return {
+    ok: false,
+    action: "manual-start-required",
+    port: null,
+    status,
+    error: status.guidance,
+  };
 }
 
 export async function getLocalAutomationStatus(options = {}) {

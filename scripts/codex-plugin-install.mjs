@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { cp, lstat, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
+import { access, cp, lstat, mkdir, readdir, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { defaultTaskboardDataDirectory } from "../shared/taskboard-paths.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(scriptPath), "..");
@@ -28,6 +31,10 @@ const cjTaskDashboardCmdPath = path.join(userBinDir, "cj-task-dashboard.cmd");
 const dashiCodexPath = path.join(userBinDir, "dashi-codex");
 const codexSkillsDir = path.join(os.homedir(), ".codex", "skills");
 const legacySkillPath = path.join(codexSkillsDir, "manage-taskboard");
+const legacyDataDir = path.join(projectRoot, ".data");
+const taskboardDataDir = process.env.CODEX_TASKBOARD_DATA_DIR
+  ? path.resolve(process.env.CODEX_TASKBOARD_DATA_DIR)
+  : defaultTaskboardDataDirectory();
 const nodePath = process.execPath;
 const managedMarker = "Managed by dashi-taskboard Codex plugin installer.";
 const taskctlCliPath = path.join(projectRoot, "cli", "taskctl.mjs");
@@ -86,6 +93,69 @@ function launchAgentPath(codexExecutable) {
     "/sbin",
   ];
   return [...new Set(entries.filter(Boolean))].join(":");
+}
+
+async function fileExists(file) {
+  try {
+    await access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function inspectLegacyDatabase(databasePath) {
+  let database = null;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const hasTasks = database.prepare(`
+      SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'
+    `).get();
+    if (!hasTasks) return null;
+    const taskCount = Number(database.prepare("SELECT COUNT(*) AS count FROM tasks").get()?.count ?? 0);
+    return { taskCount };
+  } catch {
+    return null;
+  } finally {
+    database?.close();
+  }
+}
+
+function checkpointDatabase(databasePath) {
+  let database = null;
+  try {
+    database = new DatabaseSync(databasePath);
+    database.exec("PRAGMA wal_checkpoint(FULL)");
+  } finally {
+    database?.close();
+  }
+}
+
+async function legacyDataSource() {
+  const candidateDirs = new Set([legacyDataDir]);
+  const projectsDir = path.join(os.homedir(), "Desktop", "Projects");
+  try {
+    const entries = await readdir(projectsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) candidateDirs.add(path.join(projectsDir, entry.name, ".data"));
+    }
+  } catch {}
+
+  const candidates = [];
+  for (const dataDir of candidateDirs) {
+    const database = path.join(dataDir, "taskboard.sqlite");
+    try {
+      const info = await stat(database);
+      if (!info.isFile() || info.size <= 0) continue;
+      const inspected = inspectLegacyDatabase(database);
+      if (inspected) candidates.push({ dataDir, bytes: info.size, taskCount: inspected.taskCount });
+    } catch {}
+  }
+  candidates.sort((left, right) => (
+    right.taskCount - left.taskCount
+    || right.bytes - left.bytes
+  ));
+  return candidates[0] ?? null;
 }
 
 function xml(value) {
@@ -263,45 +333,93 @@ function launchctl(args) {
   });
 }
 
-function managedRuntimePids() {
+function managedProcessRows() {
+  if (process.platform === "win32") {
+    const command = [
+      "$items = Get-CimInstance Win32_Process",
+      "| Where-Object { $_.CommandLine -match 'codex-plugin-agent\\.mjs|codex-injector\\.mjs|server[\\\\/]index\\.mjs' }",
+      "| Select-Object ProcessId,CommandLine;",
+      "$items | ConvertTo-Json -Compress",
+    ].join(" ");
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    if (result.status !== 0 || !result.stdout.trim()) return [];
+    try {
+      const parsed = JSON.parse(result.stdout);
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      return rows
+        .map((row) => ({ pid: Number(row.ProcessId), command: String(row.CommandLine || "") }))
+        .filter(({ pid, command }) => Number.isInteger(pid) && command);
+    } catch {
+      return [];
+    }
+  }
+
   const result = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
     encoding: "utf8",
     stdio: "pipe",
   });
   if (result.status !== 0) return [];
+  return result.stdout.split("\n")
+    .map((line) => line.trim().match(/^(\d+)\s+(.+)$/))
+    .filter(Boolean)
+    .map((match) => ({ pid: Number(match[1]), command: match[2] }));
+}
+
+function commandIncludesScript(command, script) {
+  return command.includes(script)
+    || command.includes(script.replaceAll("\\", "/"))
+    || command.includes(script.replaceAll("/", "\\"));
+}
+
+function commandIncludesRelativeScript(command, relativeScript) {
+  return command.includes(relativeScript)
+    || command.includes(relativeScript.replaceAll("\\", "/"))
+    || command.includes(relativeScript.replaceAll("/", "\\"));
+}
+
+function isTaskboardCommand(command) {
+  return command.includes("dashi-taskboard")
+    || command.includes("cjtaskdashboard")
+    || command.includes("codex-taskboard");
+}
+
+function managedRuntimePids() {
   const managedScripts = [
     path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"),
     path.join(projectRoot, "scripts", "codex-injector.mjs"),
     path.join(projectRoot, "server", "index.mjs"),
   ];
-  return result.stdout.split("\n")
-    .map((line) => line.trim().match(/^(\d+)\s+(.+)$/))
-    .filter(Boolean)
-    .map((match) => ({ pid: Number(match[1]), command: match[2] }))
+  return managedProcessRows()
     .filter(({ pid, command }) => (
       pid !== process.pid
-      && managedScripts.some((script) => command.includes(script))
+      && isTaskboardCommand(command)
+      && (
+        managedScripts.some((script) => commandIncludesScript(command, script))
+        || commandIncludesRelativeScript(command, path.join("scripts", "codex-plugin-agent.mjs"))
+        || commandIncludesRelativeScript(command, path.join("scripts", "codex-injector.mjs"))
+        || commandIncludesRelativeScript(command, path.join("server", "index.mjs"))
+      )
     ))
     .map(({ pid }) => pid);
 }
 
 function managedInjectorPids() {
-  const result = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
-    encoding: "utf8",
-    stdio: "pipe",
-  });
-  if (result.status !== 0) return [];
   const injectorScripts = [
     path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"),
     path.join(projectRoot, "scripts", "codex-injector.mjs"),
   ];
-  return result.stdout.split("\n")
-    .map((line) => line.trim().match(/^(\d+)\s+(.+)$/))
-    .filter(Boolean)
-    .map((match) => ({ pid: Number(match[1]), command: match[2] }))
+  return managedProcessRows()
     .filter(({ pid, command }) => (
       pid !== process.pid
-      && injectorScripts.some((script) => command.includes(script))
+      && isTaskboardCommand(command)
+      && (
+        injectorScripts.some((script) => commandIncludesScript(command, script))
+        || commandIncludesRelativeScript(command, path.join("scripts", "codex-plugin-agent.mjs"))
+        || commandIncludesRelativeScript(command, path.join("scripts", "codex-injector.mjs"))
+      )
       && (command.includes(" injector") || command.includes("codex-injector.mjs"))
     ))
     .map(({ pid }) => pid);
@@ -335,6 +453,21 @@ async function stopManagedInjectorProcesses() {
   return stopPids(managedInjectorPids(), managedInjectorPids);
 }
 
+async function stopExistingLocalTaskboardRuntime() {
+  if (process.platform === "darwin") {
+    const guiTarget = `gui/${process.getuid()}`;
+    launchctl(["bootout", guiTarget, serverPlistPath]);
+    launchctl(["bootout", guiTarget, injectorPlistPath]);
+  }
+  const stoppedRuntimePids = await stopManagedRuntimeProcesses();
+  const stoppedInjectorPids = await stopManagedInjectorProcesses();
+  return {
+    stopped: stoppedRuntimePids.length > 0 || stoppedInjectorPids.length > 0,
+    runtimePids: stoppedRuntimePids,
+    injectorPids: stoppedInjectorPids,
+  };
+}
+
 async function removeManagedDashiCodexShim() {
   try {
     const existing = await readFile(dashiCodexPath, "utf8");
@@ -347,8 +480,37 @@ async function removeManagedDashiCodexShim() {
   }
 }
 
+async function migrateLegacyDataDirectory() {
+  await mkdir(taskboardDataDir, { recursive: true });
+  const targetDatabase = path.join(taskboardDataDir, "taskboard.sqlite");
+  if (await fileExists(targetDatabase)) return { migrated: false, dataDir: taskboardDataDir };
+  const source = await legacyDataSource();
+  if (!source) return { migrated: false, dataDir: taskboardDataDir };
+  const sourceDatabase = path.join(source.dataDir, "taskboard.sqlite");
+  checkpointDatabase(sourceDatabase);
+  await cp(sourceDatabase, targetDatabase, { errorOnExist: true, force: false });
+  for (const suffix of ["-wal", "-shm"]) {
+    const sourceSidecar = `${sourceDatabase}${suffix}`;
+    if (await fileExists(sourceSidecar)) {
+      await cp(sourceSidecar, `${targetDatabase}${suffix}`, { errorOnExist: true, force: false });
+    }
+  }
+  const sourceAttachments = path.join(source.dataDir, "attachments");
+  const targetAttachments = path.join(taskboardDataDir, "attachments");
+  if (!(await fileExists(targetAttachments)) && await fileExists(sourceAttachments)) {
+    await cp(sourceAttachments, targetAttachments, { recursive: true, errorOnExist: true, force: false });
+  }
+  return {
+    migrated: true,
+    from: source.dataDir,
+    dataDir: taskboardDataDir,
+    taskCount: source.taskCount,
+  };
+}
+
 async function installLaunchAgents(codexExecutable) {
-  await mkdir(path.join(projectRoot, ".data"), { recursive: true });
+  await mkdir(legacyDataDir, { recursive: true });
+  await mkdir(taskboardDataDir, { recursive: true });
   await mkdir(launchAgentsDir, { recursive: true });
   const pathValue = launchAgentPath(codexExecutable);
   await writeFile(serverPlistPath, plist(
@@ -357,7 +519,7 @@ async function installLaunchAgents(codexExecutable) {
     {
       CODEX_TASKBOARD_HOST: "127.0.0.1",
       CODEX_TASKBOARD_PORT: "47824",
-      CODEX_TASKBOARD_DATA_DIR: path.join(projectRoot, ".data"),
+      CODEX_TASKBOARD_DATA_DIR: taskboardDataDir,
       CODEX_EXECUTABLE: codexExecutable,
       PATH: pathValue,
     },
@@ -412,6 +574,8 @@ async function main() {
   run("npm", ["install"], { stdio: "inherit" });
   run("npm", ["run", "build:web"], { stdio: "inherit" });
   const codexExecutable = requiredExecutablePath("codex");
+  const stoppedRuntime = await stopExistingLocalTaskboardRuntime();
+  const dataMigration = await migrateLegacyDataDirectory();
   await installPluginSource();
   const legacySkill = await installLegacySkillLink();
   const installedTaskctlPath = await installTaskctlShim();
@@ -442,6 +606,9 @@ async function main() {
     ...installedCjTaskboardPaths,
     dashiCodex: removedDashiCodex,
     legacySkillPath: legacySkill,
+    dataDir: taskboardDataDir,
+    stoppedRuntime,
+    dataMigration,
     taskboardOpen,
     serviceUrl: "http://127.0.0.1:47824",
     next: taskboardOpen.ok

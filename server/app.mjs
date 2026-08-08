@@ -16,6 +16,7 @@ import {
   isTaskStatus,
 } from "../shared/domain.mjs";
 import { parseTaskboardAutomationHostRequest } from "../shared/taskboard-automation.mjs";
+import { defaultTaskboardDataDirectory } from "../shared/taskboard-paths.mjs";
 import { normalizeWorkflowSnapshot } from "../shared/workflow-control-flow.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
@@ -31,6 +32,7 @@ import {
 } from "./project-discovery.mjs";
 import {
   getLocalAutomationStatus,
+  launchLocalAutomationMode,
   runLocalTaskboardAutomation,
   startLocalAutomationPolicyScheduler,
 } from "./local-automation.mjs";
@@ -1274,7 +1276,7 @@ export function resolveServerOptions(options = {}) {
   const configuredDataDirectory = options.dataDirectory ?? process.env.CODEX_TASKBOARD_DATA_DIR;
   const dataDirectory = configuredDataDirectory
     ? path.resolve(configuredDataDirectory)
-    : path.join(PROJECT_ROOT, ".data");
+    : defaultTaskboardDataDirectory();
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const paseoHome = process.env.PASEO_HOME || path.join(os.homedir(), ".paseo");
   return {
@@ -1460,6 +1462,13 @@ export function createTaskboardServer(options = {}) {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
         assertNoQuery(url.searchParams, "GET /api/local/automation/status");
         return sendJson(response, 200, await getLocalAutomationStatus());
+      }
+
+      if (pathname === "/api/local/automation/launch") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertNoQuery(url.searchParams, "POST /api/local/automation/launch");
+        assertAllowedKeys(await readJson(request), new Set([]));
+        return sendJson(response, 200, await launchLocalAutomationMode());
       }
 
       if (pathname === "/api/local/automation") {

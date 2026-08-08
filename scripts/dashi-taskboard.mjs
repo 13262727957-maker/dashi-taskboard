@@ -3,22 +3,46 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  defaultTaskboardDataDirectory,
+  defaultTaskboardPanelProfileDirectory,
+} from "../shared/taskboard-paths.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const nodePath = process.execPath;
 const serviceUrl = process.env.CODEX_TASKBOARD_URL || "http://127.0.0.1:47824";
 const panelUrl = `${serviceUrl}/?host=agent`;
 const serverLabel = "com.dashi-taskboard.server";
-const databasePath = path.join(projectRoot, ".data", "taskboard.sqlite");
-const panelProfileDir = path.join(projectRoot, ".data", "panel-browser-profile");
+const dataDir = process.env.CODEX_TASKBOARD_DATA_DIR
+  ? path.resolve(process.env.CODEX_TASKBOARD_DATA_DIR)
+  : defaultTaskboardDataDirectory();
+const databasePath = path.join(dataDir, "taskboard.sqlite");
+const panelProfileDir = defaultTaskboardPanelProfileDirectory();
+const panelDebugPort = Number(process.env.CODEX_TASKBOARD_PANEL_DEBUG_PORT || "47825");
 const macosAppModeBrowsers = [
-  { name: "Google Chrome", path: "/Applications/Google Chrome.app" },
-  { name: "Chromium", path: "/Applications/Chromium.app" },
-  { name: "Microsoft Edge", path: "/Applications/Microsoft Edge.app" },
-  { name: "Brave Browser", path: "/Applications/Brave Browser.app" },
+  {
+    name: "Google Chrome",
+    path: "/Applications/Google Chrome.app",
+    executable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  },
+  {
+    name: "Chromium",
+    path: "/Applications/Chromium.app",
+    executable: "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  },
+  {
+    name: "Microsoft Edge",
+    path: "/Applications/Microsoft Edge.app",
+    executable: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  },
+  {
+    name: "Brave Browser",
+    path: "/Applications/Brave Browser.app",
+    executable: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+  },
 ];
 const windowsAppModeBrowsers = [
   path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "Application", "chrome.exe"),
@@ -42,6 +66,28 @@ async function health() {
     return response.ok ? await response.json() : { status: "error", httpStatus: response.status };
   } catch (error) {
     return { status: "error", error: error.message };
+  }
+}
+
+async function activateExistingPanelTarget() {
+  if (!Number.isInteger(panelDebugPort) || panelDebugPort < 1 || panelDebugPort > 65535) return null;
+  try {
+    const response = await fetch(`http://127.0.0.1:${panelDebugPort}/json/list`, {
+      signal: AbortSignal.timeout(600),
+    });
+    if (!response.ok) return null;
+    const targets = await response.json();
+    const target = Array.isArray(targets)
+      ? targets.find((candidate) => typeof candidate?.url === "string" && candidate.url.startsWith(panelUrl))
+      : null;
+    if (!target?.id) return null;
+    const activateResponse = await fetch(
+      `http://127.0.0.1:${panelDebugPort}/json/activate/${encodeURIComponent(target.id)}`,
+      { signal: AbortSignal.timeout(600) },
+    );
+    return activateResponse.ok ? { targetId: target.id } : null;
+  } catch {
+    return null;
   }
 }
 
@@ -130,49 +176,28 @@ async function ensureServer() {
   return { health: afterSpawn, started: afterSpawn.status === "ok", method: "detached-server", pid };
 }
 
-function openPanel(url) {
+async function openPanel(url) {
+  const existingPanel = await activateExistingPanelTarget();
+  if (existingPanel) {
+    return {
+      method: "existing-panel-app-window",
+      debugPort: panelDebugPort,
+      url,
+      ...existingPanel,
+    };
+  }
+
   if (process.platform === "darwin") {
     for (const browser of macosAppModeBrowsers) {
-      if (!existsSync(browser.path)) continue;
-      const focusResult = spawnSync("/usr/bin/osascript", [
-        "-e",
-        `tell application ${JSON.stringify(browser.name)}
-          repeat with candidate in windows
-            repeat with candidateTab in tabs of candidate
-              if (URL of candidateTab) starts with ${JSON.stringify(url)} then
-                set active tab index of candidate to index of candidateTab
-                set index of candidate to 1
-                activate
-                return "focused"
-              end if
-            end repeat
-          end repeat
-          return "not-found"
-        end tell`,
-      ], {
-        encoding: "utf8",
-        stdio: "pipe",
-      });
-      if (focusResult.status === 0 && focusResult.stdout.trim() === "focused") {
-        return { method: "macos-existing-browser-window", browser: browser.name, url };
-      }
-    }
-
-    for (const browser of macosAppModeBrowsers) {
-      if (!existsSync(browser.path)) continue;
-      const appResult = spawnSync("/usr/bin/open", [
-        "-a",
-        browser.name,
-        "--args",
+      if (!existsSync(browser.executable)) continue;
+      const child = spawn(browser.executable, [
         `--user-data-dir=${panelProfileDir}`,
+        `--remote-debugging-port=${panelDebugPort}`,
+        "--remote-debugging-address=127.0.0.1",
         `--app=${url}`,
-      ], {
-        encoding: "utf8",
-        stdio: "pipe",
-      });
-      if (appResult.status === 0) {
-        return { method: "macos-browser-app-mode", browser: browser.name, url };
-      }
+      ], { detached: true, stdio: "ignore" });
+      child.unref();
+      return { method: "macos-browser-app-mode", browser: browser.name, debugPort: panelDebugPort, url };
     }
 
     const result = spawnSync("/usr/bin/open", [url], {
@@ -191,10 +216,12 @@ function openPanel(url) {
     if (browser) {
       const child = spawn(browser, [
         `--user-data-dir=${panelProfileDir}`,
+        `--remote-debugging-port=${panelDebugPort}`,
+        "--remote-debugging-address=127.0.0.1",
         `--app=${url}`,
       ], { detached: true, stdio: "ignore" });
       child.unref();
-      return { method: "windows-browser-app-mode", browser, url };
+      return { method: "windows-browser-app-mode", browser, debugPort: panelDebugPort, url };
     }
   }
 
@@ -204,10 +231,12 @@ function openPanel(url) {
       if (result.status !== 0) continue;
       const child = spawn(result.stdout.trim(), [
         `--user-data-dir=${panelProfileDir}`,
+        `--remote-debugging-port=${panelDebugPort}`,
+        "--remote-debugging-address=127.0.0.1",
         `--app=${url}`,
       ], { detached: true, stdio: "ignore" });
       child.unref();
-      return { method: "linux-browser-app-mode", browser, url };
+      return { method: "linux-browser-app-mode", browser, debugPort: panelDebugPort, url };
     }
   }
 
@@ -255,7 +284,7 @@ async function open() {
     process.exitCode = 1;
     return;
   }
-  const opened = openPanel(panelUrl);
+  const opened = await openPanel(panelUrl);
   print({ ok: true, serviceUrl, panelUrl, server, opened });
 }
 

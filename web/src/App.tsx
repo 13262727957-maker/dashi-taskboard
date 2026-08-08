@@ -623,6 +623,7 @@ export function App() {
   const [deviceWorkspacePaths, setDeviceWorkspacePaths] = useState(readDeviceWorkspacePaths);
   const [projectAutomations, setProjectAutomations] = useState(readProjectAutomations);
   const [automationPending, setAutomationPending] = useState(false);
+  const [automationLaunching, setAutomationLaunching] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const [announcement, setAnnouncementValue] = useState("");
   const [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null);
@@ -1008,6 +1009,32 @@ export function App() {
     selectedProjectId,
     sendAutomationRequest,
     writeProjectAutomation,
+  ]);
+
+  const launchAutomationMode = useCallback(async () => {
+    if (embedded || window.parent !== window || automationLaunching) return;
+    setAutomationLaunching(true);
+    setAutomationError(null);
+    try {
+      const response = await fetch("/api/local/automation/launch", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || !body?.ok) {
+        throw new Error(body?.error ?? `自动化模式启动失败：HTTP ${response.status}`);
+      }
+      await reconcileProjectAutomation();
+    } catch (error) {
+      setAutomationError(error instanceof Error ? error.message : "无法开启自动化模式");
+    } finally {
+      setAutomationLaunching(false);
+    }
+  }, [
+    automationLaunching,
+    embedded,
+    reconcileProjectAutomation,
   ]);
 
   function openTaskDetail(task: Pick<Task, "identifier" | "projectId">) {
@@ -2101,10 +2128,12 @@ export function App() {
               <ProjectAutomationMenu
                 automation={selectedProjectAutomation}
                 pending={automationPending}
+                launching={automationLaunching}
                 error={automationError}
                 unavailableReason={automationProjectContext.unavailableReason}
                 onOpen={() => void reconcileProjectAutomation()}
                 onChange={(options) => void saveProjectAutomation(options)}
+                onLaunch={!embedded && window.parent === window ? () => void launchAutomationMode() : undefined}
               />
             )}
             {selectedProjectId && boardView === "issues" && (

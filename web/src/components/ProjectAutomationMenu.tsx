@@ -36,8 +36,10 @@ interface ProjectAutomationMenuProps {
   pending: boolean;
   error: string | null;
   unavailableReason: string | null;
+  launching: boolean;
   onOpen: () => void;
   onChange: (options: AutomationOptions) => void;
+  onLaunch?: () => void;
 }
 
 const DEFAULT_OPTIONS: AutomationOptions = {
@@ -62,8 +64,10 @@ export function ProjectAutomationMenu({
   pending,
   error,
   unavailableReason,
+  launching,
   onOpen,
   onChange,
+  onLaunch,
 }: ProjectAutomationMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -84,7 +88,7 @@ export function ProjectAutomationMenu({
           : status === "ACTIVE"
             ? "运行中"
             : "已暂停";
-  const disabled = pending || Boolean(unavailableReason);
+  const disabled = pending || launching || Boolean(unavailableReason);
 
   useEffect(() => {
     if (!open) return;
@@ -247,6 +251,17 @@ export function ProjectAutomationMenu({
       </label>
       {unavailableReason && <p className="project-automation-note">{unavailableReason}</p>}
       {error && error !== unavailableReason && <p className="project-automation-error" role="alert">{error}</p>}
+      {error && !unavailableReason && onLaunch && (
+        <button
+          type="button"
+          className="project-automation-launch"
+          disabled={launching}
+          onClick={onLaunch}
+        >
+          <LinearIcon name="play" />
+          <span>{launching ? "正在检测…" : "重新检测自动化接口"}</span>
+        </button>
+      )}
     </div>,
     document.body,
   ) : null;
