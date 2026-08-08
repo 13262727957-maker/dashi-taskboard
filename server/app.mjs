@@ -15,6 +15,7 @@ import {
   isTaskPriority,
   isTaskStatus,
 } from "../shared/domain.mjs";
+import { parseTaskboardAutomationHostRequest } from "../shared/taskboard-automation.mjs";
 import { normalizeWorkflowSnapshot } from "../shared/workflow-control-flow.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
@@ -28,6 +29,11 @@ import {
   readDeviceProjects,
   resolveMaterializedProjectForPath,
 } from "./project-discovery.mjs";
+import {
+  getLocalAutomationStatus,
+  runLocalTaskboardAutomation,
+  startLocalAutomationPolicyScheduler,
+} from "./local-automation.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -814,6 +820,19 @@ function parseAiThreadCreate(body) {
   };
 }
 
+function parseLocalAutomation(body) {
+  assertPlainObject(body);
+  const request = parseTaskboardAutomationHostRequest({
+    ...body,
+    id: randomUUID(),
+    action: "automation",
+  });
+  if (!request) {
+    throw new ApiError(400, "INVALID_AUTOMATION_REQUEST", "Automation request is invalid");
+  }
+  return request;
+}
+
 function parseAiThreadPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set(["title", "model", "reasoningEffort", "sandbox"]));
@@ -1322,6 +1341,9 @@ export function createTaskboardServer(options = {}) {
     manageTaskboardSkillPath: resolved.skillPath,
   });
   const aiEventResponses = new Set();
+  void startLocalAutomationPolicyScheduler().catch((error) => {
+    console.error(`Local automation policy scheduler failed to start: ${error.message}`);
+  });
 
   const server = createServer(async (request, response) => {
     response.setHeader("x-content-type-options", "nosniff");
@@ -1431,6 +1453,25 @@ export function createTaskboardServer(options = {}) {
               localCapabilities: { available: true },
             }
             : {}),
+        });
+      }
+
+      if (pathname === "/api/local/automation/status") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertNoQuery(url.searchParams, "GET /api/local/automation/status");
+        return sendJson(response, 200, await getLocalAutomationStatus());
+      }
+
+      if (pathname === "/api/local/automation") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertNoQuery(url.searchParams, "POST /api/local/automation");
+        const automationRequest = parseLocalAutomation(await readJson(request));
+        const result = await runLocalTaskboardAutomation(automationRequest);
+        if (result?.ok === false) return sendJson(response, 200, result);
+        return sendJson(response, 200, {
+          requestId: automationRequest.requestId,
+          ok: true,
+          ...result,
         });
       }
 

@@ -13,12 +13,22 @@ const serviceUrl = process.env.CODEX_TASKBOARD_URL || "http://127.0.0.1:47824";
 const panelUrl = `${serviceUrl}/?host=agent`;
 const serverLabel = "com.dashi-taskboard.server";
 const databasePath = path.join(projectRoot, ".data", "taskboard.sqlite");
+const panelProfileDir = path.join(projectRoot, ".data", "panel-browser-profile");
 const macosAppModeBrowsers = [
   { name: "Google Chrome", path: "/Applications/Google Chrome.app" },
   { name: "Chromium", path: "/Applications/Chromium.app" },
   { name: "Microsoft Edge", path: "/Applications/Microsoft Edge.app" },
   { name: "Brave Browser", path: "/Applications/Brave Browser.app" },
 ];
+const windowsAppModeBrowsers = [
+  path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "Application", "chrome.exe"),
+  path.join(process.env.PROGRAMFILES || "", "Google", "Chrome", "Application", "chrome.exe"),
+  path.join(process.env["PROGRAMFILES(X86)"] || "", "Google", "Chrome", "Application", "chrome.exe"),
+  path.join(process.env.LOCALAPPDATA || "", "Microsoft", "Edge", "Application", "msedge.exe"),
+  path.join(process.env.PROGRAMFILES || "", "Microsoft", "Edge", "Application", "msedge.exe"),
+  path.join(process.env["PROGRAMFILES(X86)"] || "", "Microsoft", "Edge", "Application", "msedge.exe"),
+];
+const linuxAppModeBrowsers = ["google-chrome", "chromium", "chromium-browser", "microsoft-edge", "brave-browser"];
 
 function print(value) {
   console.log(JSON.stringify(value, null, 2));
@@ -124,13 +134,38 @@ function openPanel(url) {
   if (process.platform === "darwin") {
     for (const browser of macosAppModeBrowsers) {
       if (!existsSync(browser.path)) continue;
+      const focusResult = spawnSync("/usr/bin/osascript", [
+        "-e",
+        `tell application ${JSON.stringify(browser.name)}
+          repeat with candidate in windows
+            repeat with candidateTab in tabs of candidate
+              if (URL of candidateTab) starts with ${JSON.stringify(url)} then
+                set active tab index of candidate to index of candidateTab
+                set index of candidate to 1
+                activate
+                return "focused"
+              end if
+            end repeat
+          end repeat
+          return "not-found"
+        end tell`,
+      ], {
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      if (focusResult.status === 0 && focusResult.stdout.trim() === "focused") {
+        return { method: "macos-existing-browser-window", browser: browser.name, url };
+      }
+    }
+
+    for (const browser of macosAppModeBrowsers) {
+      if (!existsSync(browser.path)) continue;
       const appResult = spawnSync("/usr/bin/open", [
-        "-n",
         "-a",
         browser.name,
         "--args",
+        `--user-data-dir=${panelProfileDir}`,
         `--app=${url}`,
-        "--new-window",
       ], {
         encoding: "utf8",
         stdio: "pipe",
@@ -149,6 +184,31 @@ function openPanel(url) {
       throw new Error(`open ${url} failed${detail ? `\n${detail}` : ""}`);
     }
     return { method: "macos-default-browser", url };
+  }
+
+  if (process.platform === "win32") {
+    const browser = windowsAppModeBrowsers.find((candidate) => candidate && existsSync(candidate));
+    if (browser) {
+      const child = spawn(browser, [
+        `--user-data-dir=${panelProfileDir}`,
+        `--app=${url}`,
+      ], { detached: true, stdio: "ignore" });
+      child.unref();
+      return { method: "windows-browser-app-mode", browser, url };
+    }
+  }
+
+  if (process.platform === "linux") {
+    for (const browser of linuxAppModeBrowsers) {
+      const result = spawnSync("/usr/bin/env", ["which", browser], { encoding: "utf8", stdio: "pipe" });
+      if (result.status !== 0) continue;
+      const child = spawn(result.stdout.trim(), [
+        `--user-data-dir=${panelProfileDir}`,
+        `--app=${url}`,
+      ], { detached: true, stdio: "ignore" });
+      child.unref();
+      return { method: "linux-browser-app-mode", browser, url };
+    }
   }
 
   const opener = process.platform === "win32" ? "cmd" : "xdg-open";
@@ -202,7 +262,8 @@ async function open() {
 function help() {
   print({
     ok: true,
-    usage: "dashi-taskboard <open|start|doctor>",
+    usage: "cj-taskboard <open|start|doctor>",
+    aliases: ["cj-task-dashboard", "dashi-taskboard"],
     commands: {
       open: "Start or reuse the local Taskboard server and open the standalone panel window.",
       start: "Start or reuse the local Taskboard server.",

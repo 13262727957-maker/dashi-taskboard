@@ -244,6 +244,52 @@ function readFavoriteProjectIds(): Set<string> {
   }
 }
 
+function workspaceKey(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function projectWorkspace(
+  project: Pick<Project, "id" | "workspacePath">,
+  workspaceLookup: Record<string, string>,
+): string | null {
+  return workspaceKey(project.workspacePath ?? workspaceLookup[project.id]);
+}
+
+function betterWorkspaceProject(left: Project | undefined, right: Project): Project {
+  if (!left) return right;
+  if ((right.issueCount ?? 0) !== (left.issueCount ?? 0)) {
+    return (right.issueCount ?? 0) > (left.issueCount ?? 0) ? right : left;
+  }
+  if (right.workspacePath && !left.workspacePath) return right;
+  return left;
+}
+
+function canonicalProjectsByWorkspace(
+  projects: Project[],
+  workspaceLookup: Record<string, string>,
+): Map<string, Project> {
+  const result = new Map<string, Project>();
+  for (const project of projects) {
+    const workspace = projectWorkspace(project, workspaceLookup);
+    if (!workspace) continue;
+    result.set(workspace, betterWorkspaceProject(result.get(workspace), project));
+  }
+  return result;
+}
+
+function canonicalProjectId(
+  projectId: string,
+  projects: Project[],
+  workspaceLookup: Record<string, string>,
+): string | null {
+  const project = projects.find((candidate) => candidate.id === projectId);
+  if (!project) return null;
+  const workspace = projectWorkspace(project, workspaceLookup);
+  if (!workspace) return project.id;
+  return canonicalProjectsByWorkspace(projects, workspaceLookup).get(workspace)?.id ?? project.id;
+}
+
 function readDeviceWorkspacePaths(): Record<string, string> {
   try {
     const value = JSON.parse(window.localStorage.getItem(DEVICE_WORKSPACE_PATHS_KEY) ?? "{}");
@@ -618,15 +664,13 @@ export function App() {
   const selectedDeviceWorkspacePath = deviceWorkspacePaths[selectedProjectId];
   const selectedProjectAutomation = projectAutomations[selectedProjectId];
   const automationProjectContext = useMemo(() => {
-    if (!embedded || window.parent === window) {
-      return { unavailableReason: "仅可在 Codex App 中使用" };
-    }
     if (!isLocalTaskboardOrigin(window.location.origin)) {
       return { unavailableReason: "仅本地任务面板可用" };
     }
     if (!selectedProject) return { unavailableReason: "请先选择项目" };
 
-    const directCodexProject = hostContext?.projects?.some(
+    const hostProjects = hostContext?.projects ?? [];
+    const directCodexProject = hostProjects.some(
       (project) => project.id === selectedProject.id,
     );
     const workspacePath = deviceWorkspacePaths[selectedProject.id]
@@ -638,12 +682,12 @@ export function App() {
       );
     const codexProjectId = directCodexProject
       ? selectedProject.id
-      : hostContext?.projects?.find(
+      : hostProjects.find(
         (project) => deviceWorkspacePaths[project.id] === workspacePath,
-      )?.id;
+      )?.id ?? selectedProject.id;
 
-    if (!workspacePath || !codexProjectId) {
-      return { unavailableReason: "请先在 Codex 中添加并映射该项目目录" };
+    if (!workspacePath) {
+      return { unavailableReason: "请先为该项目映射本地目录" };
     }
     if (!manageTaskboardSkillPath) {
       return { unavailableReason: "任务面板还没有读取到 Skill 路径" };
@@ -651,7 +695,6 @@ export function App() {
     return { workspacePath, codexProjectId, unavailableReason: null };
   }, [
     deviceWorkspacePaths,
-    embedded,
     hostContext,
     manageTaskboardSkillPath,
     selectedProject,
@@ -672,29 +715,28 @@ export function App() {
   );
   const projectChoices = useMemo<ProjectChoice[]>(() => {
     const persistedById = new Map(projects.map((project) => [project.id, project]));
-    const persistedByWorkspace = new Map(
-      projects
-        .flatMap((project) => {
-          const workspacePath = project.workspacePath ?? deviceWorkspacePaths[project.id] ?? null;
-          return workspacePath ? [[workspacePath, project] as const] : [];
-        }),
-    );
+    const persistedByWorkspace = canonicalProjectsByWorkspace(projects, deviceWorkspacePaths);
     const seen = new Set<string>();
+    const seenWorkspaces = new Set<string>();
     const choices: ProjectChoice[] = [];
     for (const project of [...(hostContext?.projects ?? []), ...deviceProjects]) {
       const deviceProject = project as Partial<DeviceProject>;
-      const workspacePath = typeof deviceProject.workspacePath === "string"
+      const workspacePath = workspaceKey(typeof deviceProject.workspacePath === "string"
         ? deviceProject.workspacePath
-        : deviceWorkspacePaths[project.id] ?? null;
+        : deviceWorkspacePaths[project.id] ?? null);
       const persisted = persistedById.get(project.id)
         ?? (workspacePath ? persistedByWorkspace.get(workspacePath) : undefined);
       const id = persisted?.id ?? project.id;
       if (!id || !project.name || seen.has(id)) continue;
+      const canonicalWorkspacePath = projectWorkspace(persisted ?? { id, workspacePath }, deviceWorkspacePaths)
+        ?? workspacePath;
+      if (canonicalWorkspacePath && seenWorkspaces.has(canonicalWorkspacePath)) continue;
       seen.add(id);
+      if (canonicalWorkspacePath) seenWorkspaces.add(canonicalWorkspacePath);
       choices.push({
         id,
         name: persisted?.name ?? project.name,
-        workspacePath,
+        workspacePath: canonicalWorkspacePath,
         issueCount: persisted?.issueCount ?? 0,
         inCodex: true,
         persisted: Boolean(persisted),
@@ -702,14 +744,17 @@ export function App() {
     }
     for (const project of projects) {
       if (seen.has(project.id)) continue;
+      const workspacePath = projectWorkspace(project, deviceWorkspacePaths);
+      if (workspacePath && seenWorkspaces.has(workspacePath)) continue;
       choices.push({
         id: project.id,
         name: project.name,
-        workspacePath: project.workspacePath,
+        workspacePath,
         issueCount: project.issueCount,
         inCodex: false,
         persisted: true,
       });
+      if (workspacePath) seenWorkspaces.add(workspacePath);
     }
     return choices.sort((left, right) => (
       Number(favoriteProjectIds.has(right.id)) - Number(favoriteProjectIds.has(left.id))
@@ -724,6 +769,16 @@ export function App() {
     [projectChoices],
   );
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  useEffect(() => {
+    if (!selectedProjectId || projectChoices.some((project) => project.id === selectedProjectId)) return;
+    const canonicalId = canonicalProjectId(selectedProjectId, projects, deviceWorkspacePaths);
+    if (!canonicalId || canonicalId === selectedProjectId) return;
+    setSelectedProjectId(canonicalId);
+    window.localStorage.setItem(LAST_PROJECT_KEY, canonicalId);
+    const url = buildIssueUrl(window.location.href, canonicalId, detailTaskIdentifier);
+    window.history.replaceState(window.history.state, "", url);
+  }, [detailTaskIdentifier, deviceWorkspacePaths, projectChoices, projects, selectedProjectId]);
 
   const writeProjectAutomation = useCallback((
     projectId: string,
@@ -763,6 +818,7 @@ export function App() {
   ) => {
     if (
       !selectedProject
+      || !selectedProjectId
       || !automationProjectContext.codexProjectId
       || !automationProjectContext.workspacePath
     ) {
@@ -771,6 +827,42 @@ export function App() {
       ));
     }
     const requestId = window.crypto.randomUUID();
+    const payload = {
+      requestId,
+      operation,
+      taskboardProjectId: selectedProjectId,
+      codexProjectId: automationProjectContext.codexProjectId,
+      projectName: selectedProject.name,
+      workspacePath: automationProjectContext.workspacePath,
+      skillPath: manageTaskboardSkillPath,
+      ...(automationId ? { automationId } : {}),
+      enabledByUser: options.enabledByUser,
+      quotaAware: options.quotaAware,
+      intervalMinutes: options.intervalMinutes,
+      model: options.model,
+      reasoningEffort: options.reasoningEffort,
+    };
+    if (!embedded || window.parent === window) {
+      return fetch("/api/local/automation", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then(async (response) => {
+          const body = await response.json().catch(() => null) as Partial<AutomationHostResponse> | null;
+          if (!response.ok) {
+            throw new Error(
+              typeof body?.error === "string"
+                ? body.error
+                : `自动化请求失败：HTTP ${response.status}`,
+            );
+          }
+          if (!body?.ok) {
+            throw new Error(typeof body?.error === "string" ? body.error : "Codex 无法更新自动化");
+          }
+          return body as AutomationHostResponse;
+        });
+    }
     const response = new Promise<AutomationHostResponse>((resolve, reject) => {
       const timeoutId = window.setTimeout(() => {
         pendingAutomationRequestsRef.current.delete(requestId);
@@ -780,25 +872,12 @@ export function App() {
     });
     window.parent.postMessage({
       type: "taskboard:automation-request",
-      payload: {
-        requestId,
-        operation,
-        taskboardProjectId: selectedProjectId,
-        codexProjectId: automationProjectContext.codexProjectId,
-        projectName: selectedProject.name,
-        workspacePath: automationProjectContext.workspacePath,
-        skillPath: manageTaskboardSkillPath,
-        ...(automationId ? { automationId } : {}),
-        enabledByUser: options.enabledByUser,
-        quotaAware: options.quotaAware,
-        intervalMinutes: options.intervalMinutes,
-        model: options.model,
-        reasoningEffort: options.reasoningEffort,
-      },
+      payload,
     }, "*");
     return response;
   }, [
     automationProjectContext,
+    embedded,
     manageTaskboardSkillPath,
     selectedProject,
     selectedProjectId,
@@ -1116,9 +1195,17 @@ export function App() {
       setSelectedProjectId((current) => {
         const fromQuery = new URLSearchParams(window.location.search).get("project");
         const remembered = window.localStorage.getItem(LAST_PROJECT_KEY);
-        if (fromQuery && nextProjects.some((project) => project.id === fromQuery)) return fromQuery;
-        if (current && nextProjects.some((project) => project.id === current)) return current;
-        if (remembered && nextProjects.some((project) => project.id === remembered)) return remembered;
+        const normalizeProjectId = (projectId: string | null) => (
+          projectId ? canonicalProjectId(projectId, nextProjects, deviceWorkspaceInfo.workspaces ?? {}) : null
+        );
+        const nextSelected = normalizeProjectId(fromQuery)
+          ?? normalizeProjectId(current)
+          ?? normalizeProjectId(remembered);
+        if (nextSelected) {
+          window.localStorage.setItem(LAST_PROJECT_KEY, nextSelected);
+          return nextSelected;
+        }
+        window.localStorage.removeItem(LAST_PROJECT_KEY);
         return "";
       });
     } catch (error) {

@@ -11,6 +11,12 @@ const pluginInstallPath = path.join(os.homedir(), "plugins", pluginName);
 const marketplacePath = path.join(os.homedir(), ".agents", "plugins", "marketplace.json");
 const taskctlPath = path.join(os.homedir(), ".local", "bin", "taskctl");
 const dashiTaskboardPath = path.join(os.homedir(), ".local", "bin", "dashi-taskboard");
+const cjTaskboardPath = path.join(os.homedir(), ".local", "bin", "cj-taskboard");
+const cjTaskDashboardPath = path.join(os.homedir(), ".local", "bin", "cj-task-dashboard");
+const taskctlCmdPath = path.join(os.homedir(), ".local", "bin", "taskctl.cmd");
+const dashiTaskboardCmdPath = path.join(os.homedir(), ".local", "bin", "dashi-taskboard.cmd");
+const cjTaskboardCmdPath = path.join(os.homedir(), ".local", "bin", "cj-taskboard.cmd");
+const cjTaskDashboardCmdPath = path.join(os.homedir(), ".local", "bin", "cj-task-dashboard.cmd");
 const dashiCodexPath = path.join(os.homedir(), ".local", "bin", "dashi-codex");
 const legacySkillPath = path.join(os.homedir(), ".codex", "skills", "manage-taskboard");
 const launchAgentsDir = path.join(os.homedir(), "Library", "LaunchAgents");
@@ -94,6 +100,7 @@ async function removeMarketplaceEntry() {
 function removeCodexPlugin() {
   const result = spawnSync("codex", ["plugin", "remove", `${pluginName}@personal`, "--json"], {
     encoding: "utf8",
+    shell: process.platform === "win32",
     stdio: "pipe",
   });
   return {
@@ -104,38 +111,53 @@ function removeCodexPlugin() {
   };
 }
 
-async function removeManagedTaskctlShim() {
+async function removeManagedShim(filePath, expectedSuffix) {
   let existing;
   try {
-    existing = await readFile(taskctlPath, "utf8");
+    existing = await readFile(filePath, "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return { removed: false, reason: "missing" };
     throw error;
   }
   if (!existing.includes(managedMarker)) {
-    if (!existing.includes(taskctlCliSuffix)) {
+    if (!existing.includes(expectedSuffix)) {
       return { removed: false, reason: "not-managed" };
     }
   }
-  await rm(taskctlPath, { force: true });
+  await rm(filePath, { force: true });
   return { removed: true };
 }
 
+async function removeManagedTaskctlShim() {
+  return removeManagedShim(taskctlPath, taskctlCliSuffix);
+}
+
+async function removeManagedTaskctlCmdShim() {
+  return removeManagedShim(taskctlCmdPath, taskctlCliSuffix);
+}
+
 async function removeManagedDashiTaskboardShim() {
-  let existing;
-  try {
-    existing = await readFile(dashiTaskboardPath, "utf8");
-  } catch (error) {
-    if (error.code === "ENOENT") return { removed: false, reason: "missing" };
-    throw error;
-  }
-  if (!existing.includes(managedMarker)) {
-    if (!existing.includes(dashiTaskboardCliSuffix)) {
-      return { removed: false, reason: "not-managed" };
-    }
-  }
-  await rm(dashiTaskboardPath, { force: true });
-  return { removed: true };
+  return removeManagedShim(dashiTaskboardPath, dashiTaskboardCliSuffix);
+}
+
+async function removeManagedDashiTaskboardCmdShim() {
+  return removeManagedShim(dashiTaskboardCmdPath, dashiTaskboardCliSuffix);
+}
+
+async function removeManagedCjTaskboardShim() {
+  return removeManagedShim(cjTaskboardPath, dashiTaskboardCliSuffix);
+}
+
+async function removeManagedCjTaskboardCmdShim() {
+  return removeManagedShim(cjTaskboardCmdPath, dashiTaskboardCliSuffix);
+}
+
+async function removeManagedCjTaskDashboardShim() {
+  return removeManagedShim(cjTaskDashboardPath, dashiTaskboardCliSuffix);
+}
+
+async function removeManagedCjTaskDashboardCmdShim() {
+  return removeManagedShim(cjTaskDashboardCmdPath, dashiTaskboardCliSuffix);
 }
 
 async function removeManagedDashiCodexShim() {
@@ -187,7 +209,13 @@ async function main() {
   const stoppedRuntimePids = await stopManagedRuntimeProcesses();
   const marketplaceUpdated = await removeMarketplaceEntry();
   const removedTaskctl = await removeManagedTaskctlShim();
+  const removedTaskctlCmd = await removeManagedTaskctlCmdShim();
   const removedDashiTaskboard = await removeManagedDashiTaskboardShim();
+  const removedDashiTaskboardCmd = await removeManagedDashiTaskboardCmdShim();
+  const removedCjTaskboard = await removeManagedCjTaskboardShim();
+  const removedCjTaskboardCmd = await removeManagedCjTaskboardCmdShim();
+  const removedCjTaskDashboard = await removeManagedCjTaskDashboardShim();
+  const removedCjTaskDashboardCmd = await removeManagedCjTaskDashboardCmdShim();
   const removedDashiCodex = await removeManagedDashiCodexShim();
   const removedLegacySkill = await removeManagedLegacySkillLink();
   await rm(pluginInstallPath, { recursive: true, force: true });
@@ -199,9 +227,33 @@ async function main() {
       path: taskctlPath,
       ...removedTaskctl,
     },
+    taskctlCmd: {
+      path: taskctlCmdPath,
+      ...removedTaskctlCmd,
+    },
     dashiTaskboard: {
       path: dashiTaskboardPath,
       ...removedDashiTaskboard,
+    },
+    dashiTaskboardCmd: {
+      path: dashiTaskboardCmdPath,
+      ...removedDashiTaskboardCmd,
+    },
+    cjTaskboard: {
+      path: cjTaskboardPath,
+      ...removedCjTaskboard,
+    },
+    cjTaskboardCmd: {
+      path: cjTaskboardCmdPath,
+      ...removedCjTaskboardCmd,
+    },
+    cjTaskDashboard: {
+      path: cjTaskDashboardPath,
+      ...removedCjTaskDashboard,
+    },
+    cjTaskDashboardCmd: {
+      path: cjTaskDashboardCmdPath,
+      ...removedCjTaskDashboardCmd,
     },
     dashiCodex: {
       path: dashiCodexPath,

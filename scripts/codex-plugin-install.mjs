@@ -19,6 +19,12 @@ const injectorPlistPath = path.join(launchAgentsDir, "com.dashi-taskboard.codex-
 const userBinDir = path.join(os.homedir(), ".local", "bin");
 const taskctlPath = path.join(userBinDir, "taskctl");
 const dashiTaskboardPath = path.join(userBinDir, "dashi-taskboard");
+const cjTaskboardPath = path.join(userBinDir, "cj-taskboard");
+const cjTaskDashboardPath = path.join(userBinDir, "cj-task-dashboard");
+const taskctlCmdPath = path.join(userBinDir, "taskctl.cmd");
+const dashiTaskboardCmdPath = path.join(userBinDir, "dashi-taskboard.cmd");
+const cjTaskboardCmdPath = path.join(userBinDir, "cj-taskboard.cmd");
+const cjTaskDashboardCmdPath = path.join(userBinDir, "cj-task-dashboard.cmd");
 const dashiCodexPath = path.join(userBinDir, "dashi-codex");
 const codexSkillsDir = path.join(os.homedir(), ".codex", "skills");
 const legacySkillPath = path.join(codexSkillsDir, "manage-taskboard");
@@ -32,6 +38,7 @@ function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: projectRoot,
     encoding: "utf8",
+    shell: process.platform === "win32",
     stdio: options.stdio ?? "pipe",
   });
   if (result.status !== 0) {
@@ -42,6 +49,15 @@ function run(command, args, options = {}) {
 }
 
 function executablePath(command) {
+  if (process.platform === "win32") {
+    const result = spawnSync("where.exe", [command], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    return result.status === 0 ? result.stdout.split(/\r?\n/).find(Boolean)?.trim() ?? null : null;
+  }
+
   const result = spawnSync("/usr/bin/env", ["which", command], {
     cwd: projectRoot,
     encoding: "utf8",
@@ -148,44 +164,64 @@ async function installLegacySkillLink() {
     }
     await rm(legacySkillPath, { force: true });
   }
-  await symlink(target, legacySkillPath, "dir");
+  await symlink(target, legacySkillPath, process.platform === "win32" ? "junction" : "dir");
   return legacySkillPath;
 }
 
-async function installTaskctlShim() {
+async function installCommandShim(targetPath, cmdPath, scriptPath) {
   await mkdir(userBinDir, { recursive: true });
+  if (process.platform === "win32") {
+    const shim = `@echo off\r\nrem ${managedMarker}\r\n"${nodePath}" "${scriptPath}" %*\r\n`;
+    try {
+      const existing = await readFile(cmdPath, "utf8");
+      if (!existing.includes(managedMarker) && !existing.includes(scriptPath)) {
+        throw new Error(`${cmdPath} already exists and is not managed by this installer. Move it away before installing.`);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    await writeFile(cmdPath, shim);
+    try {
+      const legacyShim = await readFile(targetPath, "utf8");
+      if (!legacyShim.includes(managedMarker) && !legacyShim.includes(scriptPath)) {
+        throw new Error(`${targetPath} already exists and is not managed by this installer. Move it away before installing.`);
+      }
+      await rm(targetPath, { force: true });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    return cmdPath;
+  }
+
   const shim = `#!/bin/sh
 # ${managedMarker}
-exec ${JSON.stringify(nodePath)} ${JSON.stringify(taskctlCliPath)} "$@"
+exec ${JSON.stringify(nodePath)} ${JSON.stringify(scriptPath)} "$@"
 `;
   try {
-    const existing = await readFile(taskctlPath, "utf8");
-    if (!existing.includes(managedMarker) && !existing.includes(taskctlCliPath)) {
-      throw new Error(`${taskctlPath} already exists and is not managed by this installer. Move it away before installing.`);
+    const existing = await readFile(targetPath, "utf8");
+    if (!existing.includes(managedMarker) && !existing.includes(scriptPath)) {
+      throw new Error(`${targetPath} already exists and is not managed by this installer. Move it away before installing.`);
     }
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  await writeFile(taskctlPath, shim, { mode: 0o755 });
-  return taskctlPath;
+  await writeFile(targetPath, shim, { mode: 0o755 });
+  return targetPath;
+}
+
+async function installTaskctlShim() {
+  return installCommandShim(taskctlPath, taskctlCmdPath, taskctlCliPath);
 }
 
 async function installDashiTaskboardShim() {
-  await mkdir(userBinDir, { recursive: true });
-  const shim = `#!/bin/sh
-# ${managedMarker}
-exec ${JSON.stringify(nodePath)} ${JSON.stringify(dashiTaskboardCliPath)} "$@"
-`;
-  try {
-    const existing = await readFile(dashiTaskboardPath, "utf8");
-    if (!existing.includes(managedMarker) && !existing.includes(dashiTaskboardCliPath)) {
-      throw new Error(`${dashiTaskboardPath} already exists and is not managed by this installer. Move it away before installing.`);
-    }
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  await writeFile(dashiTaskboardPath, shim, { mode: 0o755 });
-  return dashiTaskboardPath;
+  return installCommandShim(dashiTaskboardPath, dashiTaskboardCmdPath, dashiTaskboardCliPath);
+}
+
+async function installCjTaskboardShims() {
+  return {
+    cjTaskboardPath: await installCommandShim(cjTaskboardPath, cjTaskboardCmdPath, dashiTaskboardCliPath),
+    cjTaskDashboardPath: await installCommandShim(cjTaskDashboardPath, cjTaskDashboardCmdPath, dashiTaskboardCliPath),
+  };
 }
 
 async function updateMarketplace() {
@@ -344,6 +380,7 @@ function installCodexPlugin(marketplaceName, codexExecutable) {
   const result = spawnSync(codexExecutable, ["plugin", "add", `${pluginName}@${marketplaceName}`], {
     cwd: projectRoot,
     encoding: "utf8",
+    shell: process.platform === "win32",
     stdio: "pipe",
   });
   if (result.status !== 0) {
@@ -368,34 +405,8 @@ function openStandaloneTaskboardPanel() {
 }
 
 async function main() {
-  if (process.platform === "win32") {
-    const codexExecutable = requiredExecutablePath("codex");
-    await installPluginSource();
-    const legacySkill = await installLegacySkillLink();
-    const installedTaskctlPath = await installTaskctlShim();
-    const installedDashiTaskboardPath = await installDashiTaskboardShim();
-    const removedDashiCodex = await removeManagedDashiCodexShim();
-    const marketplaceName = await updateMarketplace();
-    const codexPlugin = installCodexPlugin(marketplaceName, codexExecutable);
-    console.log(JSON.stringify({
-      ok: true,
-      platform: "win32",
-      pluginInstallPath,
-      marketplacePath,
-      marketplaceName,
-      codexPlugin,
-      taskctlPath: installedTaskctlPath,
-      dashiTaskboardPath: installedDashiTaskboardPath,
-      dashiCodex: removedDashiCodex,
-      legacySkillPath: legacySkill,
-      note: "Windows service startup entry is reserved; run npm start manually for now.",
-      next: "Run dashi-taskboard open to open the standalone Taskboard panel.",
-    }, null, 2));
-    return;
-  }
-
-  if (process.platform !== "darwin") {
-    throw new Error("The one-click persistent installer currently supports macOS and has a Windows placeholder.");
+  if (!["darwin", "win32"].includes(process.platform)) {
+    throw new Error("The one-click persistent installer currently supports macOS and Windows.");
   }
 
   run("npm", ["install"], { stdio: "inherit" });
@@ -405,32 +416,37 @@ async function main() {
   const legacySkill = await installLegacySkillLink();
   const installedTaskctlPath = await installTaskctlShim();
   const installedDashiTaskboardPath = await installDashiTaskboardShim();
+  const installedCjTaskboardPaths = await installCjTaskboardShims();
   const removedDashiCodex = await removeManagedDashiCodexShim();
   const marketplaceName = await updateMarketplace();
   const codexPlugin = installCodexPlugin(marketplaceName, codexExecutable);
-  await installLaunchAgents(codexExecutable);
+  if (process.platform === "darwin") {
+    await installLaunchAgents(codexExecutable);
+  }
   const taskboardOpen = openStandaloneTaskboardPanel();
 
   console.log(JSON.stringify({
     ok: true,
+    platform: process.platform,
     pluginInstallPath,
     marketplacePath,
     marketplaceName,
-    serverPlistPath,
+    serverPlistPath: process.platform === "darwin" ? serverPlistPath : null,
     injector: {
       installed: false,
-      removedPlistPath: injectorPlistPath,
+      removedPlistPath: process.platform === "darwin" ? injectorPlistPath : null,
     },
     codexPlugin,
     taskctlPath: installedTaskctlPath,
     dashiTaskboardPath: installedDashiTaskboardPath,
+    ...installedCjTaskboardPaths,
     dashiCodex: removedDashiCodex,
     legacySkillPath: legacySkill,
     taskboardOpen,
     serviceUrl: "http://127.0.0.1:47824",
     next: taskboardOpen.ok
-      ? "Standalone Taskboard panel opened. In any AI app with this skill, ask it to run dashi-taskboard open."
-      : "Install completed, but the standalone panel did not open. Run dashi-taskboard open when you are ready.",
+      ? "Standalone Taskboard panel opened. In any AI app with this skill, ask it to run cj-taskboard open."
+      : "Install completed, but the standalone panel did not open. Run cj-taskboard open when you are ready.",
   }, null, 2));
 }
 

@@ -14,6 +14,10 @@ const databasePath = path.join(projectRoot, ".data", "taskboard.sqlite");
 const serviceUrl = "http://127.0.0.1:47824";
 const taskctlPath = path.join(os.homedir(), ".local", "bin", "taskctl");
 const dashiTaskboardPath = path.join(os.homedir(), ".local", "bin", "dashi-taskboard");
+const cjTaskboardPath = path.join(os.homedir(), ".local", "bin", "cj-taskboard");
+const taskctlCmdPath = path.join(os.homedir(), ".local", "bin", "taskctl.cmd");
+const dashiTaskboardCmdPath = path.join(os.homedir(), ".local", "bin", "dashi-taskboard.cmd");
+const cjTaskboardCmdPath = path.join(os.homedir(), ".local", "bin", "cj-taskboard.cmd");
 const dashiCodexPath = path.join(os.homedir(), ".local", "bin", "dashi-codex");
 const legacySkillPath = path.join(os.homedir(), ".codex", "skills", "manage-taskboard");
 
@@ -59,6 +63,10 @@ function pgrep(pattern) {
     && !line.includes("pgrep ")
     && !line.includes("__CODEX_SNAPSHOT")
   ));
+}
+
+function platformCommand(unixPath, windowsPath) {
+  return process.platform === "win32" ? windowsPath : unixPath;
 }
 
 function mainCodexProcesses() {
@@ -130,6 +138,7 @@ async function taskSummary() {
 function codexPluginStatus() {
   const result = spawnSync("codex", ["plugin", "list"], {
     encoding: "utf8",
+    shell: process.platform === "win32",
     stdio: "pipe",
   });
   if (result.status !== 0) {
@@ -146,13 +155,14 @@ function codexPluginStatus() {
 }
 
 function taskctlStatus() {
-  const result = spawnSync(taskctlPath, ["project", "list", "--json"], {
+  const cliPath = platformCommand(taskctlPath, taskctlCmdPath);
+  const result = spawnSync(cliPath, ["project", "list", "--json"], {
     cwd: projectRoot,
     encoding: "utf8",
     stdio: "pipe",
   });
   return {
-    path: taskctlPath,
+    path: cliPath,
     exists: result.status !== null && result.error === undefined,
     ok: result.status === 0,
     error: result.status === 0 ? null : (result.stderr || result.error?.message || "").trim(),
@@ -167,17 +177,44 @@ async function dashiCodexStatus() {
 }
 
 function dashiTaskboardStatus() {
-  const result = spawnSync(dashiTaskboardPath, ["doctor"], {
+  const cliPath = platformCommand(dashiTaskboardPath, dashiTaskboardCmdPath);
+  const result = spawnSync(cliPath, ["doctor"], {
     cwd: projectRoot,
     encoding: "utf8",
     stdio: "pipe",
   });
   return {
-    path: dashiTaskboardPath,
+    path: cliPath,
     exists: result.status !== null && result.error === undefined,
     ok: result.status === 0,
     error: result.status === 0 ? null : (result.stderr || result.error?.message || "").trim(),
   };
+}
+
+function cjTaskboardStatus() {
+  const cliPath = platformCommand(cjTaskboardPath, cjTaskboardCmdPath);
+  const result = spawnSync(cliPath, ["doctor"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  return {
+    path: cliPath,
+    exists: result.status !== null && result.error === undefined,
+    ok: result.status === 0,
+    error: result.status === 0 ? null : (result.stderr || result.error?.message || "").trim(),
+  };
+}
+
+async function automationStatus() {
+  try {
+    const response = await fetch(`${serviceUrl}/api/local/automation/status`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    return response.ok ? await response.json() : { available: false, httpStatus: response.status };
+  } catch (error) {
+    return { available: false, error: error.message };
+  }
 }
 
 function injectorRecommendation(state) {
@@ -205,7 +242,9 @@ async function main() {
   const codexPlugin = codexPluginStatus();
   const taskctl = taskctlStatus();
   const dashiTaskboard = dashiTaskboardStatus();
+  const cjTaskboard = cjTaskboardStatus();
   const dashiCodex = await dashiCodexStatus();
+  const automation = await automationStatus();
   const injectorState = injectorProcesses.length > 0 && debuggablePorts.length > 0
     ? "injected-or-injecting"
     : debuggablePorts.length > 0
@@ -229,6 +268,7 @@ async function main() {
     },
     codexPlugin,
     taskctl,
+    cjTaskboard,
     dashiTaskboard,
     dashiCodex: {
       ...dashiCodex,
@@ -255,6 +295,7 @@ async function main() {
       state: injectorState,
       recommendation: injectorRecommendation(injectorState),
     },
+    automation,
     data,
   };
   const ok = checks.plugin.manifest
@@ -263,7 +304,7 @@ async function main() {
     && checks.marketplace.registered
     && checks.codexPlugin.ok
     && checks.taskctl.ok
-    && checks.dashiTaskboard.ok
+    && (checks.cjTaskboard.ok || checks.dashiTaskboard.ok)
     && checks.service.status === "ok"
     && checks.database.exists;
   console.log(JSON.stringify({ ok, checks }, null, 2));

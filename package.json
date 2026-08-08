@@ -7,6 +7,8 @@
     "node": ">=22.5"
   },
   "bin": {
+    "cj-task-dashboard": "./scripts/dashi-taskboard.mjs",
+    "cj-taskboard": "./scripts/dashi-taskboard.mjs",
     "dashi-taskboard": "./scripts/dashi-taskboard.mjs",
     "taskctl": "./cli/taskctl.mjs"
   },
