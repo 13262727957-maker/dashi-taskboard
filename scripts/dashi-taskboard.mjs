@@ -2,7 +2,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,7 @@ const dataDir = process.env.CODEX_TASKBOARD_DATA_DIR
   : defaultTaskboardDataDirectory();
 const databasePath = path.join(dataDir, "taskboard.sqlite");
 const panelProfileDir = defaultTaskboardPanelProfileDirectory();
+const panelLaunchLockDir = path.join(dataDir, "panel-launch.lock");
 const panelDebugPort = Number(process.env.CODEX_TASKBOARD_PANEL_DEBUG_PORT || "47825");
 const macosAppModeBrowsers = [
   {
@@ -58,6 +59,10 @@ function print(value) {
   console.log(JSON.stringify(value, null, 2));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function health() {
   try {
     const response = await fetch(`${serviceUrl}/health`, {
@@ -69,7 +74,7 @@ async function health() {
   }
 }
 
-async function activateExistingPanelTarget() {
+async function existingPanelTarget() {
   if (!Number.isInteger(panelDebugPort) || panelDebugPort < 1 || panelDebugPort > 65535) return null;
   try {
     const response = await fetch(`http://127.0.0.1:${panelDebugPort}/json/list`, {
@@ -81,14 +86,84 @@ async function activateExistingPanelTarget() {
       ? targets.find((candidate) => typeof candidate?.url === "string" && candidate.url.startsWith(panelUrl))
       : null;
     if (!target?.id) return null;
-    const activateResponse = await fetch(
-      `http://127.0.0.1:${panelDebugPort}/json/activate/${encodeURIComponent(target.id)}`,
-      { signal: AbortSignal.timeout(600) },
-    );
-    return activateResponse.ok ? { targetId: target.id } : null;
+    return { targetId: target.id };
   } catch {
     return null;
   }
+}
+
+async function activateExistingPanelTarget() {
+  const target = await existingPanelTarget();
+  if (!target) return null;
+  try {
+    const activateResponse = await fetch(
+      `http://127.0.0.1:${panelDebugPort}/json/activate/${encodeURIComponent(target.targetId)}`,
+      { signal: AbortSignal.timeout(600) },
+    );
+    if (!activateResponse.ok) return null;
+    bringWindowsPanelWindowToFront();
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+function bringWindowsPanelWindowToFront() {
+  if (process.platform !== "win32") return;
+  spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-WindowStyle",
+    "Hidden",
+    "-Command",
+    "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.Interaction]::AppActivate('Taskboard') | Out-Null",
+  ], {
+    encoding: "utf8",
+    stdio: "ignore",
+    windowsHide: true,
+  });
+}
+
+async function waitForExistingPanelTarget(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const existingPanel = await existingPanelTarget();
+    if (existingPanel) return existingPanel;
+    await sleep(200);
+  } while (Date.now() < deadline);
+  return null;
+}
+
+async function acquirePanelLaunchLock() {
+  await mkdir(dataDir, { recursive: true });
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      await mkdir(panelLaunchLockDir);
+      return {
+        acquired: true,
+        release: () => rm(panelLaunchLockDir, { recursive: true, force: true }),
+      };
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      const lockStat = await stat(panelLaunchLockDir).catch(() => null);
+      if (lockStat && Date.now() - lockStat.mtimeMs > 15_000) {
+        await rm(panelLaunchLockDir, { recursive: true, force: true });
+        continue;
+      }
+      const existingPanel = await waitForExistingPanelTarget(1_500);
+      if (existingPanel) {
+        return {
+          acquired: false,
+          existingPanel,
+          release: async () => {},
+        };
+      }
+    }
+  }
+  return {
+    acquired: false,
+    release: async () => {},
+  };
 }
 
 async function taskSummary() {
@@ -176,17 +251,7 @@ async function ensureServer() {
   return { health: afterSpawn, started: afterSpawn.status === "ok", method: "detached-server", pid };
 }
 
-async function openPanel(url) {
-  const existingPanel = await activateExistingPanelTarget();
-  if (existingPanel) {
-    return {
-      method: "existing-panel-app-window",
-      debugPort: panelDebugPort,
-      url,
-      ...existingPanel,
-    };
-  }
-
+function launchPanelBrowser(url) {
   if (process.platform === "darwin") {
     for (const browser of macosAppModeBrowsers) {
       if (!existsSync(browser.executable)) continue;
@@ -195,7 +260,7 @@ async function openPanel(url) {
         `--remote-debugging-port=${panelDebugPort}`,
         "--remote-debugging-address=127.0.0.1",
         `--app=${url}`,
-      ], { detached: true, stdio: "ignore" });
+      ], { detached: true, stdio: "ignore", windowsHide: true });
       child.unref();
       return { method: "macos-browser-app-mode", browser: browser.name, debugPort: panelDebugPort, url };
     }
@@ -219,7 +284,7 @@ async function openPanel(url) {
         `--remote-debugging-port=${panelDebugPort}`,
         "--remote-debugging-address=127.0.0.1",
         `--app=${url}`,
-      ], { detached: true, stdio: "ignore" });
+      ], { detached: true, stdio: "ignore", windowsHide: true });
       child.unref();
       return { method: "windows-browser-app-mode", browser, debugPort: panelDebugPort, url };
     }
@@ -234,7 +299,7 @@ async function openPanel(url) {
         `--remote-debugging-port=${panelDebugPort}`,
         "--remote-debugging-address=127.0.0.1",
         `--app=${url}`,
-      ], { detached: true, stdio: "ignore" });
+      ], { detached: true, stdio: "ignore", windowsHide: true });
       child.unref();
       return { method: "linux-browser-app-mode", browser, debugPort: panelDebugPort, url };
     }
@@ -242,9 +307,75 @@ async function openPanel(url) {
 
   const opener = process.platform === "win32" ? "cmd" : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-  const child = spawn(opener, args, { detached: true, stdio: "ignore" });
+  const child = spawn(opener, args, { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   return { method: opener, url };
+}
+
+async function openPanel(url) {
+  const existingPanel = await waitForExistingPanelTarget(1_200);
+  if (existingPanel) {
+    await activateExistingPanelTarget();
+    return {
+      method: "existing-panel-app-window",
+      debugPort: panelDebugPort,
+      url,
+      ...existingPanel,
+    };
+  }
+
+  const lock = await acquirePanelLaunchLock();
+  try {
+    if (lock.existingPanel) {
+      await activateExistingPanelTarget();
+      return {
+        method: "existing-panel-app-window",
+        debugPort: panelDebugPort,
+        url,
+        ...lock.existingPanel,
+      };
+    }
+
+    const existingAfterLock = await waitForExistingPanelTarget(800);
+    if (existingAfterLock) {
+      await activateExistingPanelTarget();
+      return {
+        method: "existing-panel-app-window",
+        debugPort: panelDebugPort,
+        url,
+        ...existingAfterLock,
+      };
+    }
+
+    if (!lock.acquired) {
+      const existingAfterWait = await waitForExistingPanelTarget(5_000);
+      if (existingAfterWait) {
+        await activateExistingPanelTarget();
+        return {
+          method: "existing-panel-app-window",
+          debugPort: panelDebugPort,
+          url,
+          ...existingAfterWait,
+        };
+      }
+      return {
+        method: "panel-launch-skipped-lock-busy",
+        debugPort: panelDebugPort,
+        url,
+      };
+    }
+
+    const launched = launchPanelBrowser(url);
+    const launchedTarget = launched.debugPort
+      ? await waitForExistingPanelTarget(5_000)
+      : null;
+    if (launchedTarget) await activateExistingPanelTarget();
+    return launchedTarget
+      ? { ...launched, targetId: launchedTarget.targetId }
+      : launched;
+  } finally {
+    await lock.release();
+  }
 }
 
 async function doctor() {
