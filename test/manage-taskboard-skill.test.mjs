@@ -14,6 +14,14 @@ const installerSource = await readFile(
   new URL("../scripts/codex-plugin-install.mjs", import.meta.url),
   "utf8",
 );
+const launcherSource = await readFile(
+  new URL("../scripts/dashi-taskboard.mjs", import.meta.url),
+  "utf8",
+);
+const windowsBrokerSource = await readFile(
+  new URL("../scripts/windows-taskboard-broker.mjs", import.meta.url),
+  "utf8",
+);
 const doctorSource = await readFile(
   new URL("../scripts/codex-plugin-doctor.mjs", import.meta.url),
   "utf8",
@@ -63,4 +71,24 @@ test("the default installer keeps Codex sidebar injection optional", () => {
   assert.doesNotMatch(installerSource, /"com\.dashi-taskboard\.codex-injector",\s*\[/);
   assert.match(doctorSource, /required: false/);
   assert.doesNotMatch(doctorSource, /&& checks\.dashiCodex\.exists/);
+});
+
+test("opening the standalone panel focuses an existing macOS window instead of duplicating it", () => {
+  assert.match(launcherSource, /focusExistingPanelWindow\(browser\.name, url\)/);
+  assert.match(launcherSource, /method: "macos-focus-existing"/);
+  assert.match(launcherSource, /focusExistingPanelSystemWindow\(browserName\)/);
+  assert.match(launcherSource, /set targetTitle to "Taskboard"/);
+  assert.doesNotMatch(launcherSource, /"-n"/);
+  assert.match(launcherSource, /openBrowserAppWindow\(browser\.executablePath, url\)/);
+  assert.match(launcherSource, /`--app=\$\{url\}`/);
+  assert.match(launcherSource, /"--new-window"/);
+  assert.match(launcherSource, /method: "windows-browser-app-window"/);
+  assert.match(launcherSource, /focusExistingWindowsPanelWindow\(url\)/);
+  assert.match(launcherSource, /method: "windows-focus-existing"/);
+  assert.match(launcherSource, /windowsPanelOpenLocked/);
+  assert.match(launcherSource, /reuseExistingProcess: true/);
+  assert.match(launcherSource, /openWindowsPanelViaBroker\(url\)/);
+  assert.match(launcherSource, /windows-broker-started/);
+  assert.match(windowsBrokerSource, /createServer/);
+  assert.match(windowsBrokerSource, /dashi-taskboard-panel-/);
 });
