@@ -179,6 +179,10 @@ function localTaskProjectIds(
   return ids;
 }
 
+function localProjectKey(project: Pick<ProjectChoice, "id" | "sourceProjectId">): string {
+  return project.sourceProjectId ?? project.id;
+}
+
 type ProjectOverviewView = "overview" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
 type WorkspaceRole = "owner" | "developer" | "none";
 
@@ -775,7 +779,7 @@ function ProjectOverviewDemo({
   }, [deviceProjects, selectedLocalProjectId]);
 
   useEffect(() => {
-    const localProjectIds = localProjects.map((project) => project.id);
+    const localProjectIds = [...new Set(localProjects.map((project) => localProjectKey(project)))];
     if (localProjectIds.length === 0) {
       setProjectBindings({});
       setProjectSyncStatuses({});
@@ -783,7 +787,7 @@ function ProjectOverviewDemo({
     }
     const controller = new AbortController();
     void Promise.all(localProjectIds.map(async (projectId) => {
-      const localProject = localProjects.find((project) => project.id === projectId);
+      const localProject = localProjects.find((project) => localProjectKey(project) === projectId);
       const [binding, syncStatus] = await Promise.all([
         getProjectTeamBinding(projectId, controller.signal).catch(() => null),
         getProjectSyncStatus(projectId, controller.signal).catch(() => null),
@@ -798,7 +802,7 @@ function ProjectOverviewDemo({
         if (matchedProject) {
           const teamProjectId = matchedProject.teamProjectId ?? matchedProject.id;
           await saveProjectTeamBinding({
-            localProjectId: localProject.id,
+            localProjectId: projectId,
             teamProjectId,
             teamProjectName: matchedProject.name,
           }).catch(() => undefined);
@@ -907,28 +911,29 @@ function ProjectOverviewDemo({
       const sourceProject = localProjects.find((project) => (
         project.id === localProject.id || project.workspacePath === localProject.workspacePath
       ));
+      const localProjectId = localProjectKey(sourceProject ?? localProject);
       let tasks: Task[] = [];
       for (const projectId of localTaskProjectIds(sourceProject ?? { ...localProject }, projects, deviceProjects)) {
         tasks = await listTasks(projectId).catch(() => []);
         if (tasks.length > 0) break;
       }
       await saveProjectTeamBinding({
-        localProjectId: localProject.id,
+        localProjectId,
         teamProjectId: targetProjectId,
         teamProjectName: sharedProject.name,
       });
       setProjectBindings((current) => ({
         ...current,
-        [localProject.id]: {
-          localProjectId: localProject.id,
+        [localProjectId]: {
+          localProjectId,
           teamProjectId: targetProjectId,
           teamProjectName: sharedProject.name,
           boundAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },
       }));
-      const result = await importIdentityTasks(targetProjectId, tasks, { localProjectId: localProject.id });
-      await refreshLocalProjectSyncMeta(localProject.id);
+      const result = await importIdentityTasks(targetProjectId, tasks, { localProjectId });
+      await refreshLocalProjectSyncMeta(localProjectId);
       await refreshIdentitySyncLogs();
       const dedupeSummary = result.deduped ? `，去重 ${result.deduped} 张重复任务` : "";
       const syncSummary = result.unchanged
@@ -937,15 +942,16 @@ function ProjectOverviewDemo({
       onPreviewAction(`${sharedProject.name}：${syncSummary}。同步日志已记录，团队进度以本次提交后的数据为准。`);
       await onRefreshProjects();
     } catch (error) {
-      await refreshLocalProjectSyncMeta(localProject.id);
+      await refreshLocalProjectSyncMeta(localProjectKey(localProject));
       await refreshIdentitySyncLogs();
       onPreviewAction(error instanceof Error ? error.message : "提交任务卡片失败，本地草稿已保留");
     } finally {
       setSyncBusy(false);
     }
   };
-  const findBoundProject = (localProject: { id: string; name?: string; workspacePath: string | null }) => {
-    const savedBinding = projectBindings[localProject.id];
+  const findBoundProject = (localProject: ProjectChoice) => {
+    const localProjectId = localProjectKey(localProject);
+    const savedBinding = projectBindings[localProjectId] ?? projectBindings[localProject.id];
     if (savedBinding) {
       const savedProject = projects.find((project) => teamProjectIdFor(project) === savedBinding.teamProjectId);
       if (savedProject) return savedProject;
@@ -1059,10 +1065,12 @@ function ProjectOverviewDemo({
     task,
   }));
   const localProjectProgressRows = localProjects.map((project) => {
-    const projectTasks = localTasks.filter((task) => task.projectId === project.id);
-    const binding = projectBindings[project.id] ?? null;
+    const localProjectId = localProjectKey(project);
+    const taskProjectIds = localTaskProjectIds(project, projects, deviceProjects);
+    const projectTasks = localTasks.filter((task) => taskProjectIds.includes(task.projectId));
+    const binding = projectBindings[localProjectId] ?? projectBindings[project.id] ?? null;
     const matchedProject = findBoundProject(project);
-    const syncStatus = projectSyncStatuses[project.id] ?? null;
+    const syncStatus = projectSyncStatuses[localProjectId] ?? projectSyncStatuses[project.id] ?? null;
     const total = projectTasks.length;
     const done = projectTasks.filter((task) => task.status === "done").length;
     const blocked = projectTasks.filter((task) => task.status === "blocked").length;
@@ -1075,6 +1083,7 @@ function ProjectOverviewDemo({
     const isSubmittedCurrentBatch = syncStatus?.status === "success" && submittedAt >= latestTaskUpdatedAt;
     return {
       project,
+      localProjectId,
       name: project.name,
       updated: project.updatedAt?.slice(0, 10) || "暂无更新",
       total,
@@ -1717,7 +1726,7 @@ function AppWorkspace() {
     ));
   }, [deviceProjects, deviceWorkspacePaths, favoriteProjectIds, hostContext?.projects, projects]);
   const teamProjectChoices = useMemo(
-    () => projectChoices.filter((project) => Boolean(project.ownerName)),
+    () => projectChoices.filter((project) => project.persisted && Boolean(project.role || project.ownerName || project.teamProjectId)),
     [projectChoices],
   );
   const closeContextMenu = useCallback(() => setContextMenu(null), []);

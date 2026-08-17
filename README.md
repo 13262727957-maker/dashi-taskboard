@@ -2,6 +2,8 @@
 
 A local-first issue board that runs in a browser and can be embedded in Codex through the standalone CDP launcher or its injection script. The same HTTP API powers the React UI and the `taskctl` CLI used by the bundled Codex Skill.
 
+For day-to-day usage, see the [任务面板使用手册](docs/taskboard-user-manual.md).
+
 ## Requirements
 
 - Node.js 22.5 or newer

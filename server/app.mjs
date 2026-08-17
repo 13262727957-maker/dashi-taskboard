@@ -40,6 +40,7 @@ const JSON_BODY_LIMIT = 1024 * 1024;
 const ATTACHMENT_BODY_LIMIT = 25 * 1024 * 1024;
 const AI_CHAT_TURN_BODY_LIMIT = 25 * 1024 * 1024;
 const AI_CHAT_ATTACHMENT_LIMIT = 10;
+const WORKFLOW_CAPABILITIES_CACHE_TTL_MS = 60_000;
 const AI_CHAT_SKILL_MARKER = "\uFFFC";
 const INLINE_ATTACHMENT_TYPES = new Set([
   "application/pdf",
@@ -1363,6 +1364,26 @@ async function discoverWorkflowCapabilities(resolved, workspacePath) {
   return { skills, mcpServers };
 }
 
+function createWorkflowCapabilitiesCache(resolved) {
+  const entries = new Map();
+  return async function cachedDiscoverWorkflowCapabilities(workspacePath) {
+    const key = path.resolve(workspacePath);
+    const current = entries.get(key);
+    const timestamp = Date.now();
+    if (current && current.expiresAt > timestamp) return current.promise;
+
+    const promise = discoverWorkflowCapabilities(resolved, key).catch((error) => {
+      if (entries.get(key)?.promise === promise) entries.delete(key);
+      throw error;
+    });
+    entries.set(key, {
+      expiresAt: timestamp + WORKFLOW_CAPABILITIES_CACHE_TTL_MS,
+      promise,
+    });
+    return promise;
+  };
+}
+
 export function resolveServerOptions(options = {}) {
   const configuredDataDirectory = options.dataDirectory ?? process.env.CODEX_TASKBOARD_DATA_DIR;
   const dataDirectory = configuredDataDirectory
@@ -1408,6 +1429,7 @@ export function resolveHost(value = process.env.CODEX_TASKBOARD_HOST ?? "127.0.0
 export function createTaskboardServer(options = {}) {
   const resolved = resolveServerOptions(options);
   const database = new TaskboardDatabase(resolved.databasePath);
+  const discoverCachedWorkflowCapabilities = createWorkflowCapabilitiesCache(resolved);
   const identity = options.identityStore
     ?? (options.disableSqlServerIdentity ? null : (() => {
       const config = options.sqlServerConfig ?? sqlServerConfigFromEnv();
@@ -2016,7 +2038,7 @@ export function createTaskboardServer(options = {}) {
         return sendJson(
           response,
           200,
-          await discoverWorkflowCapabilities(resolved, workspacePath ?? PROJECT_ROOT),
+          await discoverCachedWorkflowCapabilities(workspacePath ?? PROJECT_ROOT),
         );
       }
 

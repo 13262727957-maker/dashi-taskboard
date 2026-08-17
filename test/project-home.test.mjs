@@ -135,3 +135,13 @@ test("realtime updates remain active on the project home and reconcile after rec
   assert.match(appSource, /event\.type\.startsWith\("task\."\)[\s\S]*?scheduleRefresh\(\{ projects: true, tasks: affectsSelectedProject \}\)/);
   assert.match(appSource, /source\.onopen = \(\) => \{[\s\S]*?scheduleRefresh\(\{ projects: true, tasks: Boolean\(selectedProjectId\) \}\)/);
 });
+
+test("my tasks submission status uses the local project key consistently", () => {
+  assert.match(appSource, /function localProjectKey\(project: Pick<ProjectChoice, "id" \| "sourceProjectId">\): string/);
+  assert.match(appSource, /localProjects\.map\(\(project\) => localProjectKey\(project\)\)/);
+  assert.match(appSource, /getProjectSyncStatus\(projectId, controller\.signal\)/);
+  assert.match(appSource, /const localProjectId = localProjectKey\(sourceProject \?\? localProject\)/);
+  assert.match(appSource, /importIdentityTasks\(targetProjectId, tasks, \{ localProjectId \}\)/);
+  assert.match(appSource, /projectSyncStatuses\[localProjectId\] \?\? projectSyncStatuses\[project\.id\]/);
+  assert.match(appSource, /project\.persisted && Boolean\(project\.role \|\| project\.ownerName \|\| project\.teamProjectId\)/);
+});
