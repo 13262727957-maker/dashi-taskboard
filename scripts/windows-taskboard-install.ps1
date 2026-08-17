@@ -7,10 +7,15 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path $ProjectRoot).Path
 $DataDirectory = Join-Path $ProjectRoot ".data"
 $RunnerPath = Join-Path $DataDirectory "windows-taskboard-server.cmd"
+$IdentityEnvPath = Join-Path $DataDirectory "sqlserver-identity.env"
 $NodePath = (Get-Command node -ErrorAction Stop).Source
 $TaskName = "Dashi Taskboard Server"
 
 New-Item -ItemType Directory -Force -Path $DataDirectory | Out-Null
+if (Test-Path $IdentityEnvPath) {
+  # Keep SQL Server credentials readable only by the current Windows user.
+  & icacls.exe $IdentityEnvPath /inheritance:r /grant:r "${env:USERNAME}:(R,W)" | Out-Null
+}
 $runner = @"
 @echo off
 set "CODEX_TASKBOARD_HOST=127.0.0.1"

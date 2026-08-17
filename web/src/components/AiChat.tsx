@@ -57,6 +57,8 @@ import { LinearIcon, type LinearIconName } from "./LinearIcon";
 interface AiChatProps {
   available: boolean;
   projectId: string | null;
+  projectOptions: Array<{ id: string; name: string }>;
+  onProjectChange: (projectId: string) => void;
   issueId: string | null;
 }
 
@@ -952,7 +954,13 @@ function OptionMenu({
   );
 }
 
-export function AiChat({ available, projectId, issueId }: AiChatProps) {
+export function AiChat({
+  available,
+  projectId,
+  projectOptions,
+  onProjectChange,
+  issueId,
+}: AiChatProps) {
   const [panelOpen, setPanelOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [menu, setMenu] = useState<MenuName>(null);
@@ -1001,6 +1009,20 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   const snapshotLoadingRequestRef = useRef(0);
   const observedRunStatusesRef = useRef(new Map<string, AiChatRun["status"]>());
   const dangerConfirmOpen = pendingDangerInput !== null;
+
+  function changeChatProject(nextProjectId: string) {
+    if (!nextProjectId || nextProjectId === projectId) return;
+    selectThread(null);
+    setSnapshot(null);
+    setDraftOrigin(null);
+    setHistoryOpen(false);
+    setMenu(null);
+    setError(null);
+    setDraft("");
+    setSkillIds([]);
+    setAttachments([]);
+    onProjectChange(nextProjectId);
+  }
 
   const selectThread = useCallback((threadId: string | null) => {
     selectedThreadRef.current = threadId;
@@ -2105,7 +2127,20 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
           <header className="ai-chat-panel-header">
             <div className="ai-chat-panel-title">
               <strong>{snapshot?.thread.title ?? "新对话"}</strong>
-              <span>{snapshot?.thread.origin.projectName ?? "选择对话或从当前项目新建"}</span>
+              <label className="ai-chat-project-picker">
+                <span className="sr-only">当前项目</span>
+                <select
+                  aria-label="当前项目"
+                  value={projectId ?? ""}
+                  disabled={loading || projectOptions.length === 0}
+                  onChange={(event) => changeChatProject(event.target.value)}
+                >
+                  {projectOptions.length === 0 && <option value="">未选择项目</option>}
+                  {projectOptions.map((project) => (
+                    <option value={project.id} key={project.id}>{project.name}</option>
+                  ))}
+                </select>
+              </label>
             </div>
             <button
               type="button"

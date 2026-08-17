@@ -142,6 +142,22 @@ interface ProjectChoice {
   ownerName?: string | null;
 }
 
+const TASK_PROGRESS_WEIGHTS: Record<string, number> = {
+  todo: 0,
+  in_progress: 50,
+  in_review: 80,
+  blocked: 0,
+  done: 100,
+};
+
+function taskProgressPercent(tasks: Task[], fallbackTotal = 0) {
+  const activeTasks = tasks.filter((task) => task.status !== "canceled");
+  const total = activeTasks.length > 0 ? activeTasks.length : fallbackTotal;
+  if (total <= 0) return 0;
+  const weightedProgress = activeTasks.reduce((sum, task) => sum + (TASK_PROGRESS_WEIGHTS[task.status] ?? 0), 0);
+  return Math.round(weightedProgress / total);
+}
+
 function localTaskProjectIds(
   project: Pick<ProjectChoice, "id" | "sourceProjectId" | "workspacePath">,
   projects: ProjectChoice[],
@@ -915,7 +931,10 @@ function ProjectOverviewDemo({
       await refreshLocalProjectSyncMeta(localProject.id);
       await refreshIdentitySyncLogs();
       const dedupeSummary = result.deduped ? `，去重 ${result.deduped} 张重复任务` : "";
-      onPreviewAction(`${sharedProject.name}：已提交 ${result.imported} 张新任务，更新 ${result.updated} 张已有任务${dedupeSummary}。团队进度以本次提交后的数据为准。`);
+      const syncSummary = result.unchanged
+        ? "本次没有新的任务卡片"
+        : `已提交 ${result.imported} 张新任务，更新 ${result.updated} 张已有任务${dedupeSummary}`;
+      onPreviewAction(`${sharedProject.name}：${syncSummary}。同步日志已记录，团队进度以本次提交后的数据为准。`);
       await onRefreshProjects();
     } catch (error) {
       await refreshLocalProjectSyncMeta(localProject.id);
@@ -1000,7 +1019,7 @@ function ProjectOverviewDemo({
     const active = projectTasks.filter((task) => task.status === "in_progress").length;
     const review = projectTasks.filter((task) => task.status === "in_review").length;
     const todo = Math.max(0, total - done - active - review - blocked);
-    const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+    const progress = taskProgressPercent(projectTasks, total);
     const health = blocked > 0 ? "阻塞" : review > 0 || total - done > 0 ? "有风险" : "正常";
     return {
       id: project.id,
@@ -3386,6 +3405,8 @@ function AppWorkspace() {
       <AiChat
         available={localAiChatAvailable}
         projectId={selectedProjectId || null}
+        projectOptions={projectChoices.filter((project) => project.inCodex).map((project) => ({ id: project.id, name: project.name }))}
+        onProjectChange={changeProject}
         issueId={detailTaskId}
       />
 

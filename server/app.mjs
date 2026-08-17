@@ -1397,7 +1397,7 @@ export function resolvePort(value = process.env.CODEX_TASKBOARD_PORT ?? "47824")
   return port;
 }
 
-export function resolveHost(value = process.env.CODEX_TASKBOARD_HOST ?? "0.0.0.0") {
+export function resolveHost(value = process.env.CODEX_TASKBOARD_HOST ?? "127.0.0.1") {
   const host = String(value).trim();
   if (host !== "127.0.0.1" && host !== "0.0.0.0") {
     throw new Error("CODEX_TASKBOARD_HOST must be 127.0.0.1 or 0.0.0.0");
@@ -1668,18 +1668,6 @@ export function createTaskboardServer(options = {}) {
             updatedAt: stringField(task.updatedAt ?? null, "task.updatedAt", { nullable: true, maxLength: 40 }),
           };
         });
-        if (localProjectId) {
-          const syncStatus = database.getProjectSyncStatus(localProjectId);
-          const submittedAt = syncStatus ? Date.parse(syncStatus.submittedAt) || 0 : 0;
-          const latestTaskUpdatedAt = tasks.reduce((latest, task) => Math.max(latest, Date.parse(task.updatedAt ?? "") || 0), 0);
-          if (
-            syncStatus?.status === "success"
-            && syncStatus.teamProjectId === projectId
-            && submittedAt >= latestTaskUpdatedAt
-          ) {
-            throw new ApiError(409, "TASK_IMPORT_ALREADY_SUBMITTED", "这批任务卡片已经提交过，无需重复提交");
-          }
-        }
         try {
           const result = await identity.importProjectTasks(user.id, projectId, tasks, { localProjectId });
           if (localProjectId) {
@@ -1696,9 +1684,6 @@ export function createTaskboardServer(options = {}) {
           }
           return sendJson(response, 201, result);
         } catch (error) {
-          if (error.code === "TASK_IMPORT_UNCHANGED") {
-            throw new ApiError(409, "TASK_IMPORT_ALREADY_SUBMITTED", error.message);
-          }
           if (localProjectId) {
             try {
               database.recordProjectSyncStatus({

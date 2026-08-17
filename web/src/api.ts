@@ -239,7 +239,7 @@ export async function importIdentityTasks(
   projectId: string,
   tasks: Task[],
   options: { localProjectId?: string | null } = {},
-): Promise<{ syncId?: string; imported: number; updated: number; deduped?: number }> {
+): Promise<{ syncId?: string; imported: number; updated: number; deduped?: number; unchanged?: boolean }> {
   return request(`/api/identity/projects/${encodeURIComponent(projectId)}/tasks/import`, {
     method: "POST",
     body: JSON.stringify({

@@ -10203,6 +10203,25 @@ select:focus {
   content: "";
 }
 
+.ai-chat-project-picker {
+  display: flex;
+  min-width: 0;
+  max-width: 220px;
+}
+
+.ai-chat-project-picker select {
+  min-width: 0;
+  max-width: 220px;
+  padding: 2px 18px 2px 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ai-chat-panel-header > button {
   display: grid;
   flex: 0 0 28px;

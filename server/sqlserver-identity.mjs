@@ -17,12 +17,6 @@ function taskFingerprint(input) {
     : legacyTaskFingerprint(input);
 }
 
-function taskImportUnchangedError() {
-  return Object.assign(new Error("这批任务卡片已经提交过，无需重复提交"), {
-    code: "TASK_IMPORT_UNCHANGED",
-  });
-}
-
 async function acquireProjectTaskLock(transaction, projectId) {
   const lock = await transaction.request()
     .input("resource", sql.NVarChar(255), `taskboard.project-tasks:${projectId}`)
@@ -728,7 +722,7 @@ export class SqlServerIdentityStore {
   async importProjectTasks(userId, projectId, tasks, options = {}) {
     const role = await this.projectAccess(userId, projectId);
     if (!role) throw new Error("你不是该项目成员");
-    if (!Array.isArray(tasks) || tasks.length === 0) return { imported: 0, updated: 0 };
+    if (!Array.isArray(tasks)) throw new Error("任务卡片数据格式不正确");
     const pool = await this.pool();
     const syncId = randomUUID();
     const transaction = new sql.Transaction(pool);
@@ -810,7 +804,7 @@ export class SqlServerIdentityStore {
         imported += 1;
       }
       const deduped = await dedupeProjectTaskCards(transaction, projectId, userId);
-      if (imported === 0 && updated === 0 && deduped === 0) throw taskImportUnchangedError();
+      const unchanged = imported === 0 && updated === 0 && deduped === 0;
       await writeTaskSyncLog(transaction, {
         syncId,
         projectId,
@@ -821,12 +815,12 @@ export class SqlServerIdentityStore {
         updated: updated + deduped,
         failed: 0,
         status: "success",
+        error: unchanged ? "没有新的任务卡片" : null,
       });
       await transaction.commit();
-      return { syncId, imported, updated, deduped };
+      return { syncId, imported, updated, deduped, unchanged };
     } catch (error) {
       await transaction.rollback();
-      if (error.code === "TASK_IMPORT_UNCHANGED") throw error;
       try {
         await writeTaskSyncLog(pool, {
           syncId,

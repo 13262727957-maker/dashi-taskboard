@@ -202,12 +202,12 @@ To use a different UI origin, set `window.__CODEX_TASKBOARD_URL__` before the us
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CODEX_TASKBOARD_HOST` | `0.0.0.0` | HTTP bind address; use `127.0.0.1` to disable LAN access |
+| `CODEX_TASKBOARD_HOST` | `127.0.0.1` | HTTP bind address; set `0.0.0.0` only when using a trusted, authenticated LAN boundary |
 | `CODEX_TASKBOARD_PORT` | `47824` | Local HTTP port |
 | `CODEX_TASKBOARD_DATA_DIR` | `.data` | SQLite data directory |
 | `CODEX_TASKBOARD_URL` | `http://127.0.0.1:47824` | CLI API origin |
 
-`npm start` prints both the local URL and the available LAN URLs. Teammates on the same trusted network can open one of those LAN URLs and use the same taskboard service. Task, comment, and attachment changes are broadcast to every open client through server-sent events; reconnecting clients perform a full refresh so changes made while disconnected are not missed. A teammate using `taskctl` can point it at the shared service with `CODEX_TASKBOARD_URL=http://<host-ip>:47824`.
+Set `CODEX_TASKBOARD_HOST=0.0.0.0` only behind an authenticated, trusted LAN boundary. In that mode `npm start` prints the available LAN URLs and teammates can point `taskctl` at `http://<host-ip>:47824`.
 
 LAN mode has no account authentication: anyone on the trusted local network who can reach the URL can read and write the taskboard. Public internet and cloud deployment require an authenticated deployment boundary.
 

@@ -3,6 +3,7 @@ import type {
   AiChatAttachmentInput,
   AiChatModel,
   AiChatSandbox,
+  AiChatSkill,
   AiChatThread,
   AiChatThreadSnapshot,
   AiChatThreadStatus,
@@ -16,6 +17,42 @@ export interface AiChatRouteState {
 }
 
 export const AI_CHAT_SKILL_MARKER = "\uFFFC";
+
+interface AiChatThreadSettings {
+  model: string;
+  reasoningEffort: string;
+  sandbox: AiChatSandbox;
+}
+
+export function settingsForNewAiThread(
+  projectId: string,
+  settingsProjectId: string | null,
+  settings: AiChatThreadSettings,
+): Partial<AiChatThreadSettings> {
+  return projectId === settingsProjectId ? settings : {};
+}
+
+export function readSkillMention(value: string, caret: number) {
+  const prefix = value.slice(0, caret);
+  const match = /(?:^|\s)@([^\s@]*)$/.exec(prefix);
+  if (!match) return null;
+  const at = prefix.lastIndexOf("@");
+  return { start: at, end: caret, query: match[1].toLocaleLowerCase() };
+}
+
+export function insertSkillMention(
+  value: string,
+  start: number,
+  end: number,
+  skill: AiChatSkill,
+) {
+  const mention = `@${skill.label}`;
+  return {
+    value: `${value.slice(0, start)}${mention}${value.slice(end)}`,
+    caret: start + mention.length,
+    skillId: skill.id,
+  };
+}
 
 export function parseAiChatComposerFragment(
   raw: string,

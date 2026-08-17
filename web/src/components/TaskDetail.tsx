@@ -854,9 +854,9 @@ export function TaskDetail({
                         (attachment) => !comment.body.includes(attachmentContentUrl(attachment)),
                       ) && (
                         <ul className="comment-attachment-list" aria-label="评论附件">
-                          {comment.attachments
-                            .filter((attachment) => !comment.body.includes(attachmentContentUrl(attachment)))
-                            .map((attachment) => (
+                          {comment.attachments.map((attachment) => {
+                            if (comment.body.includes(attachmentContentUrl(attachment))) return null;
+                            return (
                               <li key={attachment.id}>
                                 <a
                                   href={attachmentContentUrl(attachment)}
@@ -878,7 +878,8 @@ export function TaskDetail({
                                   <LinearIcon name="trash" />
                                 </button>
                               </li>
-                            ))}
+                            );
+                          })}
                         </ul>
                       )}
                       {comment.threadId && (
