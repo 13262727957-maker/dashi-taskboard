@@ -171,6 +171,33 @@ function aiChatEventFromRow(row) {
   };
 }
 
+function automationPolicyFromRow(row) {
+  return {
+    projectId: row.project_id,
+    enabledByUser: Boolean(row.enabled_by_user),
+    quotaAware: Boolean(row.quota_aware),
+    intervalMinutes: row.interval_minutes,
+    model: row.model,
+    reasoningEffort: row.reasoning_effort,
+    adapter: row.adapter,
+    updatedAt: row.updated_at,
+  };
+}
+
+function automationRunFromRow(row) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    issueId: row.issue_id,
+    aiThreadId: row.ai_thread_id,
+    aiRunId: row.ai_run_id,
+    status: row.status,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    error: row.error,
+  };
+}
+
 function projectPrefix(projectId) {
   const prefix = projectId.toUpperCase().replace(/[^A-Z0-9]+/g, "");
   return (prefix || "TASK").slice(0, 12);
@@ -325,6 +352,85 @@ export class TaskboardDatabase {
       CREATE INDEX IF NOT EXISTS ai_chat_events_thread_created
         ON ai_chat_events(thread_id, created_at, id);
 
+      CREATE TABLE IF NOT EXISTS project_summary_cursors (
+        project_id TEXT PRIMARY KEY,
+        cursor TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS project_summary_sources (
+        project_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        cursor TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, source_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS project_summary_outbox (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        source_thread_id TEXT NOT NULL,
+        source_cursor TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'synced', 'failed')),
+        remote_task_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(project_id, source_thread_id, source_cursor)
+      );
+
+      CREATE INDEX IF NOT EXISTS project_summary_outbox_status
+        ON project_summary_outbox(project_id, status, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS automation_policies (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        enabled_by_user INTEGER NOT NULL CHECK (enabled_by_user IN (0, 1)),
+        quota_aware INTEGER NOT NULL CHECK (quota_aware IN (0, 1)),
+        interval_minutes INTEGER NOT NULL CHECK (interval_minutes IN (5, 10, 15, 30, 60)),
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL,
+        adapter TEXT NOT NULL CHECK (adapter IN ('local-codex-exec', 'codex-native')),
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        issue_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        ai_thread_id TEXT REFERENCES ai_chat_threads(id) ON DELETE SET NULL,
+        ai_run_id TEXT REFERENCES ai_chat_runs(id) ON DELETE SET NULL,
+        status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'skipped')),
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        error TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS automation_runs_project_started
+        ON automation_runs(project_id, started_at DESC, id);
+
+      CREATE TABLE IF NOT EXISTS project_team_bindings (
+        local_project_id TEXT PRIMARY KEY,
+        team_project_id TEXT NOT NULL,
+        team_project_name TEXT,
+        bound_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS project_sync_status (
+        local_project_id TEXT PRIMARY KEY,
+        team_project_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+        task_count INTEGER NOT NULL DEFAULT 0 CHECK (task_count >= 0),
+        imported_count INTEGER NOT NULL DEFAULT 0 CHECK (imported_count >= 0),
+        updated_count INTEGER NOT NULL DEFAULT 0 CHECK (updated_count >= 0),
+        failed_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
+        error TEXT,
+        submitted_by TEXT,
+        submitted_at TEXT NOT NULL
+      );
+
     `);
 
     const projectColumns = this.database.prepare("PRAGMA table_info(projects)").all();
@@ -449,29 +555,37 @@ export class TaskboardDatabase {
       WHERE author_id = 'local'
     `);
 
+    this.interruptAbandonedAutomationRuns();
+
     const hasTaskThreads = this.database.prepare(`
       SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'task_threads'
     `).get();
     if (hasTaskThreads) {
-      this.database.exec(`
-        UPDATE tasks
-        SET thread_id = COALESCE(thread_id, (
-          SELECT task_threads.thread_id
-          FROM task_threads
-          WHERE task_threads.task_id = tasks.id
-          ORDER BY
-            CASE WHEN EXISTS (
-              SELECT 1
-              FROM comments
-              WHERE comments.task_id = tasks.id
-                AND comments.thread_id = task_threads.thread_id
-            ) THEN 1 ELSE 0 END,
-            task_threads.created_at DESC,
-            task_threads.thread_id DESC
-          LIMIT 1
-        ))
-        WHERE thread_id IS NULL
+      const taskIds = this.database.prepare(
+        "SELECT id FROM tasks WHERE thread_id IS NULL",
+      ).all();
+      const preferredThread = this.database.prepare(`
+        SELECT task_threads.thread_id
+        FROM task_threads
+        WHERE task_threads.task_id = ?
+        ORDER BY
+          CASE WHEN EXISTS (
+            SELECT 1
+            FROM comments
+            WHERE comments.task_id = ?
+              AND comments.thread_id = task_threads.thread_id
+          ) THEN 1 ELSE 0 END,
+          task_threads.created_at DESC,
+          task_threads.thread_id DESC
+        LIMIT 1
       `);
+      const updateThread = this.database.prepare(
+        "UPDATE tasks SET thread_id = ? WHERE id = ? AND thread_id IS NULL",
+      );
+      for (const task of taskIds) {
+        const link = preferredThread.get(task.id, task.id);
+        if (link?.thread_id) updateThread.run(link.thread_id, task.id);
+      }
       this.database.exec("DROP TABLE task_threads");
     }
 
@@ -613,6 +727,96 @@ export class TaskboardDatabase {
       throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${id}' does not exist`);
     }
     return this.getProject(id);
+  }
+
+  saveProjectTeamBinding(input) {
+    const timestamp = now();
+    this.database.prepare(`
+      INSERT INTO project_team_bindings (
+        local_project_id, team_project_id, team_project_name, bound_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(local_project_id) DO UPDATE SET
+        team_project_id = excluded.team_project_id,
+        team_project_name = excluded.team_project_name,
+        updated_at = excluded.updated_at
+    `).run(
+      input.localProjectId,
+      input.teamProjectId,
+      input.teamProjectName ?? null,
+      timestamp,
+      timestamp,
+    );
+    return this.getProjectTeamBinding(input.localProjectId);
+  }
+
+  getProjectTeamBinding(localProjectId) {
+    const row = this.database.prepare(`
+      SELECT local_project_id, team_project_id, team_project_name, bound_at, updated_at
+      FROM project_team_bindings
+      WHERE local_project_id = ?
+    `).get(localProjectId);
+    return row ? {
+      localProjectId: row.local_project_id,
+      teamProjectId: row.team_project_id,
+      teamProjectName: row.team_project_name,
+      boundAt: row.bound_at,
+      updatedAt: row.updated_at,
+    } : null;
+  }
+
+  recordProjectSyncStatus(input) {
+    const timestamp = now();
+    this.database.prepare(`
+      INSERT INTO project_sync_status (
+        local_project_id, team_project_id, status, task_count, imported_count,
+        updated_count, failed_count, error, submitted_by, submitted_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(local_project_id) DO UPDATE SET
+        team_project_id = excluded.team_project_id,
+        status = excluded.status,
+        task_count = excluded.task_count,
+        imported_count = excluded.imported_count,
+        updated_count = excluded.updated_count,
+        failed_count = excluded.failed_count,
+        error = excluded.error,
+        submitted_by = excluded.submitted_by,
+        submitted_at = excluded.submitted_at
+    `).run(
+      input.localProjectId,
+      input.teamProjectId ?? null,
+      input.status,
+      input.taskCount ?? 0,
+      input.imported ?? 0,
+      input.updated ?? 0,
+      input.failed ?? 0,
+      input.error ?? null,
+      input.submittedBy ?? null,
+      timestamp,
+    );
+    return this.getProjectSyncStatus(input.localProjectId);
+  }
+
+  getProjectSyncStatus(localProjectId) {
+    const row = this.database.prepare(`
+      SELECT local_project_id, team_project_id, status, task_count, imported_count,
+             updated_count, failed_count, error, submitted_by, submitted_at
+      FROM project_sync_status
+      WHERE local_project_id = ?
+    `).get(localProjectId);
+    return row ? {
+      localProjectId: row.local_project_id,
+      teamProjectId: row.team_project_id,
+      status: row.status,
+      taskCount: row.task_count,
+      imported: row.imported_count,
+      updated: row.updated_count,
+      failed: row.failed_count,
+      error: row.error,
+      submittedBy: row.submitted_by,
+      submittedAt: row.submitted_at,
+    } : null;
   }
 
   getProject(id) {
@@ -890,6 +1094,315 @@ export class TaskboardDatabase {
       WHERE thread_id = ?
       ORDER BY created_at, rowid
     `).all(threadId).map(aiChatEventFromRow);
+  }
+
+  collectProjectSummary(projectId, sourceProjectIds = []) {
+    const cursorRow = this.database.prepare(
+      "SELECT cursor FROM project_summary_cursors WHERE project_id = ?",
+    ).get(projectId);
+    const cursor = cursorRow?.cursor ?? "";
+    const projectIds = [...new Set([projectId, ...sourceProjectIds].filter(Boolean))];
+    const placeholders = projectIds.map(() => "?").join(", ");
+    const threads = this.database.prepare(`
+      SELECT id, title, updated_at
+      FROM ai_chat_threads
+      WHERE origin_project_id IN (${placeholders})
+      ORDER BY updated_at, id
+    `).all(...projectIds);
+    const candidates = [];
+    let nextCursor = cursor;
+    for (const thread of threads) {
+      const events = this.database.prepare(`
+        SELECT id, role, content, created_at
+        FROM ai_chat_events
+        WHERE thread_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))
+          AND role IN ('user', 'assistant')
+        ORDER BY created_at, id
+      `).all(thread.id, cursor, cursor, cursor);
+      if (events.length === 0) continue;
+      const userText = events.filter((event) => event.role === "user").map((event) => event.content).join("\n").trim();
+      const assistantText = events.filter((event) => event.role === "assistant").map((event) => event.content).join("\n").trim();
+      const title = (thread.title || userText || "项目工作摘要").replace(/\s+/g, " ").slice(0, 300);
+      const description = [
+        "来源：本机任务面板对话摘要",
+        userText ? `需求：${userText.slice(0, 800)}` : "",
+        assistantText ? `进展：${assistantText.slice(-1600)}` : "",
+        `来源会话：${thread.id}`,
+      ].filter(Boolean).join("\n\n");
+      const eventCursor = events.at(-1);
+      nextCursor = `${eventCursor.created_at}|${eventCursor.id}`;
+      candidates.push({ sourceThreadId: thread.id, sourceCursor: nextCursor, title, description });
+    }
+    return { cursor, nextCursor, candidates };
+  }
+
+  materializeProjectSummary(projectId, summary, actor) {
+    if (summary.candidates.length === 0 && Object.keys(summary.sourceCursors ?? {}).length === 0) return [];
+    const timestamp = now();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const project = this.database.prepare(
+        "SELECT id, next_task_number FROM projects WHERE id = ?",
+      ).get(projectId);
+      if (!project) throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
+      let nextNumber = project.next_task_number;
+      const taskIds = [];
+      for (const candidate of summary.candidates) {
+        const id = randomUUID();
+        const identifier = `${projectPrefix(projectId)}-${nextNumber}`;
+        nextNumber += 1;
+        this.database.prepare(`
+          INSERT INTO tasks (
+            id, identifier, project_id, title, description, status, priority, labels,
+            sort_order, thread_id, creator_type, creator_id, creator_name, creator_avatar_url,
+            assignee_type, assignee_id, assignee_name, assignee_avatar_url,
+            workflow_id, git_branch, worktree_path, worktree_branch,
+            due_date, recurrence_interval, recurrence_unit,
+            archived_at, version, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1, ?, ?)
+        `).run(
+          id,
+          identifier,
+          projectId,
+          candidate.title,
+          candidate.description,
+          candidate.status,
+          candidate.priority,
+          nextNumber * 1000,
+          candidate.sourceThreadId,
+          actor.type,
+          actor.id,
+          actor.name,
+          actor.avatarUrl,
+          actor.type,
+          actor.id,
+          actor.name,
+          actor.avatarUrl,
+          timestamp,
+          timestamp,
+        );
+        taskIds.push(id);
+      }
+      this.database.prepare(
+        "UPDATE projects SET next_task_number = ?, updated_at = ? WHERE id = ?",
+      ).run(nextNumber, timestamp, projectId);
+      for (const [sourceId, cursor] of Object.entries(summary.sourceCursors ?? {})) {
+        this.database.prepare(`
+          INSERT INTO project_summary_sources (project_id, source_id, cursor, updated_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT(project_id, source_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at
+        `).run(projectId, sourceId, cursor, timestamp);
+      }
+      if (summary.nextCursor !== undefined) {
+        this.database.prepare(`
+          INSERT INTO project_summary_cursors (project_id, cursor, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT(project_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at
+        `).run(projectId, summary.nextCursor, timestamp);
+      }
+      this.database.exec("COMMIT");
+      return taskIds.map((id) => this.getTask(id));
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listProjectSummarySources(projectId) {
+    return Object.fromEntries(this.database.prepare(
+      "SELECT source_id, cursor FROM project_summary_sources WHERE project_id = ?",
+    ).all(projectId).map((row) => [row.source_id, row.cursor]));
+  }
+
+  saveProjectSummarySources(projectId, sourceCursors = {}) {
+    const timestamp = now();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const [sourceId, cursor] of Object.entries(sourceCursors)) {
+        this.database.prepare(`
+          INSERT INTO project_summary_sources (project_id, source_id, cursor, updated_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT(project_id, source_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at
+        `).run(projectId, sourceId, String(cursor), timestamp);
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  queueProjectSummary(projectId, summary) {
+    const timestamp = now();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const candidate of summary.candidates) {
+        this.database.prepare(`
+          INSERT OR IGNORE INTO project_summary_outbox
+            (id, project_id, source_thread_id, source_cursor, title, description, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        `).run(randomUUID(), projectId, candidate.sourceThreadId, candidate.sourceCursor, candidate.title, candidate.description, timestamp, timestamp);
+      }
+      if (summary.nextCursor !== summary.cursor) {
+        this.database.prepare(`
+          INSERT INTO project_summary_cursors (project_id, cursor, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT(project_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at
+        `).run(projectId, summary.nextCursor, timestamp);
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.listProjectSummaryOutbox(projectId);
+  }
+
+  listProjectSummaryOutbox(projectId) {
+    return this.database.prepare(`
+      SELECT id, project_id, source_thread_id, title, description, status, remote_task_id, error, created_at, updated_at
+      FROM project_summary_outbox WHERE project_id = ? ORDER BY created_at DESC
+    `).all(projectId).map((row) => ({
+      id: row.id, projectId: row.project_id, sourceThreadId: row.source_thread_id, title: row.title,
+      description: row.description, status: row.status, remoteTaskId: row.remote_task_id, error: row.error,
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    }));
+  }
+
+  updateProjectSummaryOutbox(id, changes) {
+    this.database.prepare(`
+      UPDATE project_summary_outbox SET status = ?, remote_task_id = ?, error = ?, updated_at = ? WHERE id = ?
+    `).run(changes.status, changes.remoteTaskId ?? null, changes.error ?? null, now(), id);
+  }
+
+  getAutomationPolicy(projectId) {
+    const row = this.database.prepare(`
+      SELECT * FROM automation_policies WHERE project_id = ?
+    `).get(projectId);
+    return row ? automationPolicyFromRow(row) : null;
+  }
+
+  listAutomationPolicies() {
+    return this.database.prepare(`
+      SELECT * FROM automation_policies
+      ORDER BY updated_at DESC, project_id
+    `).all().map(automationPolicyFromRow);
+  }
+
+  saveAutomationPolicy(input) {
+    const project = this.getProject(input.projectId);
+    if (!project) {
+      throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${input.projectId}' does not exist`);
+    }
+    const timestamp = input.updatedAt ?? now();
+    this.database.prepare(`
+      INSERT INTO automation_policies (
+        project_id, enabled_by_user, quota_aware, interval_minutes,
+        model, reasoning_effort, adapter, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        enabled_by_user = excluded.enabled_by_user,
+        quota_aware = excluded.quota_aware,
+        interval_minutes = excluded.interval_minutes,
+        model = excluded.model,
+        reasoning_effort = excluded.reasoning_effort,
+        adapter = excluded.adapter,
+        updated_at = excluded.updated_at
+    `).run(
+      input.projectId,
+      input.enabledByUser ? 1 : 0,
+      input.quotaAware ? 1 : 0,
+      input.intervalMinutes,
+      input.model,
+      input.reasoningEffort,
+      input.adapter,
+      timestamp,
+    );
+    return this.getAutomationPolicy(input.projectId);
+  }
+
+  getLastAutomationRun(projectId) {
+    const row = this.database.prepare(`
+      SELECT * FROM automation_runs
+      WHERE project_id = ?
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1
+    `).get(projectId);
+    return row ? automationRunFromRow(row) : null;
+  }
+
+  listAutomationRuns(projectId, limit = 10) {
+    const boundedLimit = Math.max(1, Math.min(50, Number(limit) || 10));
+    return this.database.prepare(`
+      SELECT * FROM automation_runs
+      WHERE project_id = ?
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `).all(projectId, boundedLimit).map(automationRunFromRow);
+  }
+
+  createAutomationRun(input) {
+    const id = input.id ?? randomUUID();
+    const timestamp = input.startedAt ?? now();
+    this.database.prepare(`
+      INSERT INTO automation_runs (
+        id, project_id, issue_id, ai_thread_id, ai_run_id,
+        status, started_at, finished_at, error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.projectId,
+      input.issueId ?? null,
+      input.aiThreadId ?? null,
+      input.aiRunId ?? null,
+      input.status ?? "running",
+      timestamp,
+      input.finishedAt ?? null,
+      input.error ?? null,
+    );
+    return this.getAutomationRun(id);
+  }
+
+  getAutomationRun(id) {
+    const row = this.database.prepare("SELECT * FROM automation_runs WHERE id = ?").get(id);
+    return row ? automationRunFromRow(row) : null;
+  }
+
+  updateAutomationRun(id, changes) {
+    const current = this.getAutomationRun(id);
+    if (!current) {
+      throw new ApiError(404, "AUTOMATION_RUN_NOT_FOUND", `Automation run '${id}' does not exist`);
+    }
+    const columns = {
+      issueId: "issue_id",
+      aiThreadId: "ai_thread_id",
+      aiRunId: "ai_run_id",
+      status: "status",
+      finishedAt: "finished_at",
+      error: "error",
+    };
+    const assignments = [];
+    const values = [];
+    for (const [key, column] of Object.entries(columns)) {
+      if (!Object.hasOwn(changes, key)) continue;
+      assignments.push(`${column} = ?`);
+      values.push(changes[key]);
+    }
+    if (assignments.length === 0) return current;
+    values.push(id);
+    this.database.prepare(`
+      UPDATE automation_runs SET ${assignments.join(", ")} WHERE id = ?
+    `).run(...values);
+    return this.getAutomationRun(id);
+  }
+
+  interruptAbandonedAutomationRuns() {
+    const timestamp = now();
+    const result = this.database.prepare(`
+      UPDATE automation_runs
+      SET
+        status = 'failed',
+        error = COALESCE(error, 'Taskboard service restarted'),
+        finished_at = COALESCE(finished_at, ?)
+      WHERE status = 'running'
+    `).run(timestamp);
+    return Number(result.changes);
   }
 
   interruptAbandonedAiChatRuns() {

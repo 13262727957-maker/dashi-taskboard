@@ -20,7 +20,11 @@ cd /d "$ProjectRoot"
 "@
 Set-Content -Path $RunnerPath -Value $runner -Encoding ASCII
 
-$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/d /c `"$RunnerPath`"" -WorkingDirectory $ProjectRoot
+# Run the existing runner through a hidden PowerShell host so the logon task does
+# not create a visible cmd.exe window while the local server stays alive.
+$escapedRunnerPath = $RunnerPath.Replace("'", "''")
+$hiddenCommand = "& { & '$escapedRunnerPath' }"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$hiddenCommand`"" -WorkingDirectory $ProjectRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances Ignore -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Starts the local Dashi Taskboard service after Windows sign-in." -RunLevel Limited -Force | Out-Null

@@ -16,10 +16,13 @@ import {
   isTaskStatus,
 } from "../shared/domain.mjs";
 import { parseTaskboardAutomationHostRequest } from "../shared/taskboard-automation.mjs";
-import { defaultTaskboardDataDirectory } from "../shared/taskboard-paths.mjs";
 import { normalizeWorkflowSnapshot } from "../shared/workflow-control-flow.mjs";
 import { AiChatService } from "./ai-chat.mjs";
+import { AutomationService } from "./automation-service.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
+import { collectCodexProjectConversations } from "./codex-history.mjs";
+import { parseEmployeeWorkbook } from "./employee-import.mjs";
+import { SqlServerIdentityStore, sqlServerConfigFromEnv } from "./sqlserver-identity.mjs";
 import {
   CloudProxyError,
   createCloudProxy,
@@ -30,12 +33,6 @@ import {
   readDeviceProjects,
   resolveMaterializedProjectForPath,
 } from "./project-discovery.mjs";
-import {
-  getLocalAutomationStatus,
-  launchLocalAutomationMode,
-  runLocalTaskboardAutomation,
-  startLocalAutomationPolicyScheduler,
-} from "./local-automation.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -522,7 +519,9 @@ function actorFromRequest(request) {
   }
 
   const id = stringField(rawId, "X-Taskboard-User-Id", { required: true, maxLength: 96 });
-  if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(id)) {
+  // SQL Server uniqueidentifiers may be returned with uppercase hex digits.
+  // Keep the opaque actor id constrained, but accept either UUID casing.
+  if (!/^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i.test(id)) {
     throw new ApiError(400, "INVALID_ACTOR", "User ID contains unsupported characters");
   }
   let decodedName;
@@ -548,6 +547,17 @@ function actorFromRequest(request) {
     avatarUrl = parsed.toString();
   }
   return { type: "user", id, name, avatarUrl };
+}
+
+async function identitySessionFromRequest(request, identity) {
+  if (!identity) {
+    throw new ApiError(503, "IDENTITY_NOT_CONFIGURED", "SQL Server identity is not configured");
+  }
+  const raw = requestHeader(request, "authorization") ?? requestHeader(request, "x-taskboard-session");
+  const token = raw?.startsWith("Bearer ") ? raw.slice(7).trim() : raw?.trim();
+  const user = await identity.session(token);
+  if (!user) throw new ApiError(401, "IDENTITY_REQUIRED", "请先登录任务面板");
+  return user;
 }
 
 function parseAssigneeTarget(value) {
@@ -952,6 +962,87 @@ function parseAiTurn(body) {
   };
 }
 
+function parseGeneratedTaskCards(content, candidates) {
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const source = fenced?.[1] ?? content;
+  const start = source.indexOf("[");
+  const end = source.lastIndexOf("]");
+  if (start < 0 || end <= start) {
+    throw new ApiError(502, "LOCAL_SUMMARY_INVALID", "Codex 未返回可识别的任务卡片数据");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(source.slice(start, end + 1));
+  } catch {
+    throw new ApiError(502, "LOCAL_SUMMARY_INVALID", "Codex 返回的任务卡片格式无效");
+  }
+  if (!Array.isArray(parsed) || parsed.length > 200) {
+    throw new ApiError(502, "LOCAL_SUMMARY_INVALID", "Codex 返回的任务卡片数量或格式无效");
+  }
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new ApiError(502, "LOCAL_SUMMARY_INVALID", `第 ${index + 1} 张任务卡片格式无效`);
+    }
+    const sourceIndex = Number.isInteger(item.sourceIndex) ? item.sourceIndex : index;
+    const candidate = candidates[sourceIndex] ?? candidates[0];
+    if (!candidate) throw new ApiError(502, "LOCAL_SUMMARY_INVALID", "任务卡片缺少来源对话");
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    const description = typeof item.description === "string" ? item.description.trim() : "";
+    if (!title) throw new ApiError(502, "LOCAL_SUMMARY_INVALID", `第 ${index + 1} 张任务卡片缺少标题`);
+    const allowedStatuses = new Set(["todo", "in_progress", "in_review", "blocked"]);
+    const allowedPriorities = new Set(["none", "low", "medium", "high", "urgent"]);
+    return {
+      sourceThreadId: candidate.sourceThreadId,
+      sourceCursor: candidate.sourceCursor,
+      title: title.slice(0, 300),
+      description: description.slice(0, 100_000),
+      status: allowedStatuses.has(item.status) ? item.status : "todo",
+      priority: allowedPriorities.has(item.priority) ? item.priority : "medium",
+    };
+  });
+}
+
+async function generateLocalTaskCards(aiChat, database, projectId, collected) {
+  if (collected.candidates.length === 0) return [];
+  const conversationInput = collected.candidates.map((candidate, index) => ({
+    sourceIndex: index,
+    sourceThreadId: candidate.sourceThreadId,
+    conversation: candidate.description,
+  }));
+  const prompt = [
+    "请使用 manage-taskboard skill，把下面这些本地项目新增对话整理成任务卡片。",
+    "这是一次本地整理：不要修改文件，不要调用 taskctl 创建任务，不要上传团队项目。",
+    "只返回 JSON 数组，不要 Markdown，不要解释。每个元素必须包含：sourceIndex、title、description、status、priority。",
+    "一个对话可以拆成多张卡片；没有明确任务的内容不要生成卡片。status 只能是 todo、in_progress、in_review、blocked；priority 只能是 none、low、medium、high、urgent。",
+    JSON.stringify(conversationInput),
+  ].join("\n\n");
+  const thread = await aiChat.createThread({
+    projectId,
+    title: "本地新增对话整理",
+    sandbox: "read-only",
+  });
+  try {
+    const run = await aiChat.startTurn(thread.id, {
+      message: prompt,
+      skillIds: [],
+    });
+    const finished = await aiChat.waitForRun(run.id);
+    if (finished.status !== "completed") {
+      throw new ApiError(502, "LOCAL_SUMMARY_FAILED", "Codex 未能完成本地对话整理");
+    }
+    const snapshot = await aiChat.getThreadSnapshot(thread.id);
+    const assistantText = snapshot.events
+      .filter((event) => event.role === "assistant" && event.content)
+      .map((event) => event.content)
+      .join("\n");
+    return parseGeneratedTaskCards(assistantText, collected.candidates);
+  } finally {
+    try {
+      aiChat.deleteThread(thread.id);
+    } catch {}
+  }
+}
+
 class EventHub {
   constructor() {
     this.clients = new Set();
@@ -1276,7 +1367,7 @@ export function resolveServerOptions(options = {}) {
   const configuredDataDirectory = options.dataDirectory ?? process.env.CODEX_TASKBOARD_DATA_DIR;
   const dataDirectory = configuredDataDirectory
     ? path.resolve(configuredDataDirectory)
-    : defaultTaskboardDataDirectory();
+    : path.join(PROJECT_ROOT, ".data");
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const paseoHome = process.env.PASEO_HOME || path.join(os.homedir(), ".paseo");
   return {
@@ -1317,6 +1408,11 @@ export function resolveHost(value = process.env.CODEX_TASKBOARD_HOST ?? "0.0.0.0
 export function createTaskboardServer(options = {}) {
   const resolved = resolveServerOptions(options);
   const database = new TaskboardDatabase(resolved.databasePath);
+  const identity = options.identityStore
+    ?? (options.disableSqlServerIdentity ? null : (() => {
+      const config = options.sqlServerConfig ?? sqlServerConfigFromEnv();
+      return config ? new SqlServerIdentityStore(config) : null;
+    })());
   const events = new EventHub();
   const cloudConfig = options.cloudConfigStore ?? createCloudConfigStore({
     configPath: resolved.cloudConfigPath,
@@ -1342,10 +1438,13 @@ export function createTaskboardServer(options = {}) {
     projectDiscovery: resolved,
     manageTaskboardSkillPath: resolved.skillPath,
   });
-  const aiEventResponses = new Set();
-  void startLocalAutomationPolicyScheduler().catch((error) => {
-    console.error(`Local automation policy scheduler failed to start: ${error.message}`);
+  const automation = new AutomationService({
+    database,
+    aiChat,
+    codexExecutable: resolved.codexExecutable,
+    events,
   });
+  const aiEventResponses = new Set();
 
   const server = createServer(async (request, response) => {
     response.setHeader("x-content-type-options", "nosniff");
@@ -1372,6 +1471,302 @@ export function createTaskboardServer(options = {}) {
       if (pathname === "/health") {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
         return sendJson(response, 200, { status: "ok" });
+      }
+
+      if (pathname === "/api/identity/status") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if (!identity) return sendJson(response, 200, { configured: false, initialized: false, userCount: 0, employeeCount: 0 });
+        try {
+          return sendJson(response, 200, await identity.status());
+        } catch {
+          return sendJson(response, 200, {
+            configured: false,
+            initialized: false,
+            userCount: 0,
+            employeeCount: 0,
+          });
+        }
+      }
+
+      if (pathname === "/api/identity/register") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        if (!identity) throw new ApiError(503, "IDENTITY_NOT_CONFIGURED", "SQL Server identity is not configured");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["employeeNo", "displayName"]));
+        const employeeNo = stringField(body.employeeNo, "employeeNo", { required: true, maxLength: 50 });
+        const displayName = stringField(body.displayName, "displayName", { required: true, maxLength: 100 });
+        try {
+          return sendJson(response, 201, await identity.registerDeveloper(employeeNo, displayName));
+        } catch (error) {
+          throw new ApiError(401, "IDENTITY_REGISTRATION_FAILED", error.message);
+        }
+      }
+
+      if (pathname === "/api/identity/me") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return sendJson(response, 200, { user: await identitySessionFromRequest(request, identity) });
+      }
+
+      if (pathname === "/api/identity/employees") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        await identitySessionFromRequest(request, identity);
+        return sendJson(response, 200, { employees: await identity.listEmployees() });
+      }
+
+      const availableDevelopersRoute = pathname.match(/^\/api\/identity\/developers\/available$/);
+      if (availableDevelopersRoute) {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        const user = await identitySessionFromRequest(request, identity);
+        const projectId = new URL(request.url, "http://localhost").searchParams.get("projectId");
+        if (!projectId) throw new ApiError(400, "INVALID_FIELD", "projectId 不能为空");
+        try {
+          return sendJson(response, 200, { developers: await identity.listAvailableDevelopers(user.id, projectId) });
+        } catch (error) {
+          throw new ApiError(403, "PROJECT_OWNER_REQUIRED", error.message);
+        }
+      }
+
+      if (pathname === "/api/identity/employees/import") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        await identitySessionFromRequest(request, identity);
+        const filename = requestHeader(request, "x-taskboard-filename") ?? "employees.xlsx";
+        const buffer = await readBody(request, 10 * 1024 * 1024, "员工 Excel 文件不能超过 10 MiB");
+        const parsed = parseEmployeeWorkbook(buffer, { sourceFileName: filename });
+        if (parsed.errors.length > 0) {
+          throw new ApiError(400, "EMPLOYEE_IMPORT_INVALID", "员工 Excel 存在错误行", parsed.errors);
+        }
+        const employees = await identity.importEmployees(parsed.employees);
+        return sendJson(response, 200, { sheetName: parsed.sheetName, count: parsed.employees.length, employees });
+      }
+
+      if (pathname === "/api/identity/projects") {
+        const user = await identitySessionFromRequest(request, identity);
+        if (request.method === "GET") {
+          return sendJson(response, 200, { projects: await identity.listProjects(user.id) });
+        }
+        if (request.method === "POST") {
+          const body = await readJson(request);
+          assertPlainObject(body);
+          assertAllowedKeys(body, new Set(["code", "name", "workspacePath", "description"]));
+          const code = stringField(body.code, "code", { required: true, maxLength: 50 });
+          const name = stringField(body.name, "name", { required: true, maxLength: 200 });
+          const workspacePath = stringField(body.workspacePath ?? null, "workspacePath", { nullable: true, maxLength: 1000 });
+          const description = stringField(body.description ?? null, "description", { nullable: true, maxLength: 1000 });
+          try {
+            return sendJson(response, 201, { project: await identity.createProject(user.id, { code, name, workspacePath, description }) });
+          } catch (error) {
+            throw new ApiError(400, "PROJECT_CREATE_FAILED", error.message);
+          }
+        }
+        return methodNotAllowed(response, ["GET", "POST"]);
+      }
+
+      if (pathname === "/api/identity/task-sync-logs") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        const user = await identitySessionFromRequest(request, identity);
+        return sendJson(response, 200, { logs: await identity.listTaskSyncLogs(user.id) });
+      }
+
+      const identityMembersRoute = pathname.match(/^\/api\/identity\/projects\/([^/]+)\/members$/);
+      if (identityMembersRoute) {
+        const user = await identitySessionFromRequest(request, identity);
+        const projectId = decodeRouteSegment(identityMembersRoute[1], "Project id");
+        if (request.method === "GET") {
+          return sendJson(response, 200, { members: await identity.listProjectMembers(user.id, projectId) });
+        }
+        if (request.method === "POST") {
+          const body = await readJson(request);
+          assertPlainObject(body);
+          assertAllowedKeys(body, new Set(["employeeNo", "memberUserId", "action"]));
+          const action = stringField(body.action ?? "add", "action", { required: true, maxLength: 20 });
+          if (action === "remove") {
+            const memberUserId = stringField(body.memberUserId, "memberUserId", { required: true, maxLength: 36 });
+            try {
+              const members = await identity.removeProjectMember(user.id, projectId, memberUserId);
+              return sendJson(response, 200, { members });
+            } catch (error) {
+              throw new ApiError(400, "PROJECT_MEMBER_UPDATE_FAILED", error.message);
+            }
+          }
+          const employeeNo = stringField(body.employeeNo, "employeeNo", { required: true, maxLength: 50 });
+          try {
+            return sendJson(response, 201, { members: await identity.addProjectMember(user.id, projectId, employeeNo) });
+          } catch (error) {
+            throw new ApiError(400, "PROJECT_MEMBER_ADD_FAILED", error.message);
+          }
+        }
+        return methodNotAllowed(response, ["GET", "POST"]);
+      }
+
+      const identityJoinRoute = pathname.match(/^\/api\/identity\/projects\/([^/]+)\/join$/);
+      if (identityJoinRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const user = await identitySessionFromRequest(request, identity);
+        const projectId = decodeRouteSegment(identityJoinRoute[1], "Project id");
+        try {
+          return sendJson(response, 201, { members: await identity.joinProject(user.id, projectId) });
+        } catch (error) {
+          throw new ApiError(400, "PROJECT_JOIN_FAILED", error.message);
+        }
+      }
+
+      const identityTasksRoute = pathname.match(/^\/api\/identity\/projects\/([^/]+)\/tasks$/);
+      if (identityTasksRoute) {
+        const user = await identitySessionFromRequest(request, identity);
+        const projectId = decodeRouteSegment(identityTasksRoute[1], "Project id");
+        if (request.method === "GET") {
+          return sendJson(response, 200, { tasks: await identity.listProjectTasks(user.id, projectId) });
+        }
+        if (request.method === "POST") {
+          const body = await readJson(request);
+          assertPlainObject(body);
+          assertAllowedKeys(body, new Set(["title", "description", "priority", "assigneeUserId", "codePrefix"]));
+          const title = stringField(body.title, "title", { required: true, maxLength: 300 });
+          const description = stringField(body.description ?? "", "description", { maxLength: 100_000 });
+          const priority = stringField(body.priority ?? "normal", "priority", { required: true, maxLength: 20 });
+          const assigneeUserId = stringField(body.assigneeUserId ?? null, "assigneeUserId", { nullable: true, maxLength: 36 });
+          const codePrefix = stringField(body.codePrefix ?? "TASK", "codePrefix", { required: true, maxLength: 20 });
+          try {
+            return sendJson(response, 201, { task: await identity.createProjectTask(user.id, projectId, { title, description, priority, assigneeUserId, codePrefix }) });
+          } catch (error) {
+            throw new ApiError(400, "TASK_CREATE_FAILED", error.message);
+          }
+        }
+        return methodNotAllowed(response, ["GET", "POST"]);
+      }
+
+      const identityTaskImportRoute = pathname.match(/^\/api\/identity\/projects\/([^/]+)\/tasks\/import$/);
+      if (identityTaskImportRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const user = await identitySessionFromRequest(request, identity);
+        const projectId = decodeRouteSegment(identityTaskImportRoute[1], "Project id");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["tasks", "localProjectId"]));
+        const localProjectId = stringField(body.localProjectId ?? null, "localProjectId", { nullable: true, maxLength: 200 });
+        if (!Array.isArray(body.tasks) || body.tasks.length > 500) {
+          throw new ApiError(400, "INVALID_FIELD", "tasks 必须是最多 500 条任务的数组");
+        }
+        const tasks = body.tasks.map((task) => {
+          assertPlainObject(task);
+          assertAllowedKeys(task, new Set(["sourceId", "title", "description", "status", "priority", "updatedAt"]));
+          const status = stringField(task.status ?? "todo", "task.status", { required: true, maxLength: 20 });
+          const priority = stringField(task.priority ?? "normal", "task.priority", { required: true, maxLength: 20 });
+          const normalizedStatus = status === "backlog" ? "todo" : status;
+          const normalizedPriority = priority === "none" || priority === "medium" ? "normal" : priority;
+          if (!isTaskStatus(normalizedStatus)) throw new ApiError(400, "INVALID_FIELD", `不支持的任务状态：${status}`);
+          if (!new Set(["low", "normal", "high", "urgent"]).has(normalizedPriority)) {
+            throw new ApiError(400, "INVALID_FIELD", `不支持的任务优先级：${priority}`);
+          }
+          return {
+            sourceId: stringField(task.sourceId ?? null, "task.sourceId", { nullable: true, maxLength: 200 }),
+            title: stringField(task.title, "task.title", { required: true, maxLength: 300 }),
+            description: stringField(task.description ?? "", "task.description", { maxLength: 100_000 }),
+            status: normalizedStatus,
+            priority: normalizedPriority,
+            updatedAt: stringField(task.updatedAt ?? null, "task.updatedAt", { nullable: true, maxLength: 40 }),
+          };
+        });
+        if (localProjectId) {
+          const syncStatus = database.getProjectSyncStatus(localProjectId);
+          const submittedAt = syncStatus ? Date.parse(syncStatus.submittedAt) || 0 : 0;
+          const latestTaskUpdatedAt = tasks.reduce((latest, task) => Math.max(latest, Date.parse(task.updatedAt ?? "") || 0), 0);
+          if (
+            syncStatus?.status === "success"
+            && syncStatus.teamProjectId === projectId
+            && submittedAt >= latestTaskUpdatedAt
+          ) {
+            throw new ApiError(409, "TASK_IMPORT_ALREADY_SUBMITTED", "这批任务卡片已经提交过，无需重复提交");
+          }
+        }
+        try {
+          const result = await identity.importProjectTasks(user.id, projectId, tasks, { localProjectId });
+          if (localProjectId) {
+            database.recordProjectSyncStatus({
+              localProjectId,
+              teamProjectId: projectId,
+              status: "success",
+              taskCount: tasks.length,
+              imported: result.imported,
+              updated: result.updated + (result.deduped ?? 0),
+              failed: 0,
+              submittedBy: user.displayName ?? user.employeeNo ?? user.id,
+            });
+          }
+          return sendJson(response, 201, result);
+        } catch (error) {
+          if (error.code === "TASK_IMPORT_UNCHANGED") {
+            throw new ApiError(409, "TASK_IMPORT_ALREADY_SUBMITTED", error.message);
+          }
+          if (localProjectId) {
+            try {
+              database.recordProjectSyncStatus({
+                localProjectId,
+                teamProjectId: projectId,
+                status: "failed",
+                taskCount: tasks.length,
+                imported: 0,
+                updated: 0,
+                failed: tasks.length,
+                error: error.message,
+                submittedBy: user.displayName ?? user.employeeNo ?? user.id,
+              });
+            } catch {}
+          }
+          throw new ApiError(400, "TASK_IMPORT_FAILED", error.message);
+        }
+      }
+
+      const localProjectBindingRoute = pathname.match(/^\/api\/local\/project-bindings\/([^/]+)$/);
+      if (localProjectBindingRoute) {
+        const localProjectId = decodeRouteSegment(localProjectBindingRoute[1], "Local project id");
+        if (request.method === "GET") {
+          return sendJson(response, 200, { binding: database.getProjectTeamBinding(localProjectId) });
+        }
+        if (request.method === "PUT") {
+          const body = await readJson(request);
+          assertPlainObject(body);
+          assertAllowedKeys(body, new Set(["teamProjectId", "teamProjectName"]));
+          const teamProjectId = stringField(body.teamProjectId, "teamProjectId", { required: true, maxLength: 200 });
+          const teamProjectName = stringField(body.teamProjectName ?? null, "teamProjectName", { nullable: true, maxLength: 200 });
+          return sendJson(response, 200, {
+            binding: database.saveProjectTeamBinding({ localProjectId, teamProjectId, teamProjectName }),
+          });
+        }
+        return methodNotAllowed(response, ["GET", "PUT"]);
+      }
+
+      const localProjectSyncStatusRoute = pathname.match(/^\/api\/local\/project-sync-status\/([^/]+)$/);
+      if (localProjectSyncStatusRoute) {
+        const localProjectId = decodeRouteSegment(localProjectSyncStatusRoute[1], "Local project id");
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        return sendJson(response, 200, { syncStatus: database.getProjectSyncStatus(localProjectId) });
+      }
+
+      const identityTaskRoute = pathname.match(/^\/api\/identity\/projects\/([^/]+)\/tasks\/([^/]+)$/);
+      if (identityTaskRoute) {
+        const user = await identitySessionFromRequest(request, identity);
+        const projectId = decodeRouteSegment(identityTaskRoute[1], "Project id");
+        const taskId = decodeRouteSegment(identityTaskRoute[2], "Task id");
+        if (request.method !== "PATCH") return methodNotAllowed(response, ["PATCH"]);
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["version", "title", "description", "status", "priority", "assigneeUserId"]));
+        const version = Number(body.version);
+        if (!Number.isInteger(version) || version < 1) throw new ApiError(400, "INVALID_FIELD", "version 必须是正整数");
+        const changes = {};
+        if (body.title !== undefined) changes.title = stringField(body.title, "title", { required: true, maxLength: 300 });
+        if (body.description !== undefined) changes.description = stringField(body.description, "description", { maxLength: 100_000 });
+        if (body.status !== undefined) changes.status = stringField(body.status, "status", { required: true, maxLength: 20 });
+        if (body.priority !== undefined) changes.priority = stringField(body.priority, "priority", { required: true, maxLength: 20 });
+        if (body.assigneeUserId !== undefined) changes.assigneeUserId = stringField(body.assigneeUserId, "assigneeUserId", { nullable: true, maxLength: 36 });
+        if (Object.keys(changes).length === 0) throw new ApiError(400, "INVALID_BODY", "至少需要一个任务字段");
+        try {
+          return sendJson(response, 200, { task: await identity.updateProjectTask(user.id, projectId, taskId, version, changes) });
+        } catch (error) {
+          throw new ApiError(400, "TASK_UPDATE_FAILED", error.message);
+        }
       }
 
       if (pathname === "/api/local/cloud-session") {
@@ -1458,30 +1853,43 @@ export function createTaskboardServer(options = {}) {
         });
       }
 
-      if (pathname === "/api/local/automation/status") {
-        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
-        assertNoQuery(url.searchParams, "GET /api/local/automation/status");
-        return sendJson(response, 200, await getLocalAutomationStatus());
-      }
-
-      if (pathname === "/api/local/automation/launch") {
-        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
-        assertNoQuery(url.searchParams, "POST /api/local/automation/launch");
-        assertAllowedKeys(await readJson(request), new Set([]));
-        return sendJson(response, 200, await launchLocalAutomationMode());
-      }
-
       if (pathname === "/api/local/automation") {
         if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
         assertNoQuery(url.searchParams, "POST /api/local/automation");
         const automationRequest = parseLocalAutomation(await readJson(request));
-        const result = await runLocalTaskboardAutomation(automationRequest);
+        let result;
+        if (automationRequest.operation === "list") {
+          result = await automation.list(automationRequest.taskboardProjectId);
+        } else if (automationRequest.operation === "pause") {
+          result = automation.pause(automationRequest.taskboardProjectId);
+        } else if (
+          automationRequest.operation === "apply-policy"
+          || automationRequest.operation === "ensure-active"
+        ) {
+          result = await automation.applyPolicy({
+            ...automationRequest,
+            enabledByUser: automationRequest.operation === "ensure-active"
+              ? true
+              : automationRequest.enabledByUser,
+          });
+        } else if (automationRequest.operation === "run-once") {
+          result = await automation.runOnce(automationRequest);
+        } else {
+          throw new ApiError(400, "INVALID_AUTOMATION_OPERATION", "Automation operation is invalid");
+        }
         if (result?.ok === false) return sendJson(response, 200, result);
         return sendJson(response, 200, {
           requestId: automationRequest.requestId,
           ok: true,
           ...result,
         });
+      }
+
+      if (pathname === "/api/local/automation/runs") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertAllowedQuery(url.searchParams, new Set(["projectId"]), "GET /api/local/automation/runs");
+        const projectId = validateProjectId(url.searchParams.get("projectId") ?? undefined);
+        return sendJson(response, 200, automation.activity(projectId));
       }
 
       if (pathname === "/api/local/ai/catalog") {
@@ -1748,6 +2156,48 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 201, { task });
         }
         return methodNotAllowed(response, ["GET", "POST"]);
+      }
+
+      const localSummaryRoute = pathname.match(/^\/api\/projects\/([^/]+)\/summaries$/);
+      if (localSummaryRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const projectId = decodeRouteSegment(localSummaryRoute[1], "Project id");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["sourceProjectIds"]));
+        const project = database.getProject(projectId);
+        if (!project) throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
+        const actor = actorFromRequest(request);
+        const sourceProjectIds = body.sourceProjectIds === undefined
+          ? []
+          : body.sourceProjectIds;
+        if (
+          !Array.isArray(sourceProjectIds)
+          || sourceProjectIds.length > 20
+          || sourceProjectIds.some((value) => typeof value !== "string" || value.trim().length === 0 || value.length > 256)
+        ) {
+          throw new ApiError(400, "INVALID_FIELD", "sourceProjectIds must be an array of at most 20 non-empty strings");
+        }
+        const collected = await collectCodexProjectConversations({
+          workspacePath: project.workspacePath,
+          cursors: database.listProjectSummarySources(projectId),
+        });
+        let generated;
+        try {
+          generated = await generateLocalTaskCards(aiChat, database, projectId, collected);
+        } catch (error) {
+          if (error instanceof ApiError) throw error;
+          throw new ApiError(502, "LOCAL_SUMMARY_FAILED", `调用 Codex 整理本地对话失败：${error.message ?? "未知错误"}`);
+        }
+        const tasks = database.materializeProjectSummary(projectId, {
+          ...collected,
+          candidates: generated,
+        }, actor);
+        tasks.forEach((task) => events.emit("task.created", { task }));
+        return sendJson(response, 201, {
+          created: tasks.length,
+          message: tasks.length > 0 ? `已生成 ${tasks.length} 张本地任务卡片。` : "没有发现新的未处理对话。",
+        });
       }
 
       if (pathname === "/api/events") {
@@ -2131,9 +2581,11 @@ export function createTaskboardServer(options = {}) {
           })
         : Promise.resolve();
       events.close();
+      automation.close();
       for (const response of aiEventResponses) response.end();
       aiEventResponses.clear();
       await aiChat.close();
+      if (identity) await identity.close();
       await serverClosed;
       listening = false;
       database.close();

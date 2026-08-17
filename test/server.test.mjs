@@ -764,6 +764,107 @@ test("workflow capability discovery fails instead of inventing fallback options"
   assert.equal(result.body.error.code, "INTERNAL_ERROR");
 });
 
+test("local automation returns Codex quota and pauses quota-aware runs when depleted", async () => {
+  let workspacePath;
+  let quotaFile;
+  const baseUrl = await startServer(async (directory) => {
+    workspacePath = directory;
+    quotaFile = path.join(directory, "quota-state.txt");
+    await writeFile(quotaFile, "available");
+    const codexExecutable = path.join(directory, "fake-codex.mjs");
+    await writeFile(codexExecutable, `#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+const quotaFile = ${JSON.stringify(quotaFile)};
+if (args[0] !== "app-server") process.exit(0);
+process.stdin.setEncoding("utf8");
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+    } else if (message.method === "account/read") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { account: { type: "chatgpt" } } }) + "\\n");
+    } else if (message.method === "account/rateLimits/read") {
+      const blocked = readFileSync(quotaFile, "utf8").trim() === "blocked";
+      process.stdout.write(JSON.stringify({
+        id: message.id,
+        result: {
+          rateLimitsByLimitId: {
+            codex: {
+              limitName: "gpt-5.5",
+              primary: { usedPercent: blocked ? 100 : 10, resetsAt: 4102444800000 },
+              credits: { hasCredits: !blocked },
+              rateLimitReachedType: blocked ? "hard" : null
+            }
+          }
+        }
+      }) + "\\n");
+    }
+  }
+});
+`);
+    await chmod(codexExecutable, 0o755);
+    return {
+      codexExecutable,
+    };
+  });
+
+  const automationPayload = {
+    requestId: "quota-request",
+    operation: "apply-policy",
+    taskboardProjectId: "local",
+    codexProjectId: "local",
+    projectName: "Local",
+    workspacePath,
+    skillPath: "/fixture/manage-taskboard/SKILL.md",
+    enabledByUser: true,
+    quotaAware: true,
+    intervalMinutes: 5,
+    model: "gpt-5.5",
+    reasoningEffort: "high",
+  };
+  const available = await request(baseUrl, "/api/local/automation", {
+    method: "POST",
+    body: automationPayload,
+  });
+  assert.equal(available.response.status, 200);
+  assert.equal(available.body.quota.state, "available");
+  assert.equal(available.body.item.status, "ACTIVE");
+
+  await writeFile(quotaFile, "blocked");
+  const createTaskResult = await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Quota held task", status: "todo" },
+  });
+  const task = createTaskResult.body.task;
+  const skipped = await request(baseUrl, "/api/local/automation", {
+    method: "POST",
+    body: { ...automationPayload, requestId: "quota-run", operation: "run-once" },
+  });
+  assert.equal(skipped.response.status, 200);
+  assert.equal(skipped.body.quota.state, "blocked");
+  assert.equal(skipped.body.item.status, "PAUSED");
+  assert.equal(skipped.body.run.status, "skipped");
+  assert.equal(skipped.body.run.error, "额度已用尽");
+  const taskAfterRun = await request(baseUrl, `/api/tasks/${task.id}`);
+  assert.equal(taskAfterRun.body.task.status, "todo");
+
+  const activity = await request(
+    baseUrl,
+    `/api/local/automation/runs?projectId=${encodeURIComponent("local")}`,
+  );
+  assert.equal(activity.response.status, 200);
+  assert.equal(activity.body.runs[0].status, "skipped");
+  assert.equal(activity.body.runs[0].task, null);
+});
+
 test("existing task and comment thread attribution remains content-specific", async () => {
   const baseUrl = await startServer(async (directory) => {
     const databasePath = path.join(directory, "taskboard.sqlite");

@@ -115,16 +115,6 @@ export class AiChatService {
   }
 
   async createThread(input) {
-    const [catalog, resolved] = await Promise.all([
-      this.getCatalog(input.projectId),
-      resolveAiWorkspace(input.projectId, this.projectDiscovery, this.database),
-    ]);
-    const model = this.#resolveModel(catalog, input.model);
-    const reasoningEffort = input.reasoningEffort ?? model.defaultReasoningEffort;
-    this.#validateReasoningEffort(model, reasoningEffort);
-    const sandbox = input.sandbox ?? "workspace-write";
-    this.#validateSandbox(sandbox);
-
     let issue;
     if (input.issueId !== undefined) {
       issue = this.database.getTask(input.issueId);
@@ -136,6 +126,20 @@ export class AiChatService {
         );
       }
     }
+    const issueWorkspacePath = issue?.developmentContext?.type === "worktree"
+      ? issue.developmentContext.path
+      : undefined;
+    const [catalog, resolved] = await Promise.all([
+      this.getCatalog(input.projectId),
+      resolveAiWorkspace(input.projectId, this.projectDiscovery, this.database, {
+        workspacePath: issueWorkspacePath,
+      }),
+    ]);
+    const model = this.#resolveModel(catalog, input.model);
+    const reasoningEffort = input.reasoningEffort ?? model.defaultReasoningEffort;
+    this.#validateReasoningEffort(model, reasoningEffort);
+    const sandbox = input.sandbox ?? "workspace-write";
+    this.#validateSandbox(sandbox);
 
     return this.database.createAiChatThread({
       title: input.title ?? issue?.identifier ?? "New conversation",
@@ -207,9 +211,17 @@ export class AiChatService {
       );
     }
 
+    const issue = thread.origin.issueId
+      ? this.database.getTask(thread.origin.issueId)
+      : null;
+    const issueWorkspacePath = issue?.developmentContext?.type === "worktree"
+      ? issue.developmentContext.path
+      : undefined;
     const [catalog, resolved] = await Promise.all([
       this.getCatalog(thread.origin.projectId),
-      resolveAiWorkspace(thread.origin.projectId, this.projectDiscovery, this.database),
+      resolveAiWorkspace(thread.origin.projectId, this.projectDiscovery, this.database, {
+        workspacePath: issueWorkspacePath,
+      }),
     ]);
 
     thread = this.getThread(threadId);
@@ -360,6 +372,12 @@ export class AiChatService {
       }
       throw error;
     }
+  }
+
+  async waitForRun(runId) {
+    const completion = this.completions.get(runId);
+    if (completion) return completion;
+    return this.getRun(runId);
   }
 
   async interrupt(runId) {

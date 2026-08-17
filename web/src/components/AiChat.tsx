@@ -20,6 +20,7 @@ import {
   getAiChatCatalog,
   getAiChatThread,
   interruptAiChatRun,
+  listAutomationRunActivity,
   listAiChatThreads,
   startAiChatTurn,
   subscribeAiChatThread,
@@ -49,6 +50,7 @@ import type {
   AiChatSkill,
   AiChatThread,
   AiChatThreadSnapshot,
+  AutomationRunActivity,
 } from "../types";
 import { LinearIcon, type LinearIconName } from "./LinearIcon";
 
@@ -602,6 +604,13 @@ function dateLabel(value: string): string {
   }).format(date);
 }
 
+function automationRunLabel(run: AutomationRunActivity): string {
+  if (run.status === "running") return "正在处理";
+  if (run.status === "completed") return "已完成";
+  if (run.status === "failed") return "失败";
+  return "已跳过";
+}
+
 type ThinkingActivityDetail =
   | { kind: "lines"; summary: string; value: string[] }
   | { kind: "pre"; summary: string; value: string };
@@ -952,6 +961,7 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     () => window.localStorage.getItem(LAST_THREAD_KEY),
   );
   const [snapshot, setSnapshot] = useState<AiChatThreadSnapshot | null>(null);
+  const [automationRuns, setAutomationRuns] = useState<AutomationRunActivity[]>([]);
   const [draftOrigin, setDraftOrigin] = useState<DraftThreadOrigin | null>(null);
   const [catalog, setCatalog] = useState<AiChatCatalog | null>(null);
   const [catalogLoadedProjectId, setCatalogLoadedProjectId] = useState<string | null>(null);
@@ -1192,10 +1202,36 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   useEffect(() => {
     if (!available) {
       setPanelOpen(false);
+      setAutomationRuns([]);
       return;
     }
     void loadThreads();
   }, [available, loadThreads]);
+
+  const loadAutomationRuns = useCallback(async (signal?: AbortSignal) => {
+    if (!available || !projectId) {
+      setAutomationRuns([]);
+      return;
+    }
+    try {
+      setAutomationRuns(await listAutomationRunActivity(projectId, signal));
+    } catch {
+      setAutomationRuns([]);
+    }
+  }, [available, projectId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadAutomationRuns(controller.signal);
+    if (!available || !projectId) return () => controller.abort();
+    const timer = window.setInterval(() => {
+      void loadAutomationRuns();
+    }, 5_000);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [available, loadAutomationRuns, projectId]);
 
   useEffect(() => {
     setSnapshot(null);
@@ -1375,7 +1411,16 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
   );
   const anyRunning = threads.some((thread) => thread.status === "running");
   const anyFailed = threads.some((thread) => thread.status === "failed");
-  const launcherState = anyRunning ? "running" : anyFailed ? "failed" : unread ? "unread" : "idle";
+  const activeAutomationRun = automationRuns.find((run) => run.status === "running") ?? null;
+  const latestAutomationRun = activeAutomationRun ?? automationRuns[0] ?? null;
+  const automationFailed = automationRuns.some((run) => run.status === "failed");
+  const launcherState = activeAutomationRun || anyRunning
+    ? "running"
+    : automationFailed || anyFailed
+      ? "failed"
+      : unread
+        ? "unread"
+        : "idle";
   const lastUserEvent = snapshot?.thread.status === "failed"
     ? [...snapshot.events].reverse().find((event) => (
         event.role === "user"
@@ -1979,6 +2024,16 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
     }
   }
 
+  function openAutomationRun(run: AutomationRunActivity | null) {
+    if (!run?.aiThreadId) return;
+    if (run.aiThreadId !== selectedThreadRef.current) resetComposer();
+    draftReturnThreadIdRef.current = null;
+    setDraftOrigin(null);
+    selectThread(run.aiThreadId);
+    setHistoryOpen(false);
+    setPanelOpen(true);
+  }
+
   function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (composerBlocked) return;
@@ -2083,11 +2138,33 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
             </button>
           </header>
 
-          {historyOpen && (
-            <div className="ai-chat-history" aria-label="对话历史">
-              <div className="ai-chat-history-heading">
-                <strong>对话历史</strong>
-                <span>{threads.length}</span>
+	          {historyOpen && (
+	            <div className="ai-chat-history" aria-label="对话历史">
+	              {latestAutomationRun && (
+	                <div className={`ai-chat-automation-card is-${latestAutomationRun.status}`}>
+	                  <div>
+	                    <span className={`ai-chat-thread-status is-${latestAutomationRun.status === "running" ? "running" : latestAutomationRun.status === "failed" ? "failed" : "idle"}`} aria-hidden="true" />
+	                    <span>
+	                      <strong>自动化运行 · {automationRunLabel(latestAutomationRun)}</strong>
+	                      <small>
+	                        {latestAutomationRun.task?.identifier ?? "未认领任务"}
+	                        {" · "}
+	                        {dateLabel(latestAutomationRun.startedAt)}
+	                      </small>
+	                    </span>
+	                  </div>
+	                  <button
+	                    type="button"
+	                    disabled={!latestAutomationRun.aiThreadId}
+	                    onClick={() => openAutomationRun(latestAutomationRun)}
+	                  >
+	                    查看过程
+	                  </button>
+	                </div>
+	              )}
+	              <div className="ai-chat-history-heading">
+	                <strong>对话历史</strong>
+	                <span>{threads.length}</span>
               </div>
               {threads.length > 0 ? threads.map((thread) => (
                 <div
@@ -2532,15 +2609,18 @@ export function AiChat({ available, projectId, issueId }: AiChatProps) {
         </section>
       )}
 
-      {!panelOpen && (
-        <button
+	          {!panelOpen && (
+	            <button
           type="button"
           className={`ai-chat-launcher is-${launcherState}`}
           aria-label="打开 AI 对话"
           aria-expanded="false"
           title="AI 对话"
-          onClick={() => setPanelOpen(true)}
-        >
+	              onClick={() => {
+	                setPanelOpen(true);
+	                if (activeAutomationRun?.aiThreadId) openAutomationRun(activeAutomationRun);
+	              }}
+	            >
           <LinearIcon name="conversation" />
           {launcherState !== "idle" && <span className="ai-chat-launcher-state" aria-hidden="true" />}
         </button>

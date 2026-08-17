@@ -42,6 +42,32 @@ function byMostSpecificWorkspace(left, right) {
   return right.workspacePath.length - left.workspacePath.length;
 }
 
+function mergeProjectCandidates(candidates) {
+  const merged = new Map();
+  for (const candidate of candidates) {
+    const current = merged.get(candidate.workspacePath);
+    if (!current) {
+      merged.set(candidate.workspacePath, {
+        ...candidate,
+        sourceClients: [candidate.client],
+        sourceProjectIds: { [candidate.client]: candidate.sourceProjectId },
+      });
+      continue;
+    }
+    const preferred = current.client === "codex" || candidate.client !== "codex" ? current : candidate;
+    merged.set(candidate.workspacePath, {
+      ...preferred,
+      confidence: current.confidence === "high" || candidate.confidence === "high" ? "high" : "medium",
+      sourceClients: [...new Set([...current.sourceClients, candidate.client])],
+      sourceProjectIds: {
+        ...current.sourceProjectIds,
+        [candidate.client]: candidate.sourceProjectId,
+      },
+    });
+  }
+  return [...merged.values()];
+}
+
 function codexProjectName(project, root) {
   if (typeof project?.name === "string" && project.name.trim()) return project.name.trim();
   if (typeof project?.title === "string" && project.title.trim()) return project.title.trim();
@@ -135,14 +161,10 @@ async function discoverPaseoProjectCandidates({ paseoProjectsPath, paseoWorkspac
 }
 
 export async function discoverDeviceProjectCandidates(options) {
-  const [codex, paseo] = await Promise.all([
-    discoverCodexProjectCandidates(options.codexStatePath),
-    discoverPaseoProjectCandidates({
-      paseoProjectsPath: options.paseoProjectsPath,
-      paseoWorkspacesPath: options.paseoWorkspacesPath,
-    }),
-  ]);
-  return [...codex, ...paseo].sort((left, right) => (
+  // Codex is the source of truth for selectable projects. Local/Paseo
+  // workspaces are intentionally excluded from the team-project flow.
+  const codex = await discoverCodexProjectCandidates(options.codexStatePath);
+  return codex.sort((left, right) => (
     left.name.localeCompare(right.name) || left.client.localeCompare(right.client)
   ));
 }

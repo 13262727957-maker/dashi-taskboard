@@ -60,14 +60,18 @@ The Skill teaches Codex to inspect an issue, move it to `in_progress`, use optim
 From a terminal, run one install command:
 
 ```bash
-git clone <repo-url> dashi-taskboard && cd dashi-taskboard && npm run install:codex-plugin
+curl -fsSL https://git.caijai.com/aiplus/cjtaskdashboard/-/raw/main/install.sh | bash
 ```
 
-If you already cloned the repository, run:
+If you already cloned the repository, or if the GitLab raw URL is not available in your network, run the local installer from the checkout:
 
 ```bash
+git clone https://git.caijai.com/aiplus/cjtaskdashboard.git ~/Desktop/Projects/cjtaskdashboard
+cd ~/Desktop/Projects/cjtaskdashboard
 npm run install:codex-plugin
 ```
+
+The one-line installer updates an existing `~/Desktop/Projects/cjtaskdashboard` checkout with `git pull --ff-only` instead of cloning again. Override the destination with `CJ_TASK_DASHBOARD_INSTALL_DIR=/path/to/cjtaskdashboard` or the repository with `CJ_TASK_DASHBOARD_REPO_URL=<url>`.
 
 The installer opens the standalone Taskboard panel at the end. You can reopen the same panel from any terminal or any AI skill that can run shell commands:
 
@@ -81,7 +85,7 @@ Use the doctor when an AI agent or teammate needs to check the local service and
 dashi-taskboard doctor
 ```
 
-The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `dashi-taskboard` and `taskctl` at `~/.local/bin/`, builds the web UI, writes the macOS LaunchAgent for the local server, removes any previously managed Codex injector LaunchAgent, and then tries to open the standalone Taskboard panel. `dashi-taskboard open` starts or reuses the local server and opens `http://127.0.0.1:47824/?host=agent`; on macOS it prefers a Chrome/Chromium-style app-mode window before falling back to the default browser. It does not require Codex sidebar injection, a debug port, or changes to any AI app bundle.
+The installer handles the local personal plugin marketplace for you: it copies the plugin source to `~/plugins/dashi-taskboard`, registers it in `~/.agents/plugins/marketplace.json`, installs/enables `dashi-taskboard@personal` in Codex, exposes the bundled `manage-taskboard` skill through both the plugin and `~/.codex/skills/manage-taskboard`, installs `dashi-taskboard` and `taskctl` at `~/.local/bin/`, builds the web UI, writes the macOS LaunchAgent for the local server, removes any previously managed Codex injector LaunchAgent, and then tries to open the standalone Taskboard panel. `dashi-taskboard open` starts or reuses the local server and opens `http://127.0.0.1:47824/?host=agent`; on macOS, Windows, and Linux it prefers a Chrome/Chromium/Edge app-window before falling back to the default browser. It does not require Codex sidebar injection, a debug port, or changes to any AI app bundle.
 
 Keep the cloned repository in place after installing this basic local-plugin version. The installed plugin and skill live under `~/plugins/dashi-taskboard`, but the local server, `dashi-taskboard`, and `taskctl` shims still run from the cloned repository path.
 
@@ -133,7 +137,19 @@ Uninstall the local plugin, Codex plugin state, managed skill link, `dashi-taskb
 npm run uninstall:codex-plugin
 ```
 
-Windows has the same script entry points, but persistent startup is reserved for the next implementation pass; for now run `npm start` and `npm run codex:inject` manually on Windows.
+Windows has the same standalone panel entry points. To start the local service automatically after the current user signs in, open PowerShell in the repository and run:
+
+```powershell
+npm run windows:install
+```
+
+Set `TASKBOARD_SQLSERVER_HOST`, `TASKBOARD_SQLSERVER_USER`, `TASKBOARD_SQLSERVER_PASSWORD`, and `TASKBOARD_SQLSERVER_DATABASE` as user environment variables before installing the scheduled task. The task runs only for the current Windows user and writes its output to `.data/windows-taskboard-server.log`. Remove it with:
+
+```powershell
+npm run windows:uninstall
+```
+
+The Windows launcher uses Chrome or Edge app mode when available and falls back to the default browser. Codex embedded injection remains a separate macOS-only path; Windows should use the standalone panel.
 
 ## Embed in Codex
 

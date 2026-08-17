@@ -22,6 +22,10 @@ const windowsBrokerSource = await readFile(
   new URL("../scripts/windows-taskboard-broker.mjs", import.meta.url),
   "utf8",
 );
+const windowsUninstallerSource = await readFile(
+  new URL("../scripts/windows-taskboard-uninstall.ps1", import.meta.url),
+  "utf8",
+);
 const doctorSource = await readFile(
   new URL("../scripts/codex-plugin-doctor.mjs", import.meta.url),
   "utf8",
@@ -88,7 +92,13 @@ test("opening the standalone panel focuses an existing macOS window instead of d
   assert.match(launcherSource, /windowsPanelOpenLocked/);
   assert.match(launcherSource, /reuseExistingProcess: true/);
   assert.match(launcherSource, /openWindowsPanelViaBroker\(url\)/);
-  assert.match(launcherSource, /windows-broker-started/);
+  assert.match(launcherSource, /windows-broker-/);
+  assert.match(launcherSource, /windowsHide: process\.platform === "win32"/);
   assert.match(windowsBrokerSource, /createServer/);
   assert.match(windowsBrokerSource, /dashi-taskboard-panel-/);
+  assert.match(windowsBrokerSource, /requestQueue = Promise\.resolve\(\)/);
+  assert.match(windowsBrokerSource, /idleTimeoutMs = 60_000/);
+  assert.match(windowsBrokerSource, /windowsHide: true/);
+  assert.match(launcherSource, /parsed\.ok === true \? parsed\.result : false/);
+  assert.match(windowsUninstallerSource, /windows-taskboard-broker\.mjs/);
 });

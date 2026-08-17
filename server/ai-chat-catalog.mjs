@@ -36,13 +36,14 @@ export async function loadDeviceWorkspaces(projectDiscovery, database) {
   return workspaces;
 }
 
-export async function resolveAiWorkspace(projectId, projectDiscovery, database) {
+export async function resolveAiWorkspace(projectId, projectDiscovery, database, options = {}) {
   const project = await database.getProject(projectId);
   if (!project) {
     throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
   }
   const workspaces = await loadDeviceWorkspaces(projectDiscovery, database);
-  const workspacePath = workspaces.get(projectId);
+  const overrideWorkspacePath = await existingDirectory(options.workspacePath);
+  const workspacePath = overrideWorkspacePath ?? workspaces.get(projectId);
   if (!workspacePath) {
     throw new ApiError(
       409,

@@ -135,6 +135,26 @@ export interface AiChatThreadSnapshot {
   runs: AiChatRun[];
 }
 
+export interface AutomationRunTaskSummary {
+  id: string;
+  identifier: string;
+  title: string;
+  status: TaskStatus;
+}
+
+export interface AutomationRunActivity {
+  id: string;
+  projectId: string;
+  issueId?: string | null;
+  aiThreadId?: string | null;
+  aiRunId?: string | null;
+  status: "running" | "completed" | "failed" | "skipped";
+  startedAt: string;
+  finishedAt?: string | null;
+  error?: string | null;
+  task?: AutomationRunTaskSummary | null;
+}
+
 export interface WorkflowCapabilityOption {
   id: string;
   label: string;
@@ -166,11 +186,14 @@ export interface WorkflowWorkspaceRecord<T = unknown> {
 
 export interface Project {
   id: string;
+  code?: string;
   name: string;
   workspacePath: string | null;
   issueCount: number;
   createdAt: string;
   updatedAt: string;
+  role?: "owner" | "developer" | null;
+  ownerName?: string | null;
 }
 
 export interface DeviceProject {
@@ -179,6 +202,8 @@ export interface DeviceProject {
   workspacePath: string;
   client?: "codex" | "paseo";
   sourceProjectId?: string;
+  sourceClients?: Array<"codex" | "paseo">;
+  sourceProjectIds?: Partial<Record<"codex" | "paseo", string>>;
   confidence?: "high" | "medium";
 }
 

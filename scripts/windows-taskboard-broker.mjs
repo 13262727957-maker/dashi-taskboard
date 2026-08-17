@@ -5,6 +5,7 @@ import path from "node:path";
 
 const pipeName = `\\\\.\\pipe\\dashi-taskboard-panel-${String(process.env.USERNAME ?? "user").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 const url = process.argv[2] || "http://127.0.0.1:47824/?host=agent";
+const idleTimeoutMs = 60_000;
 
 const browsers = [
   path.join(process.env.PROGRAMFILES ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
@@ -30,20 +31,44 @@ if ($panel) {
   exit 2
 }
 `;
-  const focused = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true, stdio: "ignore" });
-  focused.on("close", (code) => {
-    if (code === 0 || code === 2) return;
-    const browser = browsers.find((candidate) => {
-      return existsSync(candidate);
+  return new Promise((resolve) => {
+    const focused = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], { windowsHide: true, stdio: "ignore" });
+    focused.on("error", () => resolve("failed"));
+    focused.on("close", (code) => {
+      if (code === 0) {
+        resolve("focused");
+        return;
+      }
+      if (code === 2) {
+        resolve("opening");
+        return;
+      }
+      const browser = browsers.find((candidate) => {
+        return existsSync(candidate);
+      });
+      if (!browser) {
+        resolve("failed");
+        return;
+      }
+      const child = spawn(browser, [`--app=${targetUrl}`], {
+        detached: true,
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      child.once("error", () => resolve("failed"));
+      child.once("spawn", () => resolve("started"));
+      child.unref();
     });
-    if (!browser) return;
-    const child = spawn(browser, [`--app=${targetUrl}`], {
-      detached: true,
-      windowsHide: false,
-      stdio: "ignore",
-    });
-    child.unref();
   });
+}
+
+let requestQueue = Promise.resolve();
+let idleTimer = null;
+
+function refreshIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => server.close(() => process.exit(0)), idleTimeoutMs);
+  idleTimer.unref();
 }
 
 const server = net.createServer((socket) => {
@@ -55,16 +80,27 @@ const server = net.createServer((socket) => {
     for (const line of lines) {
       try {
         const message = JSON.parse(line);
-        if (message.type === "open") focusOrOpen(message.url || url);
+        if (message.type !== "open") continue;
+        requestQueue = requestQueue.then(async () => {
+          refreshIdleTimer();
+          const result = await focusOrOpen(message.url || url);
+          if (!socket.destroyed) socket.write(`${JSON.stringify({ ok: result !== "failed", result })}\n`);
+          return result;
+        }).catch(() => {
+          if (!socket.destroyed) socket.write(`${JSON.stringify({ ok: false, result: "failed" })}\n`);
+        });
       } catch {}
     }
   });
-  socket.end("ok\n");
+  socket.on("end", () => {
+    if (!socket.destroyed) socket.end();
+  });
 });
 
 server.on("error", () => process.exit(0));
 server.listen(pipeName, () => {
   // Keep this process alive as the single window coordinator.
+  refreshIdleTimer();
 });
 
 process.on("SIGTERM", () => server.close(() => process.exit(0)));

@@ -3,10 +3,10 @@ import readline from "node:readline";
 
 const REQUEST_TIMEOUT_MS = 8_000;
 
-export async function readCodexQuotaStatus(model) {
+export async function readCodexQuotaStatus(model, options = {}) {
   const checkedAt = Date.now();
   try {
-    const session = startAppServer();
+    const session = startAppServer(options);
     try {
       await session.request("initialize", {
         clientInfo: { name: "codex-taskboard", version: "0.1.0" },
@@ -29,8 +29,8 @@ export async function readCodexQuotaStatus(model) {
   }
 }
 
-function startAppServer() {
-  const child = spawn(process.env.CODEX_EXECUTABLE || "codex", ["app-server", "--stdio"], {
+function startAppServer(options = {}) {
+  const child = spawn(options.codexExecutable ?? process.env.CODEX_EXECUTABLE ?? "codex", ["app-server", "--stdio"], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   const pending = new Map();

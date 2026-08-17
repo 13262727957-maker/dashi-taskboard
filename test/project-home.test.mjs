@@ -37,23 +37,43 @@ test("project selection is remembered until the user explicitly returns home", (
   assert.match(appSource, /window\.localStorage\.setItem\(LAST_PROJECT_KEY, projectId\)/);
   assert.match(appSource, /function returnToProjectHome\(\)/);
   assert.match(appSource, /window\.localStorage\.removeItem\(LAST_PROJECT_KEY\)/);
-  assert.match(appSource, /aria-label="返回项目首页"/);
-  assert.match(appSource, /className="detail-back-button project-home-button"[\s\S]*?<span>首页<\/span>/);
-  assert.match(styles, /\.project-home-button \{[\s\S]*?width: auto/);
+  assert.match(appSource, /aria-label=\{detailTask \? "返回上一级：议题看板" : "返回上一级：项目首页"\}/);
+  assert.match(appSource, /className="detail-back-button project-up-button"[\s\S]*?<span>上一级<\/span>/);
+  assert.match(styles, /\.project-up-button \{[\s\S]*?width: auto/);
 });
 
 test("the home uses the same restrained surface language as the issue board", () => {
-  assert.match(appSource, /<section className="project-home">/);
-  assert.match(appSource, /title: "已有议题", projects: projectsWithIssues/);
-  assert.match(appSource, /title: "尚未添加议题", projects: projectsWithoutIssues/);
-  assert.match(appSource, /project\.issueCount > 0/);
+  assert.match(appSource, /<section className="project-home project-overview-demo">/);
+  assert.match(appSource, /<h1>\{viewTitles\[overviewView\]\}<\/h1>/);
+  assert.match(appSource, /候选任务收件箱/);
+  assert.match(appSource, /关注事项/);
+  assert.match(appSource, /Codex 执行中心/);
+  assert.match(appSource, /活动日志/);
+  assert.match(appSource, /返回总览/);
+  assert.match(appSource, /const openOverviewView = \(view: ProjectOverviewView, label: string\)/);
+  assert.match(appSource, /项目进度/);
+  assert.match(appSource, /任务卡片进度/);
+  assert.match(appSource, /成员负载/);
+  assert.match(appSource, /需要我处理/);
+  assert.match(appSource, /overview-project-table/);
+  assert.match(appSource, /overview-task-row/);
+  assert.match(styles, /\.overview-detail-page \{/);
+  assert.match(styles, /\.overview-project-table \{/);
+  assert.match(styles, /\.overview-member-row \{/);
+  assert.match(appSource, /健康项目/);
+  assert.match(appSource, /风险项目/);
+  assert.match(appSource, /待验收/);
+  assert.match(appSource, /任务卡分布/);
+  assert.match(appSource, /下一步/);
+  assert.match(styles, /\.overview-health-pill \{/);
+  assert.match(styles, /\.overview-task-stack \{/);
   assert.match(styles, /\.project-grid \{[\s\S]*?grid-template-columns:/);
   assert.match(styles, /\.project-card \{[\s\S]*?border: var\(--border-hairline\)/);
 });
 
 test("new issues stage attachments in the composer and upload them after creation", () => {
   assert.match(editorSource, /type="file"[\s\S]*?multiple/);
-  assert.match(editorSource, /className="composer-attachment-list"/);
+  assert.match(editorSource, /<PendingAttachments[\s\S]*?uploadLabel="保存后上传"/);
   assert.match(editorSource, /保存后上传/);
   assert.match(appSource, /Promise\.allSettled/);
   assert.match(appSource, /uploadAttachment\(saved\.id, file\)/);
@@ -90,18 +110,18 @@ test("the project header exposes real controls instead of decorative actions", (
 test("the project breadcrumb stops at the project name", () => {
   assert.match(
     appSource,
-    /className="detail-back-button project-home-button"[\s\S]*?<span>首页<\/span>[\s\S]*?selectedProjectId && <span className="breadcrumb-chevron"[\s\S]*?className="header-project-switcher"/,
+    /className="detail-back-button project-up-button"[\s\S]*?<span>上一级<\/span>[\s\S]*?selectedProjectId && <span className="breadcrumb-chevron"[\s\S]*?className="header-project-switcher"/,
   );
   assert.doesNotMatch(appSource, /className="issue-root-button"/);
   assert.doesNotMatch(appSource, /detailTask\?\.identifier \?\? "议题"/);
 });
 
-test("the collapsed Codex sidebar can be expanded immediately left of Home", () => {
+test("the collapsed Codex sidebar can be expanded immediately after the back button", () => {
   assert.match(
     appSource,
-    /hostContext\?\.sidebarCollapsed[\s\S]*?className="detail-back-button codex-sidebar-expand-button"[\s\S]*?className="detail-back-button project-home-button"/,
+    /className="detail-back-button project-up-button"[\s\S]*?hostContext\?\.sidebarCollapsed[\s\S]*?className="detail-back-button codex-sidebar-expand-button"/,
   );
-  assert.match(styles, /\.codex-sidebar-expand-button \+ \.project-home-button \{[\s\S]*?margin-left: 0;/);
+  assert.match(styles, /\.project-up-button \+ \.codex-sidebar-expand-button \{[\s\S]*?margin-left: 0;/);
 });
 
 test("the project home omits the navigation bar but keeps an invisible drag region", () => {

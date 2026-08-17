@@ -22,6 +22,8 @@
     "doctor:codex-plugin": "node scripts/codex-plugin-doctor.mjs",
     "open:codex-taskboard": "node scripts/codex-plugin-open.mjs",
     "open:taskboard": "node scripts/dashi-taskboard.mjs open",
+    "windows:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-taskboard-install.ps1",
+    "windows:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-taskboard-uninstall.ps1",
     "verify:codex-panel": "node scripts/codex-plugin-verify-panel.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:server": "node --watch server/index.mjs --dev",
@@ -32,6 +34,7 @@
     "typecheck": "tsc -p web/tsconfig.json --noEmit",
     "start": "node server/index.mjs",
     "taskctl": "node cli/taskctl.mjs",
+    "sqlserver:taskboard": "node scripts/sqlserver-taskboard-setup.mjs",
     "test": "node --test",
     "test:cloud": "node --test test/cloud-shared-worker.test.mjs",
     "cloud:migrate:local": "wrangler d1 migrations apply codex-taskboard-db --local",
@@ -44,10 +47,12 @@
   "dependencies": {
     "@lobehub/icons-static-svg": "^1.94.0",
     "@xyflow/react": "^12.11.2",
+    "mssql": "^11.0.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

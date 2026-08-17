@@ -5,6 +5,12 @@
 If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard first:
 
 ```bash
+curl -fsSL https://git.caijai.com/aiplus/cjtaskdashboard/-/raw/main/install.sh | bash
+```
+
+If the one-line installer cannot fetch the script, use the fallback clone flow:
+
+```bash
 mkdir -p ~/Desktop/Projects
 cd ~/Desktop/Projects
 git clone https://git.caijai.com/aiplus/cjtaskdashboard.git
@@ -24,7 +30,7 @@ dashi-taskboard doctor
 dashi-taskboard start
 ```
 
-`open` starts or reuses the local server and opens the standalone panel at `http://127.0.0.1:47824/?host=agent`. On macOS it prefers a Chrome/Chromium-style app-mode window before falling back to the default browser. If the command is not on PATH, call `~/.local/bin/dashi-taskboard`.
+`open` starts or reuses the local server and opens the standalone panel at `http://127.0.0.1:47824/?host=agent`. On macOS, Windows, and Linux it prefers a Chrome/Chromium/Edge app-window before falling back to the default browser. If the command is not on PATH, call `~/.local/bin/dashi-taskboard`.
 
 ## taskctl commands
 

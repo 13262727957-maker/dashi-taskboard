@@ -6,6 +6,7 @@ import type {
   AiChatSandbox,
   AiChatThread,
   AiChatThreadSnapshot,
+  AutomationRunActivity,
   Attachment,
   Comment,
   DevelopmentScan,
@@ -14,6 +15,7 @@ import type {
   Task,
   TaskboardMetadata,
   TaskDraft,
+  TaskPriority,
   TaskStatus,
   WorkflowCapabilities,
   WorkflowWorkspaceRecord,
@@ -26,6 +28,65 @@ const DEFAULT_USER_ACTOR: ActorIdentity = {
   name: "本地用户",
   avatarUrl: null,
 };
+
+const IDENTITY_SESSION_KEY = "taskboard.identity.session";
+const IDENTITY_USER_KEY = "taskboard.identity.user";
+
+interface IdentityUser {
+  id: string;
+  employeeNo: string;
+  displayName: string;
+  email: string | null;
+  department: string | null;
+  jobTitle: string | null;
+  accountStatus: string;
+}
+
+export interface IdentityStatus {
+  configured: boolean;
+  initialized: boolean;
+  userCount: number;
+  employeeCount: number;
+}
+
+function readStorage(key: string): string | null {
+  try { return window.localStorage.getItem(key); } catch { return null; }
+}
+
+function identitySession(): string | null {
+  return readStorage(IDENTITY_SESSION_KEY);
+}
+
+export function getIdentityUser(): IdentityUser | null {
+  const raw = readStorage(IDENTITY_USER_KEY);
+  if (!raw) return null;
+  try { return JSON.parse(raw) as IdentityUser; } catch { return null; }
+}
+
+export function setIdentitySession(session: { token: string; user: IdentityUser }): void {
+  window.localStorage.setItem(IDENTITY_SESSION_KEY, session.token);
+  window.localStorage.setItem(IDENTITY_USER_KEY, JSON.stringify(session.user));
+  setCurrentUserActor({
+    type: "user",
+    id: session.user.id,
+    name: session.user.displayName,
+    avatarUrl: null,
+  });
+}
+
+export function restoreIdentitySession(): boolean {
+  const token = identitySession();
+  const user = getIdentityUser();
+  if (!token || !user) return false;
+  setIdentitySession({ token, user });
+  return true;
+}
+
+export function clearIdentitySession(): void {
+  window.localStorage.removeItem(IDENTITY_SESSION_KEY);
+  window.localStorage.removeItem(IDENTITY_USER_KEY);
+  setCurrentUserActor();
+}
 
 let currentUserActor = DEFAULT_USER_ACTOR;
 
@@ -57,6 +118,8 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
+  const session = identitySession();
+  if (session) headers.set("Authorization", `Bearer ${session}`);
   if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const method = (init?.method ?? "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD") {
@@ -85,9 +148,257 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+export async function getIdentityStatus(signal?: AbortSignal): Promise<IdentityStatus> {
+  return request<IdentityStatus>("/api/identity/status", { signal });
+}
+
+export async function registerDeveloperIdentity(employeeNo: string, displayName: string): Promise<{ token: string; user: IdentityUser }> {
+  return request<{ token: string; user: IdentityUser }>("/api/identity/register", {
+    method: "POST",
+    body: JSON.stringify({ employeeNo, displayName }),
+  });
+}
+
+export async function importEmployeeWorkbook(file: File): Promise<{ count: number; employees: unknown[]; sheetName: string }> {
+  return request<{ count: number; employees: unknown[]; sheetName: string }>("/api/identity/employees/import", {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      "X-Taskboard-Filename": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+}
+
 export async function listProjects(signal?: AbortSignal): Promise<Project[]> {
   const data = await request<{ projects: Project[] }>("/api/projects", { signal });
   return data.projects;
+}
+
+export async function listIdentityProjects(signal?: AbortSignal): Promise<Project[]> {
+  const data = await request<{ projects: Array<{
+    id: string;
+    code: string;
+    name: string;
+    workspacePath: string | null;
+    createdAt: string;
+    updatedAt: string;
+    role: "owner" | "developer" | null;
+    ownerName?: string | null;
+    issueCount: number;
+  }> }>("/api/identity/projects", { signal });
+  return data.projects.map((project) => ({ ...project }));
+}
+
+export async function listIdentityTasks(projectId: string, signal?: AbortSignal): Promise<Task[]> {
+  const data = await request<{ tasks: Array<{
+    id: string;
+    projectId: string;
+    taskKey: string;
+    title: string;
+    description: string;
+    status: TaskStatus;
+    priority: TaskPriority;
+    assignee: { id: string; name: string | null } | null;
+    createdBy: { id: string; name: string | null };
+    version: number;
+    createdAt: string;
+    updatedAt: string;
+  }> }>(`/api/identity/projects/${encodeURIComponent(projectId)}/tasks`, { signal });
+  return data.tasks.map((task) => ({
+    id: task.id,
+    identifier: task.taskKey,
+    projectId: task.projectId,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    priority: task.priority,
+    labels: [],
+    sortOrder: 0,
+    threadId: null,
+    creatorType: "user",
+    creatorId: task.createdBy.id,
+    creatorName: task.createdBy.name ?? task.createdBy.id,
+    creatorAvatarUrl: null,
+    assignee: task.assignee
+      ? { type: "user", id: task.assignee.id, name: task.assignee.name ?? task.assignee.id, avatarUrl: null }
+      : { type: "user", id: "unassigned", name: "未分配", avatarUrl: null },
+    workflowId: null,
+    developmentContext: null,
+    dueDate: null,
+    recurrence: null,
+    archivedAt: null,
+    relations: { parent: null, subIssues: [], blockedBy: [], blocks: [], related: [] },
+    version: task.version,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  }));
+}
+
+export async function importIdentityTasks(
+  projectId: string,
+  tasks: Task[],
+  options: { localProjectId?: string | null } = {},
+): Promise<{ syncId?: string; imported: number; updated: number; deduped?: number }> {
+  return request(`/api/identity/projects/${encodeURIComponent(projectId)}/tasks/import`, {
+    method: "POST",
+    body: JSON.stringify({
+      localProjectId: options.localProjectId ?? null,
+      tasks: tasks.map((task) => ({
+        sourceId: task.id,
+        title: task.title,
+        description: task.description,
+        status: task.status === "backlog" ? "todo" : task.status,
+        priority: task.priority === "none" ? "normal" : task.priority,
+        updatedAt: task.updatedAt,
+      })),
+    }),
+  });
+}
+
+export async function saveProjectTeamBinding(input: {
+  localProjectId: string;
+  teamProjectId: string;
+  teamProjectName?: string | null;
+}): Promise<void> {
+  await request(`/api/local/project-bindings/${encodeURIComponent(input.localProjectId)}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      teamProjectId: input.teamProjectId,
+      teamProjectName: input.teamProjectName ?? null,
+    }),
+  });
+}
+
+export async function summarizeLocalProject(projectId: string, sourceProjectIds: string[] = []): Promise<{ created: number; message: string }> {
+  return request(`/api/projects/${encodeURIComponent(projectId)}/summaries`, {
+    method: "POST",
+    body: JSON.stringify(sourceProjectIds.length > 0 ? { sourceProjectIds } : {}),
+  });
+}
+
+export interface IdentityProjectMember {
+  userId: string;
+  employeeNo: string;
+  displayName: string;
+  email: string | null;
+  department: string | null;
+  projectRole: "owner" | "developer";
+  joinedAt: string;
+}
+
+export interface IdentityTaskSyncLog {
+  id: string;
+  projectId: string;
+  projectName: string;
+  projectCode: string;
+  operatorUserId: string;
+  operatorName: string;
+  operatorEmployeeNo: string;
+  localProjectId: string | null;
+  taskCount: number;
+  imported: number;
+  updated: number;
+  failed: number;
+  status: "success" | "failed";
+  error: string | null;
+  createdAt: string;
+}
+
+export interface ProjectTeamBinding {
+  localProjectId: string;
+  teamProjectId: string;
+  teamProjectName: string | null;
+  boundAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectSyncStatus {
+  localProjectId: string;
+  teamProjectId: string | null;
+  status: "success" | "failed";
+  taskCount: number;
+  imported: number;
+  updated: number;
+  failed: number;
+  error: string | null;
+  submittedBy: string | null;
+  submittedAt: string;
+}
+
+export async function listIdentityTaskSyncLogs(signal?: AbortSignal): Promise<IdentityTaskSyncLog[]> {
+  const data = await request<{ logs: IdentityTaskSyncLog[] }>("/api/identity/task-sync-logs", { signal });
+  return data.logs;
+}
+
+export async function getProjectTeamBinding(localProjectId: string, signal?: AbortSignal): Promise<ProjectTeamBinding | null> {
+  const data = await request<{ binding: ProjectTeamBinding | null }>(
+    `/api/local/project-bindings/${encodeURIComponent(localProjectId)}`,
+    { signal },
+  );
+  return data.binding;
+}
+
+export async function getProjectSyncStatus(localProjectId: string, signal?: AbortSignal): Promise<ProjectSyncStatus | null> {
+  const data = await request<{ syncStatus: ProjectSyncStatus | null }>(
+    `/api/local/project-sync-status/${encodeURIComponent(localProjectId)}`,
+    { signal },
+  );
+  return data.syncStatus;
+}
+
+export async function listIdentityEmployees(): Promise<Array<{ employeeNo: string; displayName: string; isActive: boolean }>> {
+  const data = await request<{ employees: Array<{ employeeNo: string; displayName: string; isActive: boolean }> }>("/api/identity/employees");
+  return data.employees;
+}
+
+export async function listAvailableIdentityDevelopers(projectId: string): Promise<Array<{ userId: string; employeeNo: string; displayName: string }>> {
+  const data = await request<{ developers: Array<{ userId: string; employeeNo: string; displayName: string }> }>(
+    `/api/identity/developers/available?projectId=${encodeURIComponent(projectId)}`,
+  );
+  return data.developers;
+}
+
+export async function listIdentityProjectMembers(projectId: string): Promise<IdentityProjectMember[]> {
+  const data = await request<{ members: IdentityProjectMember[] }>(`/api/identity/projects/${encodeURIComponent(projectId)}/members`);
+  return data.members;
+}
+
+export async function addIdentityProjectMember(projectId: string, employeeNo: string): Promise<IdentityProjectMember[]> {
+  const data = await request<{ members: IdentityProjectMember[] }>(`/api/identity/projects/${encodeURIComponent(projectId)}/members`, {
+    method: "POST",
+    body: JSON.stringify({ employeeNo }),
+  });
+  return data.members;
+}
+
+export async function removeIdentityProjectMember(projectId: string, memberUserId: string): Promise<IdentityProjectMember[]> {
+  const data = await request<{ members: IdentityProjectMember[] }>(`/api/identity/projects/${encodeURIComponent(projectId)}/members`, {
+    method: "POST",
+    body: JSON.stringify({ action: "remove", memberUserId }),
+  });
+  return data.members;
+}
+
+export async function joinIdentityProject(projectId: string): Promise<IdentityProjectMember[]> {
+  const data = await request<{ members: IdentityProjectMember[] }>(`/api/identity/projects/${encodeURIComponent(projectId)}/join`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  return data.members;
+}
+
+export async function createIdentityProject(input: {
+  code: string;
+  name: string;
+  workspacePath: string | null;
+  description?: string | null;
+}): Promise<Project> {
+  const data = await request<{ project: Project }>("/api/identity/projects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return data.project;
 }
 
 export async function getTaskboardMetadata(signal?: AbortSignal): Promise<TaskboardMetadata> {
@@ -193,6 +504,17 @@ export async function interruptAiChatRun(runId: string): Promise<AiChatRun> {
     { method: "POST" },
   );
   return data.run;
+}
+
+export async function listAutomationRunActivity(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<AutomationRunActivity[]> {
+  const data = await request<{ runs: AutomationRunActivity[] }>(
+    `/api/local/automation/runs?projectId=${encodeURIComponent(projectId)}`,
+    { signal },
+  );
+  return data.runs;
 }
 
 export function subscribeAiChatThread(

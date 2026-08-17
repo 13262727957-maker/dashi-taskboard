@@ -1,11 +1,30 @@
 import os from "node:os";
-import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createTaskboardServer, resolveHost, resolvePort } from "./app.mjs";
 
 export { createTaskboardServer, resolveHost, resolvePort, resolveServerOptions } from "./app.mjs";
 
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+async function loadLocalEnvironment() {
+  const filePath = path.join(PROJECT_ROOT, ".data", "sqlserver-identity.env");
+  try {
+    const source = await readFile(filePath, "utf8");
+    for (const line of source.split(/\r?\n/)) {
+      const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
+      if (!match || process.env[match[1]] !== undefined) continue;
+      process.env[match[1]] = match[2].replace(/^(['"])(.*)\1$/, "$2");
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
 async function main() {
+  await loadLocalEnvironment();
   const app = createTaskboardServer();
   const host = resolveHost();
   const address = await app.listen({ host, port: resolvePort() });

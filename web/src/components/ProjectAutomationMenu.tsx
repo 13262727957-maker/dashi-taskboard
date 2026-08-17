@@ -23,6 +23,12 @@ interface AutomationOptions {
 
 interface AutomationState extends AutomationOptions {
   status: AutomationStatus;
+  lastRun?: {
+    status: "running" | "completed" | "failed" | "skipped";
+    startedAt: string;
+    finishedAt?: string | null;
+    error?: string | null;
+  };
   quota?: {
     state: AutomationQuotaState;
     checkedAt: number;
@@ -36,10 +42,9 @@ interface ProjectAutomationMenuProps {
   pending: boolean;
   error: string | null;
   unavailableReason: string | null;
-  launching: boolean;
   onOpen: () => void;
   onChange: (options: AutomationOptions) => void;
-  onLaunch?: () => void;
+  onRunOnce: () => void;
 }
 
 const DEFAULT_OPTIONS: AutomationOptions = {
@@ -64,10 +69,9 @@ export function ProjectAutomationMenu({
   pending,
   error,
   unavailableReason,
-  launching,
   onOpen,
   onChange,
-  onLaunch,
+  onRunOnce,
 }: ProjectAutomationMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -88,7 +92,8 @@ export function ProjectAutomationMenu({
           : status === "ACTIVE"
             ? "运行中"
             : "已暂停";
-  const disabled = pending || launching || Boolean(unavailableReason);
+  const disabled = pending || Boolean(unavailableReason);
+  const lastRun = automation?.lastRun;
 
   useEffect(() => {
     if (!open) return;
@@ -249,19 +254,27 @@ export function ProjectAutomationMenu({
           ))}
         </select>
       </label>
-      {unavailableReason && <p className="project-automation-note">{unavailableReason}</p>}
-      {error && error !== unavailableReason && <p className="project-automation-error" role="alert">{error}</p>}
-      {error && !unavailableReason && onLaunch && (
+      <div className="project-automation-switch">
+        <span>立即执行一次</span>
         <button
           type="button"
-          className="project-automation-launch"
-          disabled={launching}
-          onClick={onLaunch}
+          className="project-automation-run-once"
+          disabled={disabled}
+          onClick={onRunOnce}
         >
-          <LinearIcon name="play" />
-          <span>{launching ? "正在检测…" : "重新检测自动化接口"}</span>
+          执行
         </button>
+      </div>
+      {lastRun && (
+        <p className={`project-automation-note is-${lastRun.status}`}>
+          {lastRun.status === "running" && "上次执行：运行中"}
+          {lastRun.status === "completed" && `上次执行：成功 · ${formatRunTime(lastRun.startedAt)}`}
+          {lastRun.status === "failed" && `上次执行：失败 · ${lastRun.error ?? "未知错误"}`}
+          {lastRun.status === "skipped" && `上次执行：跳过 · ${lastRun.error ?? "没有待办任务"}`}
+        </p>
       )}
+      {unavailableReason && <p className="project-automation-note">{unavailableReason}</p>}
+      {error && error !== unavailableReason && <p className="project-automation-error" role="alert">{error}</p>}
     </div>,
     document.body,
   ) : null;
@@ -300,4 +313,13 @@ function formatResetTime(value: number) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value * 1_000));
+}
+
+function formatRunTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }

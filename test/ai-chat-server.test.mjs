@@ -7,6 +7,8 @@ import { test } from "node:test";
 
 import { createTaskboardServer } from "../server/index.mjs";
 
+const AI_CHAT_SKILL_MARKER = "\uFFFC";
+
 async function createServerFixture(host = "127.0.0.1") {
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-ai-server-"));
   const workspacePath = path.join(directory, "workspace");
@@ -134,14 +136,14 @@ test("loopback AI API freezes server-owned origin and rejects injected execution
 
     const invalidSkill = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}/turns`, {
       method: "POST",
-      body: { message: "hello", skillIds: ["invented-skill"] },
+      body: { message: `hello ${AI_CHAT_SKILL_MARKER}`, skillIds: ["invented-skill"] },
     });
     assert.equal(invalidSkill.response.status, 400);
     assert.equal(invalidSkill.body.error.code, "INVALID_SKILL");
 
     const turn = await request(fixture.baseUrl, `/api/local/ai/threads/${threadId}/turns`, {
       method: "POST",
-      body: { message: "hello", skillIds: ["real-skill"] },
+      body: { message: `hello ${AI_CHAT_SKILL_MARKER}`, skillIds: ["real-skill"] },
     });
     assert.equal(turn.response.status, 202);
     assert.equal(turn.body.run.threadId, threadId);

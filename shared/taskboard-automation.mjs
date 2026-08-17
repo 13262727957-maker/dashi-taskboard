@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isSupportedModelEffort } from "./taskboard-automation-options.mjs";
 
-const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list", "apply-policy"]);
+const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list", "apply-policy", "run-once"]);
 const INTERVAL_MINUTES = new Set([5, 10, 15, 30, 60]);
 const HOST_REQUEST_FIELDS = new Set([
   "id",

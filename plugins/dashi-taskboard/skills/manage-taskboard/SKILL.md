@@ -12,6 +12,12 @@ Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashbo
 When `command -v dashi-taskboard` fails, install CJ Task Dashboard before trying panel or task commands:
 
 ```bash
+curl -fsSL https://git.caijai.com/aiplus/cjtaskdashboard/-/raw/main/install.sh | bash
+```
+
+If the one-line installer cannot fetch the script, use the fallback clone flow:
+
+```bash
 mkdir -p ~/Desktop/Projects
 cd ~/Desktop/Projects
 git clone https://git.caijai.com/aiplus/cjtaskdashboard.git
@@ -33,7 +39,7 @@ When the user asks to open, show, view, or bring up the CJ Task Dashboard panel,
 dashi-taskboard open
 ```
 
-If `dashi-taskboard` is not on PATH, call `~/.local/bin/dashi-taskboard open`. This opens the standalone local panel window backed by `http://127.0.0.1:47824/?host=agent`; on macOS it prefers a Chrome/Chromium-style app-mode window before falling back to the default browser. It does not require Codex sidebar injection or a debug port.
+If `dashi-taskboard` is not on PATH, call `~/.local/bin/dashi-taskboard open`. This opens the standalone local panel window backed by `http://127.0.0.1:47824/?host=agent`; on macOS, Windows, and Linux it prefers a Chrome/Chromium/Edge app-window before falling back to the default browser. It does not require Codex sidebar injection or a debug port.
 
 For health checks, run:
 

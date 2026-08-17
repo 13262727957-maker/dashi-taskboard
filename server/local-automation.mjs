@@ -5,15 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readCodexQuotaStatus } from "../scripts/codex-rate-limits.mjs";
-import { defaultTaskboardDataDirectory } from "../shared/taskboard-paths.mjs";
 import {
-  parseTaskboardAutomationHostRequest,
   reconcileTaskboardAutomation,
 } from "../shared/taskboard-automation.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_CODEX_DEBUGGING_PORT = 9229;
-const AUTOMATION_POLICIES_PATH = path.join(defaultTaskboardDataDirectory(), "codex-automation-policies.json");
+const AUTOMATION_POLICIES_PATH = path.join(PROJECT_ROOT, ".data", "codex-automation-policies.json");
 const CODEX_AUTOMATION_METHODS = new Set([
   "list-automations",
   "automation-create",
@@ -21,8 +19,6 @@ const CODEX_AUTOMATION_METHODS = new Set([
 ]);
 
 let requestSequence = 0;
-let policiesStarted = false;
-const policyTimers = new Map();
 
 class CdpConnection {
   constructor(url) {
@@ -196,89 +192,6 @@ async function requestCodexAutomationViaCdp(cdp, method, params) {
   }
 }
 
-async function codexAutomationBridgeStatus(cdp) {
-  const evaluation = await cdp.send("Runtime.evaluate", {
-    expression: `(() => {
-      const bridge = window.electronBridge;
-      return Boolean(bridge && typeof bridge.sendMessageFromView === "function");
-    })()`,
-    returnByValue: true,
-  });
-  return evaluation.result.value === true;
-}
-
-function automationUnavailableMessage(failures) {
-  const detail = failures.length > 0 ? `：${failures.join("；")}` : "";
-  return [
-    `没有找到可用的 Codex 自动化接口${detail}`,
-    "为了避免影响当前 ChatGPT/Codex 窗口，任务面板不会自动关闭或重启主应用。",
-  ].join("。");
-}
-
-export async function launchLocalAutomationMode() {
-  const status = await getLocalAutomationStatus();
-  if (status.available) {
-    return {
-      ok: true,
-      action: "attached-existing",
-      port: status.port,
-      status,
-    };
-  }
-  return {
-    ok: false,
-    action: "manual-start-required",
-    port: null,
-    status,
-    error: status.guidance,
-  };
-}
-
-export async function getLocalAutomationStatus(options = {}) {
-  const ports = codexDebuggingPorts(options.port ?? DEFAULT_CODEX_DEBUGGING_PORT);
-  const failures = [];
-  for (const port of ports) {
-    try {
-      if (!(await isReachable(`http://127.0.0.1:${port}/json/version`))) {
-        failures.push(`127.0.0.1:${port} 未监听`);
-        continue;
-      }
-      const targets = await codexTargets(port);
-      if (targets.length === 0) {
-        failures.push(`127.0.0.1:${port} 没有 Codex 窗口`);
-        continue;
-      }
-      const cdp = new CdpConnection(targets[0].webSocketDebuggerUrl);
-      await cdp.open();
-      try {
-        await cdp.send("Runtime.enable");
-        const bridgeAvailable = await codexAutomationBridgeStatus(cdp);
-        if (!bridgeAvailable) {
-          failures.push(`127.0.0.1:${port} 的 Codex 没有原生自动任务接口`);
-          continue;
-        }
-        return {
-          available: true,
-          port,
-          targetTitle: targets[0].title ?? null,
-          guidance: null,
-        };
-      } finally {
-        cdp.close();
-      }
-    } catch (error) {
-      failures.push(error instanceof Error ? error.message : String(error));
-    }
-  }
-  return {
-    available: false,
-    port: null,
-    targetTitle: null,
-    guidance: automationUnavailableMessage(failures),
-    failures,
-  };
-}
-
 function storedAutomationPolicy(request) {
   return {
     taskboardProjectId: request.taskboardProjectId,
@@ -293,16 +206,6 @@ function storedAutomationPolicy(request) {
     model: request.model,
     reasoningEffort: request.reasoningEffort,
   };
-}
-
-function restoredAutomationPolicy(value) {
-  return parseTaskboardAutomationHostRequest({
-    ...value,
-    id: "stored-policy",
-    action: "automation",
-    requestId: "stored-policy",
-    operation: "apply-policy",
-  });
 }
 
 async function readAutomationPolicies() {
@@ -333,55 +236,6 @@ async function updateStoredAutomationPolicy(request) {
   await writeAutomationPolicies(policies);
 }
 
-async function writeStoredAutomationId(request, automationId) {
-  if (!automationId) return;
-  const policies = await readAutomationPolicies();
-  const current = restoredAutomationPolicy(policies[request.taskboardProjectId]);
-  if (!current) return;
-  policies[request.taskboardProjectId] = storedAutomationPolicy({ ...current, automationId });
-  await writeAutomationPolicies(policies);
-}
-
-function clearPolicyTimer(projectId) {
-  const timer = policyTimers.get(projectId);
-  if (timer) clearTimeout(timer);
-  policyTimers.delete(projectId);
-}
-
-function schedulePolicyRetry(request, delayMs) {
-  clearPolicyTimer(request.taskboardProjectId);
-  if (!request.enabledByUser || !request.quotaAware) return;
-  const timer = setTimeout(() => {
-    void runLocalTaskboardAutomation({
-      ...request,
-      id: randomUUID(),
-      requestId: randomUUID(),
-      operation: "apply-policy",
-    }, { background: true }).then((result) => {
-      if (result?.ok === false) schedulePolicyRetry(request, 60_000);
-    }).catch((error) => {
-      console.error(`Taskboard quota policy check failed: ${error.message}`);
-      schedulePolicyRetry(request, 60_000);
-    });
-  }, Math.max(1_000, delayMs));
-  timer.unref();
-  policyTimers.set(request.taskboardProjectId, timer);
-}
-
-function scheduleQuotaPolicyCheck(request, result) {
-  clearPolicyTimer(request.taskboardProjectId);
-  if (!request.enabledByUser || !request.quotaAware) return;
-
-  const nextRunAt = Number(result?.item?.nextRunAt);
-  const nextRunDelay = Number.isFinite(nextRunAt) && nextRunAt > Date.now()
-    ? Math.max(1_000, nextRunAt - Date.now() - 15_000)
-    : 60_000;
-  const resetDelay = result?.quota?.state === "blocked" && Number.isFinite(result.quota.resetsAt)
-    ? Math.max(1_000, result.quota.resetsAt * 1_000 - Date.now() + 1_000)
-    : nextRunDelay;
-  schedulePolicyRetry(request, Math.min(nextRunDelay, resetDelay));
-}
-
 async function applyTaskboardAutomationPolicy(request, rpc) {
   await updateStoredAutomationPolicy(request);
   const quota = request.quotaAware
@@ -396,22 +250,7 @@ async function applyTaskboardAutomationPolicy(request, rpc) {
   if (result?.error === "not-found") {
     return { ...(quota ? { quota } : {}) };
   }
-  if (result?.item?.id) {
-    await writeStoredAutomationId(request, result.item.id);
-  }
   return { ...result, ...(quota ? { quota } : {}) };
-}
-
-export async function startLocalAutomationPolicyScheduler() {
-  if (policiesStarted) return;
-  policiesStarted = true;
-  const policies = await readAutomationPolicies();
-  for (const value of Object.values(policies)) {
-    const request = restoredAutomationPolicy(value);
-    if (request?.enabledByUser && request.quotaAware) {
-      schedulePolicyRetry(request, 1_000);
-    }
-  }
 }
 
 export async function runLocalTaskboardAutomation(request, options = {}) {
@@ -438,7 +277,6 @@ export async function runLocalTaskboardAutomation(request, options = {}) {
         const result = request.operation === "apply-policy"
           ? await applyTaskboardAutomationPolicy(request, rpc)
           : await reconcileTaskboardAutomation(request, rpc);
-        if (request.operation === "apply-policy") scheduleQuotaPolicyCheck(request, result);
         if (request.operation === "list") {
           const policy = await readStoredAutomationPolicy(request.taskboardProjectId);
           return { ...result, ...(policy ? { policy } : {}) };
@@ -455,11 +293,8 @@ export async function runLocalTaskboardAutomation(request, options = {}) {
   return {
     requestId: request.requestId ?? randomUUID(),
     ok: false,
-    error: automationUnavailableMessage(failures),
-    automationStatus: {
-      available: false,
-      guidance: automationUnavailableMessage(failures),
-      failures,
-    },
+    error: failures.length > 0
+      ? `没有找到可用的 Codex 自动化接口：${failures.join("；")}`
+      : "没有找到可用的 Codex 自动化接口",
   };
 }
