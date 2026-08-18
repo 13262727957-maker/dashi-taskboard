@@ -752,13 +752,13 @@ function DatabaseProgressPanel({
 
   return (
     <section className="database-progress-page" aria-labelledby="database-progress-title">
-      <div className="database-progress-header">
-        <div>
-          <div className="database-progress-breadcrumb"><span>公司项目</span><LinearIcon name="chevronRight" /><strong>项目进度总览</strong></div>
+      <section className="database-progress-board" aria-labelledby="database-progress-title">
+        <div className="database-progress-header">
+          <div>
           <h1 id="database-progress-title">项目进度总览</h1>
-          <p>集中查看已经在公司数据库中建立的项目、任务推进状态和风险分布。</p>
+            <p>{filteredRows.length} / {rows.length} 个公司项目</p>
         </div>
-        <div className="database-progress-header-actions">
+          <div className="database-progress-header-actions">
           <span className={`database-connection-tag ${identityMode ? "is-online" : "is-offline"}`}>
             <i aria-hidden="true" />
             {identityMode ? "已连接公司库" : "未连接公司库"}
@@ -767,29 +767,6 @@ function DatabaseProgressPanel({
             <LinearIcon name="recurrence" />
             {refreshing ? "刷新中" : "刷新"}
           </button>
-        </div>
-      </div>
-
-      <div className="database-stat-grid" aria-label="公司项目统计">
-        {[
-          { label: "公司项目", value: rows.length, detail: "已创建项目" },
-          { label: "平均进度", value: `${averageProgress}%`, detail: "按项目均值" },
-          { label: "已完成任务", value: doneTasks, detail: `共 ${totalTasks} 张任务卡` },
-          { label: "风险项目", value: riskProjects + blockedProjects, detail: `阻塞 ${blockedProjects} 个` },
-        ].map((item) => (
-          <article className="database-stat-card" key={item.label}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-            <small>{item.detail}</small>
-          </article>
-        ))}
-      </div>
-
-      <section className="database-ant-card" aria-labelledby="database-progress-table-title">
-        <div className="database-ant-card-head">
-          <div>
-            <h2 id="database-progress-table-title">项目列表</h2>
-            <p>{filteredRows.length} / {rows.length} 个项目</p>
           </div>
           <div className="database-toolbar">
             <label className="database-search">
@@ -814,6 +791,21 @@ function DatabaseProgressPanel({
               ))}
             </div>
           </div>
+        </div>
+
+        <div className="database-stat-grid" aria-label="公司项目统计">
+          {[
+            { label: "公司项目", value: rows.length, detail: "已创建项目" },
+            { label: "平均进度", value: `${averageProgress}%`, detail: "按项目均值" },
+            { label: "已完成任务", value: doneTasks, detail: `共 ${totalTasks} 张任务卡` },
+            { label: "风险项目", value: riskProjects + blockedProjects, detail: `阻塞 ${blockedProjects} 个` },
+          ].map((item) => (
+            <article className="database-stat-card" key={item.label}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+              <small>{item.detail}</small>
+            </article>
+          ))}
         </div>
 
         {loading ? (

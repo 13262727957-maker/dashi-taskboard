@@ -1038,59 +1038,43 @@ kbd {
 }
 
 .database-progress-page {
-  width: min(1280px, 100%);
-  min-height: calc(100vh - 96px);
+  width: min(1180px, 100%);
+  min-height: calc(100vh - 48px);
   margin-inline: auto;
-  display: grid;
-  align-content: start;
-  gap: 16px;
   color: #000000d9;
+}
+
+.database-progress-board {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
 }
 
 .database-progress-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 22px 24px;
-  border: 1px solid #f0f0f0;
-  border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
-}
-
-.database-progress-breadcrumb {
-  display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
-  color: #00000073;
-  font-size: 13px;
-}
-
-.database-progress-breadcrumb svg {
-  width: 12px;
-  height: 12px;
-  color: #00000040;
-}
-
-.database-progress-breadcrumb strong {
-  color: #1677ff;
-  font-weight: 400;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fff;
 }
 
 .database-progress-header h1 {
   margin: 0;
   color: #000000d9;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .database-progress-header p {
-  margin: 8px 0 0;
+  margin: 2px 0 0;
   color: #00000073;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .database-progress-header-actions {
@@ -1098,6 +1082,7 @@ kbd {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+  order: 2;
 }
 
 .database-connection-tag {
@@ -1170,18 +1155,27 @@ kbd {
 .database-stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fff;
 }
 
 .database-stat-card {
   display: grid;
   gap: 6px;
-  min-height: 118px;
-  padding: 18px 20px;
-  border: 1px solid #f0f0f0;
-  border-radius: 8px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 3%);
+  min-height: 88px;
+  padding: 2px 20px;
+  border-left: 1px solid #f0f0f0;
+}
+
+.database-stat-card:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.database-stat-card:last-child {
+  padding-right: 0;
 }
 
 .database-stat-card span {
@@ -1191,7 +1185,7 @@ kbd {
 
 .database-stat-card strong {
   color: #000000d9;
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 600;
   line-height: 1.15;
 }
@@ -1238,6 +1232,7 @@ kbd {
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
+  order: 3;
 }
 
 .database-search {
@@ -1303,6 +1298,7 @@ kbd {
 .database-ant-table {
   display: grid;
   min-width: 0;
+  overflow-x: auto;
 }
 
 .database-ant-table-head,
@@ -1312,11 +1308,7 @@ kbd {
   align-items: center;
   gap: 16px;
   min-width: 980px;
-  padding: 0 24px;
-}
-
-.database-ant-table {
-  overflow-x: auto;
+  padding: 0 20px;
 }
 
 .database-ant-table-head {
@@ -1508,10 +1500,17 @@ kbd {
   .database-toolbar {
     justify-content: flex-start;
     flex-wrap: wrap;
+    order: initial;
   }
 
   .database-stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 0;
+  }
+
+  .database-stat-card:nth-child(odd) {
+    border-left: 0;
+    padding-left: 0;
   }
 
   .database-search {
@@ -1526,6 +1525,14 @@ kbd {
 
   .database-stat-grid {
     grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .database-stat-card,
+  .database-stat-card:first-child,
+  .database-stat-card:last-child {
+    padding: 0;
+    border-left: 0;
   }
 
   .database-segmented {
