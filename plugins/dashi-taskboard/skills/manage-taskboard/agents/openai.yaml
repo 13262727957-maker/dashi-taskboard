@@ -1,4 +1,4 @@
 interface:
   display_name: "CJ Task Dashboard"
   short_description: "Install CJ Task Dashboard, open the panel, split requirements into task cards, and manage issues"
-  default_prompt: "Use $manage-taskboard to install CJ Task Dashboard if needed, open the standalone panel window, split requirements into task cards before implementation, and manage this project and its issues."
+  default_prompt: "Use $manage-taskboard to install or update CJ Task Dashboard from the latest GitLab checkout, open the standalone panel window, split requirements into task cards before implementation, manage this project and its issues, and run prior-conversation task card scans."

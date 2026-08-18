@@ -14,6 +14,10 @@ const installerSource = await readFile(
   new URL("../scripts/codex-plugin-install.mjs", import.meta.url),
   "utf8",
 );
+const shellInstallerSource = await readFile(
+  new URL("../install.sh", import.meta.url),
+  "utf8",
+);
 const launcherSource = await readFile(
   new URL("../scripts/dashi-taskboard.mjs", import.meta.url),
   "utf8",
@@ -58,7 +62,8 @@ test("the taskboard skill creates cards before implementation for planning reque
 
 test("the taskboard skill can bootstrap install then open the standalone panel", () => {
   for (const source of [skillSource, cliReference]) {
-    assert.match(source, /command -v dashi-taskboard|dashi-taskboard` is not installed/i);
+    assert.match(source, /install, reinstall, update, upgrade|old-version repair/i);
+    assert.match(source, /fetch(?:es)? `?origin`?|git -C cjtaskdashboard fetch --prune origin/i);
     assert.match(source, /git clone https:\/\/git\.caijai\.com\/aiplus\/cjtaskdashboard\.git/);
     assert.match(source, /CJ Task Dashboard/);
     assert.match(source, /npm run install:codex-plugin/);
@@ -66,6 +71,28 @@ test("the taskboard skill can bootstrap install then open the standalone panel",
     assert.match(source, /dashi-taskboard open/);
   }
   assert.match(skillSource, /private/i);
+});
+
+test("installers reset to remote code before reinstalling plugin assets", () => {
+  assert.match(shellInstallerSource, /git -C "\$checkout_dir" fetch --prune origin/);
+  assert.match(shellInstallerSource, /reset --hard "\$remote_ref"/);
+  assert.match(shellInstallerSource, /clean -fd/);
+  assert.match(installerSource, /"-e", "\.data\/"/);
+  assert.match(shellInstallerSource, /overwritten|Hard reset/i);
+  assert.match(installerSource, /refreshFromRemote\(\);/);
+  assert.match(installerSource, /\["fetch", "--prune", "origin"\]/);
+  assert.match(installerSource, /\["reset", "--hard", remoteRef\]/);
+  assert.match(installerSource, /\[\s*"clean",\s*"-fd"/);
+});
+
+test("the macOS installer injects bundled SQL Server identity configuration", () => {
+  assert.match(installerSource, /sqlServerIdentityEnvPath = path\.join\(projectRoot, "\.data", "sqlserver-identity\.env"\)/);
+  assert.match(installerSource, /parseSqlServerIdentityEnv/);
+  assert.match(installerSource, /TASKBOARD_SQLSERVER_HOST/);
+  assert.match(installerSource, /TASKBOARD_SQLSERVER_PASSWORD/);
+  assert.match(installerSource, /loadSqlServerIdentityEnvironment\(\)/);
+  assert.match(installerSource, /\.\.\.sqlServerIdentityEnvironment/);
+  assert.match(installerSource, /SQL Server identity environment will be injected/);
 });
 
 test("the default installer keeps Codex sidebar injection optional", () => {

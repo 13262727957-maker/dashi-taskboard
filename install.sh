@@ -24,11 +24,53 @@ require_command git
 require_command node
 require_command npm
 
+refresh_existing_checkout() {
+  local checkout_dir="$1"
+  log "Fetching latest code for existing checkout: $checkout_dir"
+  git -C "$checkout_dir" fetch --prune origin || fail "git fetch failed. Resolve network or authentication issues, then rerun."
+
+  local branch
+  branch="$(git -C "$checkout_dir" rev-parse --abbrev-ref HEAD)" || fail "Cannot determine current git branch."
+  if [ "$branch" = "HEAD" ]; then
+    log "Checkout is in detached HEAD state; resetting directly to the remote default branch."
+  fi
+
+  local remote_ref
+  remote_ref="$(git -C "$checkout_dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  if [ -z "$remote_ref" ]; then
+    local default_branch
+    default_branch="$(git -C "$checkout_dir" remote show origin | sed -n 's/.*HEAD branch: //p' | head -n 1)"
+    remote_ref="origin/${default_branch:-main}"
+  fi
+
+  git -C "$checkout_dir" rev-parse --verify "$remote_ref^{commit}" >/dev/null \
+    || fail "Cannot resolve remote ref '$remote_ref'. Check the checkout branch and origin remote."
+
+  local local_commit remote_commit
+  local_commit="$(git -C "$checkout_dir" rev-parse HEAD)"
+  remote_commit="$(git -C "$checkout_dir" rev-parse "$remote_ref")"
+  if [ "$local_commit" = "$remote_commit" ]; then
+    log "Checkout is already at latest remote commit: $local_commit"
+  else
+    log "Resetting checkout from $local_commit to $remote_commit; local code changes in the install directory will be overwritten"
+  fi
+
+  git -C "$checkout_dir" reset --hard "$remote_ref" \
+    || fail "Hard reset to '$remote_ref' failed. Resolve permissions or git state, then rerun."
+
+  git -C "$checkout_dir" clean -fd \
+    -e .data/ \
+    -e node_modules/ \
+    -e .env \
+    -e .env.* \
+    -e .dev.vars \
+    || fail "Cleaning untracked install files failed. Resolve permissions or git state, then rerun."
+}
+
 mkdir -p "$PROJECTS_DIR" || fail "Cannot create projects directory: $PROJECTS_DIR"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
-  log "Updating existing checkout: $INSTALL_DIR"
-  git -C "$INSTALL_DIR" pull --ff-only || fail "git pull failed. Resolve local changes, network, or authentication issues, then rerun."
+  refresh_existing_checkout "$INSTALL_DIR"
 elif [ -e "$INSTALL_DIR" ]; then
   fail "Install directory exists but is not a git checkout: $INSTALL_DIR"
 else

@@ -2,25 +2,31 @@
 
 ## CJ Task Dashboard panel command
 
-If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard first:
+For install, reinstall, update, upgrade, or old-version repair requests, run the bootstrap even if `dashi-taskboard` is already installed. The command may point at an old checkout, while the bootstrap fetches `origin`, hard resets the checkout to the latest remote commit, and recopies the plugin skill. Local code changes in the install directory are overwritten; if the remote update cannot be verified, the installer stops instead of installing stale local code:
 
 ```bash
 curl -fsSL https://git.caijai.com/aiplus/cjtaskdashboard/-/raw/main/install.sh | bash
 ```
 
-If the one-line installer cannot fetch the script, use the fallback clone flow:
+If the one-line installer cannot fetch the script, use the fallback clone/update flow:
 
 ```bash
 mkdir -p ~/Desktop/Projects
 cd ~/Desktop/Projects
-git clone https://git.caijai.com/aiplus/cjtaskdashboard.git
+if [ -d cjtaskdashboard/.git ]; then
+  git -C cjtaskdashboard fetch --prune origin
+  git -C cjtaskdashboard reset --hard @{u}
+  git -C cjtaskdashboard clean -fd -e .data/ -e node_modules/ -e .env -e '.env.*' -e .dev.vars
+else
+  git clone https://git.caijai.com/aiplus/cjtaskdashboard.git
+fi
 cd cjtaskdashboard
 npm run install:codex-plugin
 dashi-taskboard doctor
 dashi-taskboard open
 ```
 
-If `~/Desktop/Projects/cjtaskdashboard` already exists, pull the latest code there and rerun `npm run install:codex-plugin`.
+If `~/Desktop/Projects/cjtaskdashboard` already exists, fetch and hard reset to the latest code there and rerun `npm run install:codex-plugin`. After updating, restart Codex so the skill catalog reloads. If the shell cannot resolve `dashi-taskboard`, call `~/.local/bin/dashi-taskboard`.
 
 Use the generic `dashi-taskboard` command for panel and local service operations:
 

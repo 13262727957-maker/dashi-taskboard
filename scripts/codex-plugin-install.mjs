@@ -29,6 +29,16 @@ const managedMarker = "Managed by dashi-taskboard Codex plugin installer.";
 const taskctlCliPath = path.join(projectRoot, "cli", "taskctl.mjs");
 const dashiTaskboardCliPath = path.join(projectRoot, "scripts", "dashi-taskboard.mjs");
 const openScriptPath = path.join(projectRoot, "scripts", "codex-plugin-open.mjs");
+const sqlServerIdentityEnvPath = path.join(projectRoot, ".data", "sqlserver-identity.env");
+const sqlServerIdentityEnvKeys = [
+  "TASKBOARD_SQLSERVER_HOST",
+  "TASKBOARD_SQLSERVER_PORT",
+  "TASKBOARD_SQLSERVER_USER",
+  "TASKBOARD_SQLSERVER_PASSWORD",
+  "TASKBOARD_SQLSERVER_DATABASE",
+  "TASKBOARD_SQLSERVER_ENCRYPT",
+  "TASKBOARD_SQLSERVER_TRUST_CERT",
+];
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -42,6 +52,63 @@ function run(command, args, options = {}) {
     throw new Error(`${command} ${args.join(" ")} failed${detail ? `\n${detail}` : ""}`);
   }
   return typeof result.stdout === "string" ? result.stdout.trim() : "";
+}
+
+function runGit(args, options = {}) {
+  return run("git", args, options);
+}
+
+function isGitCheckout() {
+  const result = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    shell: process.platform === "win32",
+    stdio: "pipe",
+  });
+  return result.status === 0 && result.stdout.trim() === "true";
+}
+
+function refreshFromRemote() {
+  if (!isGitCheckout()) {
+    throw new Error("CJ Task Dashboard installer must run from a git checkout so it can fetch the latest remote code before installing.");
+  }
+
+  console.error("[dashi-taskboard] Fetching latest remote code before install");
+  runGit(["fetch", "--prune", "origin"], { stdio: "inherit" });
+
+  const branch = runGit(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch === "HEAD") {
+    console.error("[dashi-taskboard] Checkout is in detached HEAD state; resetting directly to the remote default branch.");
+  }
+
+  let remoteRef = "";
+  try {
+    remoteRef = runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  } catch {
+    const remoteInfo = runGit(["remote", "show", "origin"]);
+    const defaultBranch = remoteInfo.match(/HEAD branch:\s*(\S+)/)?.[1] ?? "main";
+    remoteRef = `origin/${defaultBranch}`;
+  }
+
+  runGit(["rev-parse", "--verify", `${remoteRef}^{commit}`]);
+  const localCommit = runGit(["rev-parse", "HEAD"]);
+  const remoteCommit = runGit(["rev-parse", remoteRef]);
+  if (localCommit === remoteCommit) {
+    console.error(`[dashi-taskboard] Checkout is already at latest remote commit: ${localCommit}`);
+  } else {
+    console.error(`[dashi-taskboard] Resetting checkout from ${localCommit} to ${remoteCommit}; local code changes in the install directory will be overwritten`);
+  }
+
+  runGit(["reset", "--hard", remoteRef], { stdio: "inherit" });
+  runGit([
+    "clean",
+    "-fd",
+    "-e", ".data/",
+    "-e", "node_modules/",
+    "-e", ".env",
+    "-e", ".env.*",
+    "-e", ".dev.vars",
+  ], { stdio: "inherit" });
 }
 
 function executablePath(command) {
@@ -91,6 +158,66 @@ function xml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
+}
+
+function parseEnvValue(value) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function parseSqlServerIdentityEnv(text) {
+  const allowedKeys = new Set(sqlServerIdentityEnvKeys);
+  const environment = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const normalized = line.startsWith("export ") ? line.slice("export ".length).trim() : line;
+    const separator = normalized.indexOf("=");
+    if (separator <= 0) continue;
+    const key = normalized.slice(0, separator).trim();
+    if (!allowedKeys.has(key)) continue;
+    environment[key] = parseEnvValue(normalized.slice(separator + 1));
+  }
+  return environment;
+}
+
+async function loadSqlServerIdentityEnvironment() {
+  let fileEnvironment = {};
+  try {
+    fileEnvironment = parseSqlServerIdentityEnv(await readFile(sqlServerIdentityEnvPath, "utf8"));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+
+  const environment = { ...fileEnvironment };
+  for (const key of sqlServerIdentityEnvKeys) {
+    if (process.env[key]) environment[key] = process.env[key];
+  }
+
+  const requiredKeys = [
+    "TASKBOARD_SQLSERVER_HOST",
+    "TASKBOARD_SQLSERVER_USER",
+    "TASKBOARD_SQLSERVER_PASSWORD",
+    "TASKBOARD_SQLSERVER_DATABASE",
+  ];
+  const presentRequiredKeys = requiredKeys.filter((key) => environment[key]);
+  if (presentRequiredKeys.length === requiredKeys.length) {
+    console.error("[dashi-taskboard] SQL Server identity environment will be injected into the background service.");
+    return environment;
+  }
+  if (Object.keys(environment).length > 0) {
+    const missing = requiredKeys.filter((key) => !environment[key]).join(", ");
+    console.error(`[dashi-taskboard] SQL Server identity environment is incomplete; missing ${missing}.`);
+  } else {
+    console.error(`[dashi-taskboard] SQL Server identity environment not found at ${sqlServerIdentityEnvPath}; the panel will start in local draft mode.`);
+  }
+  return environment;
 }
 
 function plist(label, args, environment = {}) {
@@ -340,6 +467,7 @@ async function installLaunchAgents(codexExecutable) {
   await mkdir(path.join(projectRoot, ".data"), { recursive: true });
   await mkdir(launchAgentsDir, { recursive: true });
   const pathValue = launchAgentPath(codexExecutable);
+  const sqlServerIdentityEnvironment = await loadSqlServerIdentityEnvironment();
   await writeFile(serverPlistPath, plist(
     "com.dashi-taskboard.server",
     [nodePath, path.join(projectRoot, "scripts", "codex-plugin-agent.mjs"), "server"],
@@ -349,6 +477,7 @@ async function installLaunchAgents(codexExecutable) {
       CODEX_TASKBOARD_DATA_DIR: path.join(projectRoot, ".data"),
       CODEX_EXECUTABLE: codexExecutable,
       PATH: pathValue,
+      ...sqlServerIdentityEnvironment,
     },
   ));
 
@@ -398,6 +527,7 @@ async function main() {
     throw new Error("The one-click persistent installer currently supports macOS and Windows.");
   }
 
+  refreshFromRemote();
   run("npm", ["install"], { stdio: "inherit" });
   run("npm", ["run", "build:web"], { stdio: "inherit" });
   const codexExecutable = requiredExecutablePath("codex");

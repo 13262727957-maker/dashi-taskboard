@@ -73,7 +73,7 @@ cd ~/Desktop/Projects/cjtaskdashboard
 npm run install:codex-plugin
 ```
 
-The one-line installer updates an existing `~/Desktop/Projects/cjtaskdashboard` checkout with `git pull --ff-only` instead of cloning again. Override the destination with `CJ_TASK_DASHBOARD_INSTALL_DIR=/path/to/cjtaskdashboard` or the repository with `CJ_TASK_DASHBOARD_REPO_URL=<url>`.
+The one-line installer updates an existing `~/Desktop/Projects/cjtaskdashboard` checkout by fetching `origin` and hard resetting to the latest remote commit before reinstalling the plugin and skill. If the remote fetch or hard reset fails, it stops instead of installing stale local code. Override the destination with `CJ_TASK_DASHBOARD_INSTALL_DIR=/path/to/cjtaskdashboard` or the repository with `CJ_TASK_DASHBOARD_REPO_URL=<url>`.
 
 The installer opens the standalone Taskboard panel at the end. You can reopen the same panel from any terminal or any AI skill that can run shell commands:
 
@@ -138,6 +138,8 @@ Uninstall the local plugin, Codex plugin state, managed skill link, `dashi-taskb
 ```bash
 npm run uninstall:codex-plugin
 ```
+
+On macOS, the Codex plugin installer automatically reads `.data/sqlserver-identity.env` when present and injects the supported `TASKBOARD_SQLSERVER_*` values into the background LaunchAgent. The file is intentionally ignored by git. A complete file lets the panel connect to the SQL Server identity database on open; without it, the panel starts in local draft mode.
 
 Windows has the same standalone panel entry points. To start the local service automatically after the current user signs in, open PowerShell in the repository and run:
 

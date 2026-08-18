@@ -183,7 +183,7 @@ function localProjectKey(project: Pick<ProjectChoice, "id" | "sourceProjectId">)
   return project.sourceProjectId ?? project.id;
 }
 
-type ProjectOverviewView = "overview" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
+type ProjectOverviewView = "overview" | "team-board" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
 type WorkspaceRole = "owner" | "developer" | "none";
 
 interface UndoOperation {
@@ -632,6 +632,80 @@ function LocalRealtimeSync({
   ]);
 
   return null;
+}
+
+function TeamProjectBoard({
+  rows,
+  onOpenProject,
+}: {
+  rows: Array<{
+    id: string;
+    name: string;
+    health: string;
+    progress: number;
+    total: number;
+    done: number;
+    active: number;
+    blocked: number;
+    review: number;
+    todo: number;
+    updated: string;
+    project: ProjectChoice;
+  }>;
+  onOpenProject: (project: ProjectChoice) => void;
+}) {
+  const segmentWidth = (value: number, total: number) => `${total > 0 ? Math.round((value / total) * 100) : 0}%`;
+  return (
+    <section className="overview-project-section" aria-labelledby="overview-project-progress-title">
+      <div className="overview-panel-heading">
+        <h2 id="overview-project-progress-title">项目进度</h2>
+        <span>{rows.length} 个项目</span>
+      </div>
+      <div className="overview-project-table" role="table" aria-label="团队项目进度">
+        <div className="overview-project-table-head" role="row">
+          <span>项目</span>
+          <span>健康</span>
+          <span>进度</span>
+          <span>任务卡分布</span>
+        </div>
+        {rows.map((row) => (
+          <div
+            className="overview-project-row"
+            key={row.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpenProject(row.project)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") onOpenProject(row.project);
+            }}
+          >
+            <span className="overview-project-name">
+              <strong>{row.name}</strong>
+              <small>{row.updated}更新</small>
+            </span>
+            <span className={`overview-health-pill is-${row.health === "正常" ? "healthy" : row.health === "阻塞" ? "blocked" : "risk"}`}>
+              {row.health}
+            </span>
+            <span className="overview-progress-cell">
+              <span className="overview-progress-bar" aria-hidden="true">
+                <i style={{ width: `${row.progress}%` }} />
+              </span>
+              <small>{row.progress}%</small>
+            </span>
+            <span className="overview-task-mix">
+              <span className="overview-task-stack" aria-hidden="true">
+                <i className="is-done" style={{ width: segmentWidth(row.done, row.total) }} />
+                <i className="is-active" style={{ width: segmentWidth(row.active, row.total) }} />
+                <i className="is-review" style={{ width: segmentWidth(row.review, row.total) }} />
+                <i className="is-blocked" style={{ width: segmentWidth(row.blocked, row.total) }} />
+              </span>
+              <small>待办 {row.todo} · 进行 {row.active} · 验收 {row.review} · 阻塞 {row.blocked}</small>
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function ProjectOverviewDemo({
@@ -1134,6 +1208,7 @@ function ProjectOverviewDemo({
   ];
   const viewTitles: Record<ProjectOverviewView, string> = {
     overview: "项目进度总览",
+    "team-board": "团队项目看板",
     tasks: "任务卡片",
     members: "成员负载",
     mine: "我的任务",
@@ -1145,6 +1220,7 @@ function ProjectOverviewDemo({
   };
   const viewDescriptions: Record<ProjectOverviewView, string> = {
     overview: "查看项目健康状态、任务卡片进度和需要关注的项目。",
+    "team-board": "只展示公司库中已经创建的团队项目及其任务推进状态。",
     tasks: "按项目、负责人和任务状态查看跨项目进度。",
     members: "查看当前项目每位成员的任务数量和当前队列。",
     mine: "只查看当前身份需要处理的任务。",
@@ -1260,6 +1336,19 @@ function ProjectOverviewDemo({
                 </div>
               </section>
             </div>
+          </div>
+        </div>
+      ) : overviewView === "team-board" ? (
+        <div className="overview-layout overview-team-board-layout">
+          <div className="overview-main">
+            {teamProjects.length > 0 ? (
+              <TeamProjectBoard rows={projectProgressRows} onOpenProject={onOpenProject} />
+            ) : (
+              <div className="project-home-empty">
+                <h2>还没有团队项目</h2>
+                <p>在配置中心创建团队项目后，这里会单独展示它们的进度。</p>
+              </div>
+            )}
           </div>
         </div>
       ) : teamProjects.length > 0 && overviewView !== "overview" ? (
@@ -1440,55 +1529,7 @@ function ProjectOverviewDemo({
       ) : teamProjects.length > 0 ? (
         <div className="overview-layout">
           <div className="overview-main">
-            <section className="overview-project-section" aria-labelledby="overview-project-progress-title">
-              <div className="overview-panel-heading">
-                <h2 id="overview-project-progress-title">项目进度</h2>
-                <span>{projectProgressRows.length} 个项目</span>
-              </div>
-              <div className="overview-project-table" role="table" aria-label="跨项目进度">
-                <div className="overview-project-table-head" role="row">
-                  <span>项目</span>
-                  <span>健康</span>
-                  <span>进度</span>
-                  <span>任务卡分布</span>
-                </div>
-                {projectProgressRows.map((row) => (
-                  <div
-                    className="overview-project-row"
-                    key={row.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onOpenProject(row.project)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") onOpenProject(row.project);
-                    }}
-                  >
-                    <span className="overview-project-name">
-                      <strong>{row.name}</strong>
-                      <small>{row.updated}更新</small>
-                    </span>
-                    <span className={`overview-health-pill is-${row.health === "正常" ? "healthy" : row.health === "阻塞" ? "blocked" : "risk"}`}>
-                      {row.health}
-                    </span>
-                    <span className="overview-progress-cell">
-                      <span className="overview-progress-bar" aria-hidden="true">
-                        <i style={{ width: `${row.progress}%` }} />
-                      </span>
-                      <small>{row.progress}%</small>
-                    </span>
-                    <span className="overview-task-mix">
-                      <span className="overview-task-stack" aria-hidden="true">
-                        <i className="is-done" style={{ width: `${Math.round((row.done / row.total) * 100)}%` }} />
-                        <i className="is-active" style={{ width: `${Math.round((row.active / row.total) * 100)}%` }} />
-                        <i className="is-review" style={{ width: `${Math.round((row.review / row.total) * 100)}%` }} />
-                        <i className="is-blocked" style={{ width: `${Math.round((row.blocked / row.total) * 100)}%` }} />
-                      </span>
-                      <small>待办 {row.todo} · 进行 {row.active} · 验收 {row.review} · 阻塞 {row.blocked}</small>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
+            <TeamProjectBoard rows={projectProgressRows} onOpenProject={onOpenProject} />
 
           </div>
         </div>
@@ -2995,6 +3036,14 @@ function AppWorkspace() {
             <button className={`nav-item${!selectedProjectId && projectHomeView === "sync-log" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("sync-log"); }}>
               <span className="nav-glyph" aria-hidden="true"><LinearIcon name="recurrence" /></span>
               同步日志
+            </button>
+          </div>
+
+          <div className="overview-sidebar-nav" aria-label="团队项目导航">
+            <span className="nav-label">团队</span>
+            <button className={`nav-item${!selectedProjectId && projectHomeView === "team-board" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("team-board"); }}>
+              <span className="nav-glyph" aria-hidden="true"><LinearIcon name="project" /></span>
+              团队看板
             </button>
           </div>
 

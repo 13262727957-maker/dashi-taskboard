@@ -1,33 +1,50 @@
 ---
 name: manage-taskboard
-description: Install and use CJ Task Dashboard through local CLI tools. Use when an AI agent needs to clone/install CJ Task Dashboard, open the standalone CJ task panel window, check the local service, split a requirement into task cards before implementation, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, or coordinate concurrent updates.
+description: Install and use CJ Task Dashboard through local CLI tools. Use when an AI agent needs to clone/install CJ Task Dashboard, open the standalone CJ task panel window, check the local service, split a requirement into task cards before implementation, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, coordinate concurrent updates, or scan prior project conversations into meaningful task cards.
 ---
 
 # CJ Task Dashboard
 
-Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashboard panel. If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard from the GitLab repository first. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Use `taskctl` for every project, issue, and comment operation. The installer provides these commands at `~/.local/bin/dashi-taskboard` and `~/.local/bin/taskctl`; if the shell cannot resolve them, call those paths directly. Read [references/cli.md](references/cli.md) before choosing a command or option.
+Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashboard panel. If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard from the GitLab repository first. If the user asks to install, reinstall, update, upgrade, fix an old version, or refresh the panel/skill, always run the update bootstrap even when `dashi-taskboard` already exists; an existing command can point at an old checkout. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Use `taskctl` for every project, issue, and comment operation. The installer provides these commands at `~/.local/bin/dashi-taskboard` and `~/.local/bin/taskctl`; if the shell cannot resolve them, call those paths directly. Read [references/cli.md](references/cli.md) before choosing a command or option.
 
 ## Install Bootstrap
 
-When `command -v dashi-taskboard` fails, install CJ Task Dashboard before trying panel or task commands:
+When the user asks to install, reinstall, update, upgrade, or fix an old/stale CJ Task Dashboard install, run the bootstrap command even if `command -v dashi-taskboard` succeeds. The bootstrap must fetch `origin`, hard reset the checkout to the latest remote commit, rebuild the web UI, recopy the plugin source, refresh the legacy skill link, and reinstall the local CLI shims. Local code changes in the install directory are overwritten; if the remote fetch or hard reset fails, the installer must stop instead of installing from stale local code:
 
 ```bash
 curl -fsSL https://git.caijai.com/aiplus/cjtaskdashboard/-/raw/main/install.sh | bash
 ```
 
-If the one-line installer cannot fetch the script, use the fallback clone flow:
+When `command -v dashi-taskboard` fails and the user only wants to open or use the panel, install CJ Task Dashboard with the same bootstrap command before trying panel or task commands.
+
+If the one-line installer cannot fetch the script, use the fallback clone/update flow:
 
 ```bash
 mkdir -p ~/Desktop/Projects
 cd ~/Desktop/Projects
-git clone https://git.caijai.com/aiplus/cjtaskdashboard.git
+if [ -d cjtaskdashboard/.git ]; then
+  git -C cjtaskdashboard fetch --prune origin
+  git -C cjtaskdashboard reset --hard @{u}
+  git -C cjtaskdashboard clean -fd -e .data/ -e node_modules/ -e .env -e '.env.*' -e .dev.vars
+else
+  git clone https://git.caijai.com/aiplus/cjtaskdashboard.git
+fi
 cd cjtaskdashboard
 npm run install:codex-plugin
 dashi-taskboard doctor
 dashi-taskboard open
 ```
 
-If the repository already exists, `cd` into it and run `git pull` before `npm run install:codex-plugin`. If `dashi-taskboard` is still not on PATH after install, call `~/.local/bin/dashi-taskboard doctor` and `~/.local/bin/dashi-taskboard open`.
+After any install or update, run `dashi-taskboard doctor`. If `dashi-taskboard` is still not on PATH after install, call `~/.local/bin/dashi-taskboard doctor` and `~/.local/bin/dashi-taskboard open`.
+
+If the user reports that another agent still sees an old skill after installation, verify these files on that machine:
+
+```bash
+ls -l ~/.codex/skills/manage-taskboard
+ls -l ~/plugins/dashi-taskboard/skills/manage-taskboard/SKILL.md
+```
+
+The legacy skill path must be a symlink or junction to `~/plugins/dashi-taskboard/skills/manage-taskboard`. If it is a copied directory or points somewhere else, rerun the installer from the latest checkout. Restart Codex after reinstalling so the skill catalog reloads.
 
 The GitLab repository may be private. If `git clone` fails for authentication or network access, report that blocker and ask the user to grant access or clone the repository manually.
 
@@ -63,6 +80,22 @@ Required planning sequence:
 6. Stop and summarize the created or updated cards. Do not implement them in the same turn unless the user explicitly asked to create cards and then start a specific first card.
 
 Only execute implementation work when the user clearly asks to start/fix/implement a named issue, asks to continue after cards already exist, or makes a tiny request that does not benefit from durable tracking. If the user asks both to split work and execute it, create the cards first, then read and claim the named or first card with `--if-version` before implementing.
+
+## Prior Conversation Scans
+
+When the user asks to scan previous, prior, or historical project conversations and turn them into task cards, run a standard scan before creating or updating issues:
+
+1. Gather relevant prior project conversations and group repeated discussion into coherent work items.
+2. For each candidate work item, run a lightweight repository evidence scan using likely feature, route, component, migration, test, config, and API keywords. Prefer `rg`/`rg --files`; do not read broad unrelated files unless the scan points to them.
+3. Classify status from the strongest evidence, not conversation alone:
+   - `backlog`: only an idea/request is present, with no clear commitment or repository evidence.
+   - `todo`: the work is committed or partially present, but gaps, acceptance criteria, or verification remain unclear.
+   - `in_progress`: recent implementation is active and not yet self-verified.
+   - `in_review`: implementation evidence plus self-verification exists, but the user has not accepted it.
+   - `done`: the user explicitly confirms acceptance or asks to mark complete.
+   - `blocked`: progress cannot continue because required environment, credentials, data, dependency, or decision is missing.
+4. Record evidence in each issue description or a comment using compact tags such as `evidence:conversation`, `evidence:code`, `evidence:test`, `evidence:runtime`, `acceptance:pending`, and `confidence:low|medium|high`.
+5. If evidence conflicts, choose the less-final status and describe the uncertainty. Prefer `todo` for "implemented but possibly incomplete"; use `in_review` only when self-verification evidence is present.
 
 ## Workflow
 
