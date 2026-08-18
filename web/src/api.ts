@@ -49,6 +49,16 @@ export interface IdentityStatus {
   employeeCount: number;
 }
 
+export interface IdentityDatabaseConnectionInput {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  encrypt: boolean;
+  trustServerCertificate: boolean;
+}
+
 function readStorage(key: string): string | null {
   try { return window.localStorage.getItem(key); } catch { return null; }
 }
@@ -150,6 +160,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function getIdentityStatus(signal?: AbortSignal): Promise<IdentityStatus> {
   return request<IdentityStatus>("/api/identity/status", { signal });
+}
+
+export async function connectIdentityDatabase(input: IdentityDatabaseConnectionInput): Promise<{ status: IdentityStatus }> {
+  return request<{ status: IdentityStatus }>("/api/identity/connect", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function registerDeveloperIdentity(employeeNo: string, displayName: string): Promise<{ token: string; user: IdentityUser }> {

@@ -276,6 +276,14 @@ function stringField(value, name, { required = false, nullable = false, maxLengt
   return normalized;
 }
 
+function booleanField(value, name, { defaultValue = false } = {}) {
+  if (value === undefined) return defaultValue;
+  if (typeof value !== "boolean") {
+    throw new ApiError(400, "INVALID_FIELD", `'${name}' must be a boolean`);
+  }
+  return value;
+}
+
 function pathField(value, name) {
   const normalized = stringField(value, name, { nullable: true, maxLength: 4096 });
   if (normalized === "") {
@@ -285,6 +293,60 @@ function pathField(value, name) {
     throw new ApiError(400, "INVALID_FIELD", `'${name}' cannot contain null bytes`);
   }
   return normalized;
+}
+
+function sqlServerConnectionConfigFromBody(body) {
+  assertPlainObject(body);
+  assertAllowedKeys(body, new Set([
+    "host",
+    "port",
+    "user",
+    "password",
+    "database",
+    "encrypt",
+    "trustServerCertificate",
+  ]));
+  const host = stringField(body.host, "host", { required: true, maxLength: 255 });
+  const user = stringField(body.user, "user", { required: true, maxLength: 128 });
+  const password = stringField(body.password, "password", { required: true, maxLength: 4096 });
+  const database = stringField(body.database, "database", { required: true, maxLength: 128 });
+  const port = body.port === undefined ? 1433 : Number(body.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new ApiError(400, "INVALID_FIELD", "'port' must be an integer from 1 to 65535");
+  }
+  const encrypt = booleanField(body.encrypt, "encrypt", { defaultValue: false });
+  const trustServerCertificate = booleanField(body.trustServerCertificate, "trustServerCertificate", { defaultValue: true });
+  return {
+    server: host,
+    port,
+    user,
+    password,
+    database,
+    options: {
+      encrypt,
+      trustServerCertificate,
+    },
+    connectionTimeout: 15000,
+    requestTimeout: 30000,
+  };
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+async function writeSqlServerIdentityEnv(dataDirectory, config) {
+  await mkdir(dataDirectory, { recursive: true });
+  const content = [
+    ["TASKBOARD_SQLSERVER_HOST", config.server],
+    ["TASKBOARD_SQLSERVER_PORT", String(config.port)],
+    ["TASKBOARD_SQLSERVER_USER", config.user],
+    ["TASKBOARD_SQLSERVER_PASSWORD", config.password],
+    ["TASKBOARD_SQLSERVER_DATABASE", config.database],
+    ["TASKBOARD_SQLSERVER_ENCRYPT", String(config.options.encrypt)],
+    ["TASKBOARD_SQLSERVER_TRUST_CERT", String(config.options.trustServerCertificate)],
+  ].map(([key, value]) => `${key}=${shellQuote(value)}`).join("\n");
+  await writeFile(path.join(dataDirectory, "sqlserver-identity.env"), `${content}\n`, { mode: 0o600 });
 }
 
 function parseDueDate(value, name = "dueDate") {
@@ -1430,7 +1492,7 @@ export function createTaskboardServer(options = {}) {
   const resolved = resolveServerOptions(options);
   const database = new TaskboardDatabase(resolved.databasePath);
   const discoverCachedWorkflowCapabilities = createWorkflowCapabilitiesCache(resolved);
-  const identity = options.identityStore
+  let identity = options.identityStore
     ?? (options.disableSqlServerIdentity ? null : (() => {
       const config = options.sqlServerConfig ?? sqlServerConfigFromEnv();
       return config ? new SqlServerIdentityStore(config) : null;
@@ -1507,6 +1569,24 @@ export function createTaskboardServer(options = {}) {
             userCount: 0,
             employeeCount: 0,
           });
+        }
+      }
+
+      if (pathname === "/api/identity/connect") {
+        assertLoopbackRequest(request);
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        if (options.identityStore || options.disableSqlServerIdentity) {
+          throw new ApiError(409, "IDENTITY_CONNECT_DISABLED", "SQL Server identity connection is managed by server options");
+        }
+        const config = sqlServerConnectionConfigFromBody(await readJson(request));
+        const nextIdentity = new SqlServerIdentityStore(config);
+        try {
+          const status = await nextIdentity.status();
+          await writeSqlServerIdentityEnv(resolved.dataDirectory, config);
+          identity = nextIdentity;
+          return sendJson(response, 200, { status });
+        } catch (error) {
+          throw new ApiError(400, "IDENTITY_CONNECT_FAILED", error.message);
         }
       }
 

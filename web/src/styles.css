@@ -303,6 +303,22 @@ kbd {
   font: inherit;
 }
 
+.identity-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.identity-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--text-primary);
+}
+
 .identity-mode-switch {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -433,7 +449,7 @@ kbd {
 }
 
 .identity-dialog {
-  width: min(360px, 100%);
+  width: min(420px, 100%);
   padding: 20px;
   border: 1px solid var(--border);
   border-radius: 8px;
