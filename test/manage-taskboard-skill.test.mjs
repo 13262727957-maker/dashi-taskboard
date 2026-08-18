@@ -22,6 +22,10 @@ const intranetConnectSource = await readFile(
   new URL("../scripts/taskboard-intranet-connect.mjs", import.meta.url),
   "utf8",
 );
+const credentialStoreSource = await readFile(
+  new URL("../scripts/taskboard-store-sqlserver-credentials.mjs", import.meta.url),
+  "utf8",
+);
 const packageManifest = JSON.parse(await readFile(
   new URL("../package.json", import.meta.url),
   "utf8",
@@ -105,6 +109,7 @@ test("the macOS installer injects bundled SQL Server identity configuration", ()
 
 test("the one-line installer can prepare intranet SQL Server identity before plugin install", () => {
   assert.equal(packageManifest.scripts["identity:intranet-connect"], "node scripts/taskboard-intranet-connect.mjs");
+  assert.equal(packageManifest.scripts["identity:store-credentials"], "node scripts/taskboard-store-sqlserver-credentials.mjs");
   assert.match(shellInstallerSource, /npm run identity:intranet-connect -- --quiet/);
   assert.match(shellInstallerSource, /Checking intranet SQL Server identity auto-connect/);
   assert.match(intranetConnectSource, /192\.188\.106\.61/);
@@ -112,6 +117,16 @@ test("the one-line installer can prepare intranet SQL Server identity before plu
   assert.match(intranetConnectSource, /cj-task-dashboard-sqlserver/);
   assert.match(intranetConnectSource, /TASKBOARD_SQLSERVER_PASSWORD/);
   assert.match(intranetConnectSource, /writeFile\(\s*envPath/);
+});
+
+test("macOS users can store SQL Server credentials in Keychain without committing secrets", () => {
+  assert.match(credentialStoreSource, /add-generic-password/);
+  assert.match(credentialStoreSource, /cj-task-dashboard-sqlserver/);
+  assert.match(credentialStoreSource, /TASKBOARD_SQLSERVER_USER/);
+  assert.match(credentialStoreSource, /TASKBOARD_SQLSERVER_PASSWORD/);
+  assert.match(credentialStoreSource, /password-env/);
+  assert.match(credentialStoreSource, /stty -echo/);
+  assert.match(credentialStoreSource, /Keychain credential storage currently supports macOS only/);
 });
 
 test("the default installer keeps Codex sidebar injection optional", () => {

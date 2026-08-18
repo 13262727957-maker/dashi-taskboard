@@ -23,6 +23,7 @@
     "open:codex-taskboard": "node scripts/codex-plugin-open.mjs",
     "open:taskboard": "node scripts/dashi-taskboard.mjs open",
     "identity:intranet-connect": "node scripts/taskboard-intranet-connect.mjs",
+    "identity:store-credentials": "node scripts/taskboard-store-sqlserver-credentials.mjs",
     "windows:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-taskboard-install.ps1",
     "windows:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-taskboard-uninstall.ps1",
     "verify:codex-panel": "node scripts/codex-plugin-verify-panel.mjs",
