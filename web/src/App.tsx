@@ -1571,9 +1571,11 @@ export function App() {
 function AppWorkspace() {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const embedded = query.get("host") === "codex";
+  const standalonePanelView: ProjectOverviewView | null = query.get("panel") === "database-progress" ? "database-progress" : null;
+  const panelOnly = standalonePanelView !== null;
   const undoShortcut = navigator.userAgent.includes("Macintosh") ? "⌘Z" : "Ctrl+Z";
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
-  const [projectHomeView, setProjectHomeView] = useState<ProjectOverviewView>("overview");
+  const [projectHomeView, setProjectHomeView] = useState<ProjectOverviewView>(standalonePanelView ?? "overview");
   const [hostContext, setHostContext] = useState<HostContext | null>(null);
   const [developmentScan, setDevelopmentScan] = useState<DevelopmentScan>({ workspacePath: null, contexts: [] });
   const [developmentScanLoading, setDevelopmentScanLoading] = useState(false);
@@ -3010,7 +3012,7 @@ function AppWorkspace() {
     : undefined;
 
   return (
-    <div className={`app-shell${embedded ? " embedded" : ""}`} style={appShellStyle}>
+    <div className={`app-shell${embedded ? " embedded" : ""}${panelOnly ? " panel-only" : ""}`} style={appShellStyle}>
       {taskboardMetadata && taskboardMetadata.mode !== "cloud" && (
         <LocalRealtimeSync
           selectedProjectId={selectedProjectId}
@@ -3023,7 +3025,7 @@ function AppWorkspace() {
           setAttachmentsRevision={setAttachmentsRevision}
         />
       )}
-      {!embedded && (
+      {!embedded && !panelOnly && (
         <aside className="app-nav" aria-label="Taskboard navigation">
           <div className="brand-row">
             <span className="brand-mark" aria-hidden="true"><LinearIcon name="project" /></span>
@@ -3113,7 +3115,7 @@ function AppWorkspace() {
       )}
 
       <main className="workspace">
-        {selectedProjectId ? (
+        {!panelOnly && selectedProjectId ? (
           <header className="workspace-header">
           <div className="workspace-title">
             <div className="workspace-kicker">
@@ -3240,7 +3242,7 @@ function AppWorkspace() {
           <div ref={dragRegionRef} className="home-window-drag-region" aria-hidden="true" />
         )}
 
-        {selectedProjectId && !detailTask && <div className="board-toolbar">
+        {!panelOnly && selectedProjectId && !detailTask && <div className="board-toolbar">
           <div className="view-tabs" aria-label="看板视图">
             <button
               className={`view-tab${boardView === "issues" ? " active" : ""}`}
