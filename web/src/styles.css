@@ -723,6 +723,11 @@ kbd {
   background: var(--bg);
 }
 
+.app-shell.panel-only .workspace {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .home-window-drag-region {
   position: absolute;
   z-index: 1;
@@ -2055,6 +2060,88 @@ kbd {
 .progress-donut-legend .is-normal { background: var(--progress-brand); }
 .progress-donut-legend .is-risk { background: var(--progress-warning); }
 .progress-donut-legend .is-blocked { background: var(--progress-danger); }
+
+.progress-health-projects {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  max-height: 198px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.progress-health-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--progress-border-soft);
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.progress-health-group > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--progress-text-secondary);
+  font-size: 13px;
+}
+
+.progress-health-group > div span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.progress-health-group i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--progress-brand);
+}
+
+.progress-health-group.is-risk i { background: var(--progress-warning); }
+.progress-health-group.is-blocked i { background: var(--progress-danger); }
+
+.progress-health-group strong {
+  color: var(--progress-text);
+  font-size: 14px;
+}
+
+.progress-health-group ul {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.progress-health-group li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--progress-text-secondary);
+  font-size: 13px;
+}
+
+.progress-health-group b {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-health-group em,
+.progress-health-group small {
+  color: var(--progress-text-muted);
+  font-style: normal;
+}
 
 .progress-bar-rank-row {
   display: grid;
@@ -4806,7 +4893,7 @@ select:focus {
 }
 
 .app-shell.panel-only .project-overview-demo {
-  min-height: 100vh;
+  min-height: 100%;
   padding: 0;
   background: #f5f5f5;
 }

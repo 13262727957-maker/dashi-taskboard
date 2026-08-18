@@ -1462,6 +1462,11 @@ function ProjectOverviewDemo({
   const healthNormal = projectProgressRows.filter((row) => row.health === "正常").length;
   const healthRisk = projectProgressRows.filter((row) => row.health === "有风险").length;
   const healthBlocked = projectProgressRows.filter((row) => row.health === "阻塞").length;
+  const healthGroups = [
+    { label: "正常", rows: projectProgressRows.filter((row) => row.health === "正常"), tone: "normal" },
+    { label: "风险", rows: projectProgressRows.filter((row) => row.health === "有风险"), tone: "risk" },
+    { label: "阻塞", rows: projectProgressRows.filter((row) => row.health === "阻塞"), tone: "blocked" },
+  ];
   const totalHealth = Math.max(1, projectProgressRows.length);
   const normalDegrees = Math.round((healthNormal / totalHealth) * 360);
   const riskDegrees = Math.round((healthRisk / totalHealth) * 360);
@@ -1607,10 +1612,17 @@ function ProjectOverviewDemo({
             <div className="progress-donut" style={{ background: `conic-gradient(#14b8a6 0 ${normalDegrees}deg, #d99a00 ${normalDegrees}deg ${normalDegrees + riskDegrees}deg, #e5484d ${normalDegrees + riskDegrees}deg 360deg)` }}>
               <span>{projectProgressRows.length}</span>
             </div>
-            <div className="progress-donut-legend">
-              <span><i className="is-normal" />正常 {healthNormal}</span>
-              <span><i className="is-risk" />风险 {healthRisk}</span>
-              <span><i className="is-blocked" />阻塞 {healthBlocked}</span>
+            <div className="progress-health-projects">
+              {healthGroups.map((group) => (
+                <section className={`progress-health-group is-${group.tone}`} key={group.label}>
+                  <div><span><i />{group.label}</span><strong>{group.rows.length}</strong></div>
+                  {group.rows.length > 0 ? (
+                    <ul>
+                      {group.rows.map((row) => <li key={row.id}><b>{row.name}</b><em>{row.progress}%</em></li>)}
+                    </ul>
+                  ) : <small>暂无项目</small>}
+                </section>
+              ))}
             </div>
           </div>
         </article>
