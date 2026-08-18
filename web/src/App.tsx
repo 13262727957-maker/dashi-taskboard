@@ -183,7 +183,7 @@ function localProjectKey(project: Pick<ProjectChoice, "id" | "sourceProjectId">)
   return project.sourceProjectId ?? project.id;
 }
 
-type ProjectOverviewView = "overview" | "database-progress" | "team-board" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
+type ProjectOverviewView = "overview" | "database-progress" | "team-board" | "tasks" | "members" | "analytics" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
 type WorkspaceRole = "owner" | "developer" | "none";
 
 interface ProjectProgressRow {
@@ -716,12 +716,14 @@ function DatabaseProgressPanel({
   loading,
   onOpenProject,
   onRefresh,
+  embedded = false,
 }: {
   rows: ProjectProgressRow[];
   identityMode: boolean;
   loading: boolean;
   onOpenProject: (project: ProjectChoice) => void;
   onRefresh: () => Promise<void>;
+  embedded?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [healthFilter, setHealthFilter] = useState<"all" | "normal" | "risk" | "blocked">("all");
@@ -753,7 +755,7 @@ function DatabaseProgressPanel({
   return (
     <section className="database-progress-page" aria-labelledby="database-progress-title">
       <section className="database-progress-board" aria-labelledby="database-progress-title">
-        <div className="database-progress-header">
+        {!embedded && <div className="database-progress-header">
           <div>
             <h1 id="database-progress-title">项目进度总览</h1>
             <p>{filteredRows.length} / {rows.length} 个公司项目</p>
@@ -791,7 +793,7 @@ function DatabaseProgressPanel({
               ))}
             </div>
           </div>
-        </div>
+        </div>}
 
         <div className="database-progress-content">
           <div className="database-stat-grid" aria-label="公司项目统计">
@@ -881,6 +883,8 @@ function ProjectOverviewDemo({
   currentUser,
   deviceProjects,
   overviewProjectId,
+  standalonePanel = false,
+  onOverviewProjectIdChange,
   teamProjects,
 }: {
   projects: ProjectChoice[];
@@ -898,6 +902,8 @@ function ProjectOverviewDemo({
   currentUser: ActorIdentity;
   deviceProjects: DeviceProject[];
   overviewProjectId: string;
+  standalonePanel?: boolean;
+  onOverviewProjectIdChange?: (projectId: string) => void;
   teamProjects: ProjectChoice[];
 }) {
   const identityMode = getIdentityUser() !== null;
@@ -923,6 +929,7 @@ function ProjectOverviewDemo({
   const [syncLogsLoading, setSyncLogsLoading] = useState(false);
   const [projectBindings, setProjectBindings] = useState<Record<string, ProjectTeamBinding | null>>({});
   const [projectSyncStatuses, setProjectSyncStatuses] = useState<Record<string, ProjectSyncStatus | null>>({});
+  const [analyticsRange, setAnalyticsRange] = useState<3 | 7 | 30>(7);
   const teamProjectIdFor = (project: ProjectChoice) => project.teamProjectId ?? project.id;
   useEffect(() => {
     let cancelled = false;
@@ -1369,6 +1376,7 @@ function ProjectOverviewDemo({
     "team-board": "团队项目看板",
     tasks: "任务卡片",
     members: "成员负载",
+    analytics: "统计分析",
     mine: "我的任务",
     "member-config": "项目成员",
     "sync-log": "同步日志",
@@ -1382,6 +1390,7 @@ function ProjectOverviewDemo({
     "team-board": "只展示公司库中已经创建的团队项目及其任务推进状态。",
     tasks: "按项目、负责人和任务状态查看跨项目进度。",
     members: "查看当前项目每位成员的任务数量和当前队列。",
+    analytics: "按近 3 天、近 7 天和近 30 天分析趋势、积压、负载和风险洞察。",
     mine: "只查看当前身份需要处理的任务。",
     "member-config": "维护当前项目的开发人员和项目负责人。",
     "sync-log": "查看自己的提交，以及所属项目成员提交到公司库的记录。",
@@ -1405,6 +1414,226 @@ function ProjectOverviewDemo({
     onViewChange("overview");
     setActiveOverviewItem("全部项目");
   };
+  const standaloneViews: ProjectOverviewView[] = ["database-progress", "members", "analytics", "sync-log"];
+  const standaloneActiveView = standaloneViews.includes(overviewView) ? overviewView : "database-progress";
+  const selectedTeamProjectId = overviewProject ? teamProjectIdFor(overviewProject) : "";
+  const selectedProjectName = overviewProject?.name ?? "全部项目";
+  const allTasks = overviewTasks;
+  const rangeStart = Date.now() - analyticsRange * 24 * 60 * 60 * 1000;
+  const rangeTasks = allTasks.filter((task) => (Date.parse(task.createdAt) || Date.parse(task.updatedAt) || 0) >= rangeStart);
+  const rangeDoneTasks = allTasks.filter((task) => task.status === "done" && (Date.parse(task.updatedAt) || 0) >= rangeStart);
+  const rangeBlockedTasks = allTasks.filter((task) => task.status === "blocked" && (Date.parse(task.updatedAt) || 0) >= rangeStart);
+  const rangeReviewTasks = allTasks.filter((task) => task.status === "in_review" && (Date.parse(task.updatedAt) || 0) >= rangeStart);
+  const taskCountByProject = projectProgressRows.map((row) => ({
+    name: row.name,
+    total: row.total,
+    done: row.done,
+    blocked: row.blocked,
+    review: row.review,
+    progress: row.progress,
+    health: row.health,
+  }));
+  const overloadedMembers = memberRows
+    .map((member) => ({
+      name: member.name,
+      total: member.total,
+      blocked: member.blocked.length,
+      review: member.review.length,
+      load: member.blocked.length > 0 ? "有阻塞" : member.total >= 10 ? "过载" : member.total >= 7 ? "偏忙" : member.total >= 3 ? "正常" : "空闲",
+    }))
+    .sort((left, right) => right.total - left.total);
+  const riskInsights = [
+    ...taskCountByProject
+      .filter((project) => project.blocked > 0 || project.review >= 5 || (project.total > 0 && project.progress === 0))
+      .slice(0, 4)
+      .map((project) => ({
+        level: project.blocked > 0 ? "高风险" : "关注",
+        target: project.name,
+        reason: project.blocked > 0
+          ? `存在 ${project.blocked} 个阻塞任务`
+          : project.review >= 5
+            ? `待验收积压 ${project.review} 个`
+            : "项目有任务但进度仍为 0%",
+        action: project.blocked > 0 ? "优先清理阻塞" : "安排负责人确认推进状态",
+      })),
+    ...overloadedMembers
+      .filter((member) => member.total >= 10 || member.blocked > 0)
+      .slice(0, 2)
+      .map((member) => ({
+        level: member.blocked > 0 ? "高风险" : "关注",
+        target: member.name,
+        reason: `${member.total} 个任务，阻塞 ${member.blocked} 个`,
+        action: "评估是否需要转派或拆分任务",
+      })),
+  ].slice(0, 5);
+  const standaloneTabs: Array<{ view: ProjectOverviewView; label: string }> = [
+    { view: "database-progress", label: "项目总览" },
+    { view: "members", label: "成员负载" },
+    { view: "analytics", label: "统计分析" },
+    { view: "sync-log", label: "操作日志" },
+  ];
+  const standaloneHeaderStats = [
+    { label: "正常", value: projectProgressRows.filter((row) => row.health === "正常").length, tone: "normal" },
+    { label: "风险", value: projectProgressRows.filter((row) => row.health === "有风险").length, tone: "warning" },
+    { label: "阻塞", value: projectProgressRows.filter((row) => row.health === "阻塞").length, tone: "danger" },
+    { label: "待验收", value: projectProgressRows.reduce((sum, row) => sum + row.review, 0), tone: "info" },
+  ];
+  const renderStandaloneMembers = () => (
+    <section className="progress-work-card progress-member-page" aria-labelledby="standalone-members-title">
+      <div className="progress-card-head">
+        <div>
+          <h2 id="standalone-members-title">成员负载</h2>
+          <p>{selectedProjectName} · {memberRows.length} 位成员</p>
+        </div>
+        <label className="progress-project-select">
+          <span>项目</span>
+          <select
+            value={selectedTeamProjectId}
+            onChange={(event) => {
+              const value = event.target.value;
+              onOverviewProjectIdChange?.(value);
+              const nextProject = teamProjects.find((project) => teamProjectIdFor(project) === value);
+              if (nextProject) onOpenProject(nextProject);
+              else onViewChange("members");
+            }}
+          >
+            <option value="">全部项目</option>
+            {teamProjects.map((project) => <option value={teamProjectIdFor(project)} key={teamProjectIdFor(project)}>{project.name}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="progress-member-table" role="table" aria-label="成员负载">
+        <div className="progress-member-head" role="row">
+          <span>成员</span><span>总任务</span><span>待办</span><span>进行中</span><span>待验收</span><span>阻塞</span><span>负载状态</span>
+        </div>
+        {memberRows.map((member) => {
+          const load = member.blocked.length > 0 ? "有阻塞" : member.total >= 10 ? "过载" : member.total >= 7 ? "偏忙" : member.total >= 3 ? "正常" : "空闲";
+          return <div className="progress-member-row" role="row" key={member.name}>
+            <strong>{member.name}</strong>
+            <span>{member.total}</span>
+            <span>{member.todo.length}</span>
+            <span>{member.active.length}</span>
+            <span>{member.review.length}</span>
+            <span>{member.blocked.length}</span>
+            <i className={`progress-load-tag is-${load === "有阻塞" || load === "过载" ? "danger" : load === "偏忙" ? "warning" : "normal"}`}>{load}</i>
+          </div>;
+        })}
+      </div>
+    </section>
+  );
+  const renderStandaloneAnalytics = () => (
+    <section className="progress-analytics-page" aria-labelledby="standalone-analytics-title">
+      <div className="progress-card-head">
+        <div>
+          <h2 id="standalone-analytics-title">统计分析</h2>
+          <p>分析趋势、积压、负载不均和风险洞察，不重复项目总览的静态总数。</p>
+        </div>
+        <div className="progress-range-switch" aria-label="统计时间范围">
+          {[3, 7, 30].map((range) => (
+            <button className={analyticsRange === range ? "is-active" : ""} type="button" key={range} onClick={() => setAnalyticsRange(range as 3 | 7 | 30)}>近 {range === 30 ? "30" : range} 天</button>
+          ))}
+        </div>
+      </div>
+      <div className="progress-analytics-grid">
+        <article className="progress-work-card">
+          <h3>趋势分析</h3>
+          <div className="progress-metric-list">
+            <span><b>{rangeTasks.length}</b>新增任务</span>
+            <span><b>{rangeDoneTasks.length}</b>完成任务</span>
+            <span><b>{rangeBlockedTasks.length}</b>阻塞变化</span>
+            <span><b>{rangeReviewTasks.length}</b>待验收变化</span>
+          </div>
+        </article>
+        <article className="progress-work-card">
+          <h3>积压分析</h3>
+          {taskCountByProject.sort((a, b) => (b.review + b.blocked) - (a.review + a.blocked)).slice(0, 4).map((project) => (
+            <div className="progress-rank-row" key={project.name}><span>{project.name}</span><strong>验收 {project.review} · 阻塞 {project.blocked}</strong></div>
+          ))}
+        </article>
+        <article className="progress-work-card">
+          <h3>负载不均</h3>
+          {overloadedMembers.slice(0, 5).map((member) => (
+            <div className="progress-rank-row" key={member.name}><span>{member.name}</span><strong>{member.total} 个任务 · {member.load}</strong></div>
+          ))}
+        </article>
+        <article className="progress-work-card">
+          <h3>项目对比</h3>
+          {taskCountByProject.sort((a, b) => a.progress - b.progress).slice(0, 5).map((project) => (
+            <div className="progress-rank-row" key={project.name}><span>{project.name}</span><strong>{project.progress}% · {project.health}</strong></div>
+          ))}
+        </article>
+      </div>
+      <section className="progress-work-card progress-insight-card">
+        <h3>风险洞察</h3>
+        {riskInsights.length > 0 ? riskInsights.map((insight) => (
+          <div className="progress-insight-row" key={`${insight.target}-${insight.reason}`}>
+            <span className={insight.level === "高风险" ? "is-danger" : "is-warning"}>{insight.level}</span>
+            <strong>{insight.target}</strong>
+            <p>{insight.reason}，建议{insight.action}。</p>
+          </div>
+        )) : <div className="overview-inline-empty">当前时间范围内暂无明显异常。</div>}
+      </section>
+    </section>
+  );
+  const renderStandaloneLogs = () => (
+    <section className="progress-work-card progress-log-page" aria-labelledby="standalone-log-title">
+      <div className="progress-card-head">
+        <div>
+          <h2 id="standalone-log-title">操作日志</h2>
+          <p>第一版展示已监控的公司库任务提交记录，后续可扩展项目、成员和任务变更。</p>
+        </div>
+        <span className="progress-log-count">{syncLogsLoading ? "加载中" : `${syncLogs.length} 条`}</span>
+      </div>
+      {syncLogsLoading ? (
+        <div className="overview-inline-empty">正在读取操作日志…</div>
+      ) : syncLogs.length > 0 ? (
+        <div className="progress-log-table" role="table" aria-label="操作日志">
+          <div className="progress-log-head" role="row"><span>时间</span><span>类型</span><span>项目</span><span>操作人</span><span>状态</span><span>结果</span></div>
+          {syncLogs.map((log) => (
+            <div className="progress-log-row" role="row" key={log.id}>
+              <time dateTime={log.createdAt}>{new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(log.createdAt))}</time>
+              <span>任务提交</span>
+              <strong title={log.projectName}>{log.projectName}</strong>
+              <span>{log.operatorName}</span>
+              <i className={`sync-log-status is-${log.status}`}>{log.status === "success" ? "成功" : "失败"}</i>
+              <small title={log.error ?? undefined}>{log.status === "success" ? `新增 ${log.imported}，更新 ${log.updated}` : log.error ?? `失败 ${log.failed}`}</small>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="overview-inline-empty">{getIdentityUser() ? "暂无已监控操作日志。" : "未连接公司账号，暂无公司库操作日志。"}</div>
+      )}
+    </section>
+  );
+
+  if (standalonePanel && standaloneViews.includes(standaloneActiveView)) {
+    return (
+      <section className="progress-shell" aria-label="公司项目进度中心">
+        <header className="progress-shell-header">
+          <div className="progress-brand">
+            <span aria-hidden="true">P</span>
+            <div><strong>项目进度中心</strong><small>公司项目协同看板</small></div>
+          </div>
+          <div className="progress-status-strip">
+            {standaloneHeaderStats.map((item) => <button className={`progress-status-pill is-${item.tone}`} type="button" key={item.label}><b>{item.value}</b>{item.label}</button>)}
+          </div>
+          <div className="progress-shell-actions">
+            <span className={`database-connection-tag ${identityMode ? "is-online" : "is-offline"}`}><i aria-hidden="true" />{identityMode ? "已连接公司库" : "未连接公司库"}</span>
+            <button className="database-ant-button" type="button" onClick={() => void onRefreshProjects()}><LinearIcon name="recurrence" />刷新</button>
+          </div>
+        </header>
+        <nav className="progress-shell-tabs" aria-label="项目进度中心导航">
+          {standaloneTabs.map((tab) => <button className={standaloneActiveView === tab.view ? "is-active" : ""} type="button" key={tab.view} onClick={() => onViewChange(tab.view)}>{tab.label}</button>)}
+        </nav>
+        <main className="progress-shell-main">
+          {standaloneActiveView === "database-progress" && <DatabaseProgressPanel rows={projectProgressRows} identityMode={identityMode} loading={loading} onOpenProject={onOpenProject} onRefresh={onRefreshProjects} embedded />}
+          {standaloneActiveView === "members" && renderStandaloneMembers()}
+          {standaloneActiveView === "analytics" && renderStandaloneAnalytics()}
+          {standaloneActiveView === "sync-log" && renderStandaloneLogs()}
+        </main>
+      </section>
+    );
+  }
 
   return (
     <section className="project-home project-overview-demo">
@@ -3482,6 +3711,8 @@ function AppWorkspace() {
             currentUser={currentUser}
             deviceProjects={deviceProjects}
             overviewProjectId={overviewProjectId}
+            standalonePanel={panelOnly}
+            onOverviewProjectIdChange={setOverviewProjectId}
             onOpenTaskProject={(project) => void selectProject(project)}
           />
         ) : detailTask && selectedProject ? (
