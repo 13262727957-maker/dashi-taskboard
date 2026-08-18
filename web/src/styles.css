@@ -1520,11 +1520,11 @@ kbd {
 
 .progress-shell-header {
   display: grid;
-  grid-template-columns: minmax(260px, .9fr) minmax(420px, 1.4fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 24px;
-  min-height: 136px;
-  padding: 24px 32px;
+  gap: 18px;
+  min-height: 82px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--progress-border);
   background: #fff;
 }
@@ -1533,18 +1533,18 @@ kbd {
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 16px;
+  gap: 12px;
 }
 
 .progress-brand > span {
   display: grid;
   place-items: center;
-  width: 80px;
-  height: 80px;
-  border-radius: 14px;
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
   background: var(--progress-brand);
   color: #fff;
-  font-size: 36px;
+  font-size: 24px;
   font-weight: 800;
 }
 
@@ -1558,21 +1558,22 @@ kbd {
 
 .progress-brand strong {
   color: var(--progress-text);
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 700;
   line-height: 1.15;
 }
 
 .progress-brand small {
-  margin-top: 6px;
+  margin-top: 3px;
   color: var(--progress-text-secondary);
-  font-size: 18px;
+  font-size: 13px;
 }
 
 .progress-status-strip {
   display: flex;
   align-items: center;
-  gap: 14px;
+  justify-content: flex-start;
+  gap: 8px;
   min-width: 0;
   overflow-x: auto;
 }
@@ -1581,20 +1582,20 @@ kbd {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  height: 64px;
-  gap: 10px;
-  padding: 0 24px;
+  height: 40px;
+  gap: 7px;
+  padding: 0 12px;
   border: 1px solid var(--progress-border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fff;
   color: var(--progress-text-secondary);
-  font-size: 18px;
+  font-size: 14px;
   cursor: default;
 }
 
 .progress-status-pill b {
   color: var(--progress-text);
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 700;
 }
 
@@ -1613,9 +1614,9 @@ kbd {
 .progress-shell-tabs {
   display: flex;
   align-items: center;
-  min-height: 80px;
-  gap: 48px;
-  padding: 0 54px;
+  min-height: 48px;
+  gap: 32px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--progress-border);
   background: #fff;
 }
@@ -1626,7 +1627,7 @@ kbd {
   border: 0;
   background: transparent;
   color: var(--progress-text-secondary);
-  font-size: 22px;
+  font-size: 15px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -1642,14 +1643,14 @@ kbd {
   right: 0;
   bottom: -1px;
   left: 0;
-  height: 4px;
+  height: 3px;
   background: var(--progress-brand);
 }
 
 .progress-shell-main {
-  width: min(2460px, calc(100% - 160px));
+  width: min(1680px, calc(100% - 48px));
   margin: 0 auto;
-  padding: 32px 0 40px;
+  padding: 20px 0 32px;
 }
 
 .progress-shell .database-progress-page {
