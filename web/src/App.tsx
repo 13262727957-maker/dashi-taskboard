@@ -183,7 +183,7 @@ function localProjectKey(project: Pick<ProjectChoice, "id" | "sourceProjectId">)
   return project.sourceProjectId ?? project.id;
 }
 
-type ProjectOverviewView = "overview" | "team-board" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
+type ProjectOverviewView = "overview" | "database-progress" | "team-board" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
 type WorkspaceRole = "owner" | "developer" | "none";
 
 interface UndoOperation {
@@ -1208,6 +1208,7 @@ function ProjectOverviewDemo({
   ];
   const viewTitles: Record<ProjectOverviewView, string> = {
     overview: "项目进度总览",
+    "database-progress": "公司项目进度",
     "team-board": "团队项目看板",
     tasks: "任务卡片",
     members: "成员负载",
@@ -1220,6 +1221,7 @@ function ProjectOverviewDemo({
   };
   const viewDescriptions: Record<ProjectOverviewView, string> = {
     overview: "查看项目健康状态、任务卡片进度和需要关注的项目。",
+    "database-progress": "只展示公司数据库中已经创建出来的项目和任务推进状态。",
     "team-board": "只展示公司库中已经创建的团队项目及其任务推进状态。",
     tasks: "按项目、负责人和任务状态查看跨项目进度。",
     members: "查看当前项目每位成员的任务数量和当前队列。",
@@ -1336,6 +1338,24 @@ function ProjectOverviewDemo({
                 </div>
               </section>
             </div>
+          </div>
+        </div>
+      ) : overviewView === "database-progress" ? (
+        <div className="overview-layout overview-team-board-layout">
+          <div className="overview-main">
+            {!identityMode ? (
+              <div className="project-home-empty">
+                <h2>未连接公司数据库</h2>
+                <p>先在账号入口连接 SQL Server 公司库，连接后这里会展示已创建的公司项目进度。</p>
+              </div>
+            ) : teamProjects.length > 0 ? (
+              <TeamProjectBoard rows={projectProgressRows} onOpenProject={onOpenProject} />
+            ) : (
+              <div className="project-home-empty">
+                <h2>还没有公司项目</h2>
+                <p>在公司库创建项目后，这里会单独展示它们的进度。</p>
+              </div>
+            )}
           </div>
         </div>
       ) : overviewView === "team-board" ? (
@@ -1767,7 +1787,9 @@ function AppWorkspace() {
     ));
   }, [deviceProjects, deviceWorkspacePaths, favoriteProjectIds, hostContext?.projects, projects]);
   const teamProjectChoices = useMemo(
-    () => projectChoices.filter((project) => project.persisted && Boolean(project.role || project.ownerName || project.teamProjectId)),
+    () => getIdentityUser()
+      ? projectChoices.filter((project) => project.persisted && (Boolean(project.teamProjectId) || !project.inCodex || Boolean(project.role) || Boolean(project.ownerName)))
+      : [],
     [projectChoices],
   );
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
@@ -3036,6 +3058,14 @@ function AppWorkspace() {
             <button className={`nav-item${!selectedProjectId && projectHomeView === "sync-log" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("sync-log"); }}>
               <span className="nav-glyph" aria-hidden="true"><LinearIcon name="recurrence" /></span>
               同步日志
+            </button>
+          </div>
+
+          <div className="overview-sidebar-nav" aria-label="公司项目进度导航">
+            <span className="nav-label">看板</span>
+            <button className={`nav-item${!selectedProjectId && projectHomeView === "database-progress" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("database-progress"); }}>
+              <span className="nav-glyph" aria-hidden="true"><LinearIcon name="project" /></span>
+              公司项目进度
             </button>
           </div>
 
