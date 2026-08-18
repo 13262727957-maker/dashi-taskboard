@@ -1712,7 +1712,7 @@ function ProjectOverviewDemo({
         <header className="progress-shell-header">
           <div className="progress-brand">
             <span aria-hidden="true">P</span>
-            <div><strong>项目进度中心</strong><small>公司项目协同看板</small></div>
+            <div><strong>项目进度中心</strong><small>CJ项目协同看板</small></div>
           </div>
           <div className="progress-status-strip">
             {standaloneHeaderStats.map((item) => <button className={`progress-status-pill is-${item.tone}`} type="button" key={item.label}><b>{item.value}</b>{item.label}</button>)}
