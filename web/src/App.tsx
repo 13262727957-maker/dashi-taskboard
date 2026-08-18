@@ -755,18 +755,18 @@ function DatabaseProgressPanel({
       <section className="database-progress-board" aria-labelledby="database-progress-title">
         <div className="database-progress-header">
           <div>
-          <h1 id="database-progress-title">项目进度总览</h1>
+            <h1 id="database-progress-title">项目进度总览</h1>
             <p>{filteredRows.length} / {rows.length} 个公司项目</p>
-        </div>
+          </div>
           <div className="database-progress-header-actions">
-          <span className={`database-connection-tag ${identityMode ? "is-online" : "is-offline"}`}>
-            <i aria-hidden="true" />
-            {identityMode ? "已连接公司库" : "未连接公司库"}
-          </span>
-          <button className="database-ant-button" type="button" onClick={() => void runRefresh()} disabled={refreshing}>
-            <LinearIcon name="recurrence" />
-            {refreshing ? "刷新中" : "刷新"}
-          </button>
+            <span className={`database-connection-tag ${identityMode ? "is-online" : "is-offline"}`}>
+              <i aria-hidden="true" />
+              {identityMode ? "已连接公司库" : "未连接公司库"}
+            </span>
+            <button className="database-ant-button" type="button" onClick={() => void runRefresh()} disabled={refreshing}>
+              <LinearIcon name="recurrence" />
+              {refreshing ? "刷新中" : "刷新"}
+            </button>
           </div>
           <div className="database-toolbar">
             <label className="database-search">
@@ -793,71 +793,73 @@ function DatabaseProgressPanel({
           </div>
         </div>
 
-        <div className="database-stat-grid" aria-label="公司项目统计">
-          {[
-            { label: "公司项目", value: rows.length, detail: "已创建项目" },
-            { label: "平均进度", value: `${averageProgress}%`, detail: "按项目均值" },
-            { label: "已完成任务", value: doneTasks, detail: `共 ${totalTasks} 张任务卡` },
-            { label: "风险项目", value: riskProjects + blockedProjects, detail: `阻塞 ${blockedProjects} 个` },
-          ].map((item) => (
-            <article className="database-stat-card" key={item.label}>
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-              <small>{item.detail}</small>
-            </article>
-          ))}
-        </div>
-
-        {loading ? (
-          <div className="database-ant-loading" aria-busy="true"><span /><span /><span /></div>
-        ) : !identityMode ? (
-          <div className="database-ant-empty">
-            <LinearIcon name="alert" />
-            <strong>未连接公司数据库</strong>
-            <span>请先在账号入口连接 SQL Server 公司库。</span>
-          </div>
-        ) : filteredRows.length === 0 ? (
-          <div className="database-ant-empty">
-            <LinearIcon name="search" />
-            <strong>没有匹配项目</strong>
-            <span>调整搜索或筛选条件后重试。</span>
-          </div>
-        ) : (
-          <div className="database-ant-table" role="table" aria-label="公司项目进度总览">
-            <div className="database-ant-table-head" role="row">
-              <span>项目名称</span>
-              <span>健康状态</span>
-              <span>整体进度</span>
-              <span>任务分布</span>
-              <span>更新时间</span>
-              <span>操作</span>
-            </div>
-            {filteredRows.map((row) => (
-              <div className="database-ant-table-row" role="row" key={row.id}>
-                <div className="database-project-title">
-                  <strong>{row.name}</strong>
-                  <small>{row.total} 张任务卡</small>
-                </div>
-                <span className={`database-health-tag is-${row.health === "正常" ? "normal" : row.health === "阻塞" ? "blocked" : "risk"}`}>{row.health}</span>
-                <div className="database-progress-line">
-                  <span><i style={{ width: `${row.progress}%` }} /></span>
-                  <b>{row.progress}%</b>
-                </div>
-                <div className="database-task-stack">
-                  <span aria-hidden="true">
-                    <i className="is-done" style={{ width: segmentWidth(row.done, row.total) }} />
-                    <i className="is-active" style={{ width: segmentWidth(row.active, row.total) }} />
-                    <i className="is-review" style={{ width: segmentWidth(row.review, row.total) }} />
-                    <i className="is-blocked" style={{ width: segmentWidth(row.blocked, row.total) }} />
-                  </span>
-                  <small>待办 {row.todo} · 进行 {row.active} · 验收 {row.review} · 阻塞 {row.blocked}</small>
-                </div>
-                <time dateTime={row.updated === "暂无更新" ? undefined : row.updated}>{row.updated}</time>
-                <button className="database-link-button" type="button" onClick={() => onOpenProject(row.project)}>查看</button>
-              </div>
+        <div className="database-progress-content">
+          <div className="database-stat-grid" aria-label="公司项目统计">
+            {[
+              { label: "公司项目", value: rows.length, detail: "已创建项目" },
+              { label: "平均进度", value: `${averageProgress}%`, detail: "按项目均值" },
+              { label: "已完成任务", value: doneTasks, detail: `共 ${totalTasks} 张任务卡` },
+              { label: "风险项目", value: riskProjects + blockedProjects, detail: `阻塞 ${blockedProjects} 个` },
+            ].map((item) => (
+              <article className="database-stat-card" key={item.label}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <small>{item.detail}</small>
+              </article>
             ))}
           </div>
-        )}
+
+          {loading ? (
+            <div className="database-ant-loading" aria-busy="true"><span /><span /><span /></div>
+          ) : !identityMode ? (
+            <div className="database-ant-empty">
+              <LinearIcon name="alert" />
+              <strong>未连接公司数据库</strong>
+              <span>请先在账号入口连接 SQL Server 公司库。</span>
+            </div>
+          ) : filteredRows.length === 0 ? (
+            <div className="database-ant-empty">
+              <LinearIcon name="search" />
+              <strong>没有匹配项目</strong>
+              <span>调整搜索或筛选条件后重试。</span>
+            </div>
+          ) : (
+            <div className="database-ant-table" role="table" aria-label="公司项目进度总览">
+              <div className="database-ant-table-head" role="row">
+                <span>项目名称</span>
+                <span>健康状态</span>
+                <span>整体进度</span>
+                <span>任务分布</span>
+                <span>更新时间</span>
+                <span>操作</span>
+              </div>
+              {filteredRows.map((row) => (
+                <div className="database-ant-table-row" role="row" key={row.id}>
+                  <div className="database-project-title">
+                    <strong>{row.name}</strong>
+                    <small>{row.total} 张任务卡</small>
+                  </div>
+                  <span className={`database-health-tag is-${row.health === "正常" ? "normal" : row.health === "阻塞" ? "blocked" : "risk"}`}>{row.health}</span>
+                  <div className="database-progress-line">
+                    <span><i style={{ width: `${row.progress}%` }} /></span>
+                    <b>{row.progress}%</b>
+                  </div>
+                  <div className="database-task-stack">
+                    <span aria-hidden="true">
+                      <i className="is-done" style={{ width: segmentWidth(row.done, row.total) }} />
+                      <i className="is-active" style={{ width: segmentWidth(row.active, row.total) }} />
+                      <i className="is-review" style={{ width: segmentWidth(row.review, row.total) }} />
+                      <i className="is-blocked" style={{ width: segmentWidth(row.blocked, row.total) }} />
+                    </span>
+                    <small>待办 {row.todo} · 进行 {row.active} · 验收 {row.review} · 阻塞 {row.blocked}</small>
+                  </div>
+                  <time dateTime={row.updated === "暂无更新" ? undefined : row.updated}>{row.updated}</time>
+                  <button className="database-link-button" type="button" onClick={() => onOpenProject(row.project)}>查看</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </section>
     </section>
   );
