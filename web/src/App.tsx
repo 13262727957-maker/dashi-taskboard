@@ -1433,6 +1433,42 @@ function ProjectOverviewDemo({
     progress: row.progress,
     health: row.health,
   }));
+  const trendPoints = Array.from({ length: analyticsRange }, (_, index) => {
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setDate(dayStart.getDate() - (analyticsRange - 1 - index));
+    const start = dayStart.getTime();
+    const end = start + 24 * 60 * 60 * 1000;
+    const created = allTasks.filter((task) => {
+      const time = Date.parse(task.createdAt) || 0;
+      return time >= start && time < end;
+    }).length;
+    const done = allTasks.filter((task) => {
+      const time = Date.parse(task.updatedAt) || 0;
+      return task.status === "done" && time >= start && time < end;
+    }).length;
+    const blocked = allTasks.filter((task) => {
+      const time = Date.parse(task.updatedAt) || 0;
+      return task.status === "blocked" && time >= start && time < end;
+    }).length;
+    return { label: `${dayStart.getMonth() + 1}/${dayStart.getDate()}`, created, done, blocked };
+  });
+  const maxTrendValue = Math.max(1, ...trendPoints.flatMap((point) => [point.created, point.done, point.blocked]));
+  const linePointsFor = (key: "created" | "done" | "blocked") => trendPoints.map((point, index) => {
+    const x = trendPoints.length === 1 ? 50 : 8 + (index / (trendPoints.length - 1)) * 84;
+    const y = 82 - (point[key] / maxTrendValue) * 64;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+  const healthNormal = projectProgressRows.filter((row) => row.health === "正常").length;
+  const healthRisk = projectProgressRows.filter((row) => row.health === "有风险").length;
+  const healthBlocked = projectProgressRows.filter((row) => row.health === "阻塞").length;
+  const totalHealth = Math.max(1, projectProgressRows.length);
+  const normalDegrees = Math.round((healthNormal / totalHealth) * 360);
+  const riskDegrees = Math.round((healthRisk / totalHealth) * 360);
+  const backlogProjects = taskCountByProject
+    .map((project) => ({ ...project, backlog: project.review + project.blocked }))
+    .sort((a, b) => b.backlog - a.backlog);
+  const maxBacklog = Math.max(1, ...backlogProjects.map((project) => project.backlog));
   const overloadedMembers = memberRows
     .map((member) => ({
       name: member.name,
@@ -1479,7 +1515,7 @@ function ProjectOverviewDemo({
     { label: "待验收", value: projectProgressRows.reduce((sum, row) => sum + row.review, 0), tone: "info" },
   ];
   const renderStandaloneMembers = () => (
-    <section className="progress-work-card progress-member-page" aria-labelledby="standalone-members-title">
+    <section className="progress-work-card progress-member-page progress-member-board-page" aria-labelledby="standalone-members-title">
       <div className="progress-card-head">
         <div>
           <h2 id="standalone-members-title">成员负载</h2>
@@ -1502,22 +1538,36 @@ function ProjectOverviewDemo({
           </select>
         </label>
       </div>
-      <div className="progress-member-table" role="table" aria-label="成员负载">
-        <div className="progress-member-head" role="row">
-          <span>成员</span><span>总任务</span><span>待办</span><span>进行中</span><span>待验收</span><span>阻塞</span><span>负载状态</span>
-        </div>
-        {memberRows.map((member) => {
+      <div className="progress-member-board" aria-label="成员负载任务列表">
+        {memberRows.length > 0 ? memberRows.map((member) => {
           const load = member.blocked.length > 0 ? "有阻塞" : member.total >= 10 ? "过载" : member.total >= 7 ? "偏忙" : member.total >= 3 ? "正常" : "空闲";
-          return <div className="progress-member-row" role="row" key={member.name}>
-            <strong>{member.name}</strong>
-            <span>{member.total}</span>
-            <span>{member.todo.length}</span>
-            <span>{member.active.length}</span>
-            <span>{member.review.length}</span>
-            <span>{member.blocked.length}</span>
-            <i className={`progress-load-tag is-${load === "有阻塞" || load === "过载" ? "danger" : load === "偏忙" ? "warning" : "normal"}`}>{load}</i>
-          </div>;
-        })}
+          const groups = [
+            { label: "待办", tasks: member.todo, tone: "todo" },
+            { label: "进行中", tasks: member.active, tone: "active" },
+            { label: "阻塞", tasks: member.blocked, tone: "blocked" },
+            { label: "待验收", tasks: member.review, tone: "review" },
+          ];
+          return <article className="progress-member-card-row" key={member.name}>
+            <div className="progress-member-profile">
+              <span aria-hidden="true">{member.name.slice(0, 1)}</span>
+              <strong>{member.name}</strong>
+              <small>{member.total} 张任务卡</small>
+              <i className={`progress-load-tag is-${load === "有阻塞" || load === "过载" ? "danger" : load === "偏忙" ? "warning" : "normal"}`}>{load}</i>
+            </div>
+            <div className="progress-member-task-cards">
+              {groups.map((group) => (
+                <section className={`progress-member-task-card is-${group.tone}`} key={group.label}>
+                  <div className="progress-member-task-head"><strong>{group.label}</strong><span>{group.tasks.length}</span></div>
+                  <div className="progress-member-task-list">
+                    {group.tasks.length > 0
+                      ? group.tasks.slice(0, 6).map((task) => <button type="button" key={task.id} onClick={() => { if (overviewProject) onOpenTaskProject({ ...overviewProject, inCodex: false, persisted: true }); }} title={task.title}>{task.title}</button>)
+                      : <span>暂无任务</span>}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </article>;
+        }) : <div className="overview-inline-empty">当前项目暂无成员负载数据。</div>}
       </div>
     </section>
   );
@@ -1535,28 +1585,54 @@ function ProjectOverviewDemo({
         </div>
       </div>
       <div className="progress-analytics-grid">
-        <article className="progress-work-card">
+        <article className="progress-work-card progress-chart-card">
           <h3>趋势分析</h3>
-          <div className="progress-metric-list">
-            <span><b>{rangeTasks.length}</b>新增任务</span>
-            <span><b>{rangeDoneTasks.length}</b>完成任务</span>
-            <span><b>{rangeBlockedTasks.length}</b>阻塞变化</span>
-            <span><b>{rangeReviewTasks.length}</b>待验收变化</span>
+          <div className="progress-line-chart" aria-label={`近 ${analyticsRange} 天任务趋势`}>
+            <svg viewBox="0 0 100 90" role="img" aria-label="新增、完成、阻塞任务趋势">
+              <polyline className="is-created" points={linePointsFor("created")} />
+              <polyline className="is-done" points={linePointsFor("done")} />
+              <polyline className="is-blocked" points={linePointsFor("blocked")} />
+            </svg>
+            <div className="progress-chart-legend">
+              <span className="is-created">新增 {rangeTasks.length}</span>
+              <span className="is-done">完成 {rangeDoneTasks.length}</span>
+              <span className="is-blocked">阻塞 {rangeBlockedTasks.length}</span>
+              <span>待验收 {rangeReviewTasks.length}</span>
+            </div>
           </div>
         </article>
-        <article className="progress-work-card">
+        <article className="progress-work-card progress-chart-card">
+          <h3>项目健康分布</h3>
+          <div className="progress-donut-wrap">
+            <div className="progress-donut" style={{ background: `conic-gradient(#14b8a6 0 ${normalDegrees}deg, #d99a00 ${normalDegrees}deg ${normalDegrees + riskDegrees}deg, #e5484d ${normalDegrees + riskDegrees}deg 360deg)` }}>
+              <span>{projectProgressRows.length}</span>
+            </div>
+            <div className="progress-donut-legend">
+              <span><i className="is-normal" />正常 {healthNormal}</span>
+              <span><i className="is-risk" />风险 {healthRisk}</span>
+              <span><i className="is-blocked" />阻塞 {healthBlocked}</span>
+            </div>
+          </div>
+        </article>
+        <article className="progress-work-card progress-chart-card">
           <h3>积压分析</h3>
-          {taskCountByProject.sort((a, b) => (b.review + b.blocked) - (a.review + a.blocked)).slice(0, 4).map((project) => (
-            <div className="progress-rank-row" key={project.name}><span>{project.name}</span><strong>验收 {project.review} · 阻塞 {project.blocked}</strong></div>
+          {backlogProjects.slice(0, 5).map((project) => (
+            <div className="progress-bar-rank-row" key={project.name}>
+              <div><span>{project.name}</span><strong>验收 {project.review} · 阻塞 {project.blocked}</strong></div>
+              <i><b style={{ width: `${Math.round((project.backlog / maxBacklog) * 100)}%` }} /></i>
+            </div>
           ))}
         </article>
-        <article className="progress-work-card">
+        <article className="progress-work-card progress-chart-card">
           <h3>负载不均</h3>
           {overloadedMembers.slice(0, 5).map((member) => (
-            <div className="progress-rank-row" key={member.name}><span>{member.name}</span><strong>{member.total} 个任务 · {member.load}</strong></div>
+            <div className="progress-bar-rank-row" key={member.name}>
+              <div><span>{member.name}</span><strong>{member.total} 个任务 · {member.load}</strong></div>
+              <i><b style={{ width: `${Math.round((member.total / Math.max(1, overloadedMembers[0]?.total ?? 1)) * 100)}%` }} /></i>
+            </div>
           ))}
         </article>
-        <article className="progress-work-card">
+        <article className="progress-work-card progress-chart-card">
           <h3>项目对比</h3>
           {taskCountByProject.sort((a, b) => a.progress - b.progress).slice(0, 5).map((project) => (
             <div className="progress-rank-row" key={project.name}><span>{project.name}</span><strong>{project.progress}% · {project.health}</strong></div>
