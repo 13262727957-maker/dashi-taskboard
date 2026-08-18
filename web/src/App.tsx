@@ -183,7 +183,7 @@ function localProjectKey(project: Pick<ProjectChoice, "id" | "sourceProjectId">)
   return project.sourceProjectId ?? project.id;
 }
 
-type ProjectOverviewView = "overview" | "project-progress" | "team-board" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
+type ProjectOverviewView = "overview" | "team-board" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
 type WorkspaceRole = "owner" | "developer" | "none";
 
 interface UndoOperation {
@@ -1208,7 +1208,6 @@ function ProjectOverviewDemo({
   ];
   const viewTitles: Record<ProjectOverviewView, string> = {
     overview: "项目进度总览",
-    "project-progress": "项目进度总览",
     "team-board": "团队项目看板",
     tasks: "任务卡片",
     members: "成员负载",
@@ -1221,7 +1220,6 @@ function ProjectOverviewDemo({
   };
   const viewDescriptions: Record<ProjectOverviewView, string> = {
     overview: "查看项目健康状态、任务卡片进度和需要关注的项目。",
-    "project-progress": "查看项目健康状态、任务卡片进度和需要关注的项目。",
     "team-board": "只展示公司库中已经创建的团队项目及其任务推进状态。",
     tasks: "按项目、负责人和任务状态查看跨项目进度。",
     members: "查看当前项目每位成员的任务数量和当前队列。",
@@ -1234,7 +1232,6 @@ function ProjectOverviewDemo({
   };
   const [activeOverviewItem, setActiveOverviewItem] = useState("全部项目");
   const overviewView = activeView;
-  const isProjectProgressView = overviewView === "overview" || overviewView === "project-progress";
   const overviewProject = projects.find((project) => project.id === overviewProjectId) ?? null;
   const hideDetailHeader = overviewView === "member-config" || overviewView === "sync-log";
   const chooseOverviewItem = (label: string, message: string) => {
@@ -1266,7 +1263,7 @@ function ProjectOverviewDemo({
         <p>{viewDescriptions[overviewView]}</p>
       </div>
 
-      {(isProjectProgressView || overviewView === "mine") && (
+      {(overviewView === "overview" || overviewView === "mine") && (
         <>
           <div className="overview-stats" aria-label={overviewView === "mine" ? "我的任务统计" : "项目总览统计"}>
             {(overviewView === "mine" ? [
@@ -1354,7 +1351,7 @@ function ProjectOverviewDemo({
             )}
           </div>
         </div>
-      ) : teamProjects.length > 0 && !isProjectProgressView ? (
+      ) : teamProjects.length > 0 && overviewView !== "overview" ? (
         <section className={`overview-detail-page${overviewView === "member-config" ? " overview-config-detail-page" : ""}`} aria-labelledby={hideDetailHeader ? undefined : "overview-detail-title"} aria-label={hideDetailHeader ? viewTitles[overviewView] : undefined}>
           {!hideDetailHeader && (
             <div className="overview-detail-header">
@@ -3013,16 +3010,12 @@ function AppWorkspace() {
 
           <nav className="primary-nav" aria-label="Views">
             <span className="nav-label">工作区</span>
-            <button className={`nav-item${selectedProjectId ? " active" : ""}`} type="button" aria-current={selectedProjectId ? "page" : undefined}>
+            <button className="nav-item active" type="button" aria-current="page">
               <span className="nav-glyph" aria-hidden="true">
                 <LinearIcon name="myIssues" />
               </span>
               议题
               <span className="nav-count">{tasks.length}</span>
-            </button>
-            <button className={`nav-item${!selectedProjectId && projectHomeView === "project-progress" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("project-progress"); }}>
-              <span className="nav-glyph" aria-hidden="true"><LinearIcon name="home" /></span>
-              项目进度
             </button>
           </nav>
 
