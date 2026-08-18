@@ -186,6 +186,21 @@ function localProjectKey(project: Pick<ProjectChoice, "id" | "sourceProjectId">)
 type ProjectOverviewView = "overview" | "database-progress" | "team-board" | "tasks" | "members" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
 type WorkspaceRole = "owner" | "developer" | "none";
 
+interface ProjectProgressRow {
+  id: string;
+  name: string;
+  health: string;
+  progress: number;
+  total: number;
+  done: number;
+  active: number;
+  blocked: number;
+  review: number;
+  todo: number;
+  updated: string;
+  project: ProjectChoice;
+}
+
 interface UndoOperation {
   id: number;
   message: string;
@@ -638,20 +653,7 @@ function TeamProjectBoard({
   rows,
   onOpenProject,
 }: {
-  rows: Array<{
-    id: string;
-    name: string;
-    health: string;
-    progress: number;
-    total: number;
-    done: number;
-    active: number;
-    blocked: number;
-    review: number;
-    todo: number;
-    updated: string;
-    project: ProjectChoice;
-  }>;
+  rows: ProjectProgressRow[];
   onOpenProject: (project: ProjectChoice) => void;
 }) {
   const segmentWidth = (value: number, total: number) => `${total > 0 ? Math.round((value / total) * 100) : 0}%`;
@@ -704,6 +706,167 @@ function TeamProjectBoard({
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function DatabaseProgressPanel({
+  rows,
+  identityMode,
+  loading,
+  onOpenProject,
+  onRefresh,
+}: {
+  rows: ProjectProgressRow[];
+  identityMode: boolean;
+  loading: boolean;
+  onOpenProject: (project: ProjectChoice) => void;
+  onRefresh: () => Promise<void>;
+}) {
+  const [query, setQuery] = useState("");
+  const [healthFilter, setHealthFilter] = useState<"all" | "normal" | "risk" | "blocked">("all");
+  const [refreshing, setRefreshing] = useState(false);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredRows = rows.filter((row) => {
+    const matchesQuery = !normalizedQuery || row.name.toLowerCase().includes(normalizedQuery);
+    const matchesHealth = healthFilter === "all"
+      || (healthFilter === "normal" && row.health === "正常")
+      || (healthFilter === "risk" && row.health === "有风险")
+      || (healthFilter === "blocked" && row.health === "阻塞");
+    return matchesQuery && matchesHealth;
+  });
+  const totalTasks = rows.reduce((sum, row) => sum + row.total, 0);
+  const doneTasks = rows.reduce((sum, row) => sum + row.done, 0);
+  const blockedProjects = rows.filter((row) => row.health === "阻塞").length;
+  const riskProjects = rows.filter((row) => row.health === "有风险").length;
+  const averageProgress = rows.length > 0 ? Math.round(rows.reduce((sum, row) => sum + row.progress, 0) / rows.length) : 0;
+  const segmentWidth = (value: number, total: number) => `${total > 0 ? Math.round((value / total) * 100) : 0}%`;
+  const runRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return (
+    <section className="database-progress-page" aria-labelledby="database-progress-title">
+      <div className="database-progress-header">
+        <div>
+          <div className="database-progress-breadcrumb"><span>公司项目</span><LinearIcon name="chevronRight" /><strong>项目进度总览</strong></div>
+          <h1 id="database-progress-title">项目进度总览</h1>
+          <p>集中查看已经在公司数据库中建立的项目、任务推进状态和风险分布。</p>
+        </div>
+        <div className="database-progress-header-actions">
+          <span className={`database-connection-tag ${identityMode ? "is-online" : "is-offline"}`}>
+            <i aria-hidden="true" />
+            {identityMode ? "已连接公司库" : "未连接公司库"}
+          </span>
+          <button className="database-ant-button" type="button" onClick={() => void runRefresh()} disabled={refreshing}>
+            <LinearIcon name="recurrence" />
+            {refreshing ? "刷新中" : "刷新"}
+          </button>
+        </div>
+      </div>
+
+      <div className="database-stat-grid" aria-label="公司项目统计">
+        {[
+          { label: "公司项目", value: rows.length, detail: "已创建项目" },
+          { label: "平均进度", value: `${averageProgress}%`, detail: "按项目均值" },
+          { label: "已完成任务", value: doneTasks, detail: `共 ${totalTasks} 张任务卡` },
+          { label: "风险项目", value: riskProjects + blockedProjects, detail: `阻塞 ${blockedProjects} 个` },
+        ].map((item) => (
+          <article className="database-stat-card" key={item.label}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+            <small>{item.detail}</small>
+          </article>
+        ))}
+      </div>
+
+      <section className="database-ant-card" aria-labelledby="database-progress-table-title">
+        <div className="database-ant-card-head">
+          <div>
+            <h2 id="database-progress-table-title">项目列表</h2>
+            <p>{filteredRows.length} / {rows.length} 个项目</p>
+          </div>
+          <div className="database-toolbar">
+            <label className="database-search">
+              <LinearIcon name="search" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索项目名称" />
+            </label>
+            <div className="database-segmented" aria-label="健康状态筛选">
+              {[
+                ["all", "全部"],
+                ["normal", "正常"],
+                ["risk", "风险"],
+                ["blocked", "阻塞"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className={healthFilter === value ? "is-active" : ""}
+                  type="button"
+                  onClick={() => setHealthFilter(value as typeof healthFilter)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="database-ant-loading" aria-busy="true"><span /><span /><span /></div>
+        ) : !identityMode ? (
+          <div className="database-ant-empty">
+            <LinearIcon name="alert" />
+            <strong>未连接公司数据库</strong>
+            <span>请先在账号入口连接 SQL Server 公司库。</span>
+          </div>
+        ) : filteredRows.length === 0 ? (
+          <div className="database-ant-empty">
+            <LinearIcon name="search" />
+            <strong>没有匹配项目</strong>
+            <span>调整搜索或筛选条件后重试。</span>
+          </div>
+        ) : (
+          <div className="database-ant-table" role="table" aria-label="公司项目进度总览">
+            <div className="database-ant-table-head" role="row">
+              <span>项目名称</span>
+              <span>健康状态</span>
+              <span>整体进度</span>
+              <span>任务分布</span>
+              <span>更新时间</span>
+              <span>操作</span>
+            </div>
+            {filteredRows.map((row) => (
+              <div className="database-ant-table-row" role="row" key={row.id}>
+                <div className="database-project-title">
+                  <strong>{row.name}</strong>
+                  <small>{row.total} 张任务卡</small>
+                </div>
+                <span className={`database-health-tag is-${row.health === "正常" ? "normal" : row.health === "阻塞" ? "blocked" : "risk"}`}>{row.health}</span>
+                <div className="database-progress-line">
+                  <span><i style={{ width: `${row.progress}%` }} /></span>
+                  <b>{row.progress}%</b>
+                </div>
+                <div className="database-task-stack">
+                  <span aria-hidden="true">
+                    <i className="is-done" style={{ width: segmentWidth(row.done, row.total) }} />
+                    <i className="is-active" style={{ width: segmentWidth(row.active, row.total) }} />
+                    <i className="is-review" style={{ width: segmentWidth(row.review, row.total) }} />
+                    <i className="is-blocked" style={{ width: segmentWidth(row.blocked, row.total) }} />
+                  </span>
+                  <small>待办 {row.todo} · 进行 {row.active} · 验收 {row.review} · 阻塞 {row.blocked}</small>
+                </div>
+                <time dateTime={row.updated === "暂无更新" ? undefined : row.updated}>{row.updated}</time>
+                <button className="database-link-button" type="button" onClick={() => onOpenProject(row.project)}>查看</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </section>
   );
 }
@@ -1251,7 +1414,7 @@ function ProjectOverviewDemo({
 
   return (
     <section className="project-home project-overview-demo">
-      <div className="project-home-heading project-overview-heading">
+      {overviewView !== "database-progress" && <div className="project-home-heading project-overview-heading">
         <span className="project-overview-kicker">
           任务面板
           <span className={`overview-sync-inline ${identityMode ? "is-online" : "is-local"}`} role="status">
@@ -1263,7 +1426,7 @@ function ProjectOverviewDemo({
           <h1>{viewTitles[overviewView]}</h1>
         </div>
         <p>{viewDescriptions[overviewView]}</p>
-      </div>
+      </div>}
 
       {(overviewView === "overview" || overviewView === "mine") && (
         <>
@@ -1341,23 +1504,13 @@ function ProjectOverviewDemo({
           </div>
         </div>
       ) : overviewView === "database-progress" ? (
-        <div className="overview-layout overview-team-board-layout">
-          <div className="overview-main">
-            {!identityMode ? (
-              <div className="project-home-empty">
-                <h2>未连接公司数据库</h2>
-                <p>先在账号入口连接 SQL Server 公司库，连接后这里会展示已创建的公司项目进度。</p>
-              </div>
-            ) : teamProjects.length > 0 ? (
-              <TeamProjectBoard rows={projectProgressRows} onOpenProject={onOpenProject} />
-            ) : (
-              <div className="project-home-empty">
-                <h2>还没有公司项目</h2>
-                <p>在公司库创建项目后，这里会单独展示它们的进度。</p>
-              </div>
-            )}
-          </div>
-        </div>
+        <DatabaseProgressPanel
+          rows={projectProgressRows}
+          identityMode={identityMode}
+          loading={loading}
+          onOpenProject={onOpenProject}
+          onRefresh={onRefreshProjects}
+        />
       ) : overviewView === "team-board" ? (
         <div className="overview-layout overview-team-board-layout">
           <div className="overview-main">
