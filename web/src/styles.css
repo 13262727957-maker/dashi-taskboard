@@ -1947,6 +1947,15 @@ kbd {
   box-shadow: 0 1px 2px rgb(15 23 42 / 10%);
 }
 
+.progress-analytics-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
 .progress-analytics-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2304,6 +2313,10 @@ kbd {
 
   .progress-analytics-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .progress-analytics-controls {
+    justify-content: flex-start;
   }
 
   .progress-member-card-row,

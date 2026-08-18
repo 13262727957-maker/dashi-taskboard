@@ -1424,7 +1424,10 @@ function ProjectOverviewDemo({
   const rangeDoneTasks = allTasks.filter((task) => task.status === "done" && (Date.parse(task.updatedAt) || 0) >= rangeStart);
   const rangeBlockedTasks = allTasks.filter((task) => task.status === "blocked" && (Date.parse(task.updatedAt) || 0) >= rangeStart);
   const rangeReviewTasks = allTasks.filter((task) => task.status === "in_review" && (Date.parse(task.updatedAt) || 0) >= rangeStart);
-  const taskCountByProject = projectProgressRows.map((row) => ({
+  const analyticsProjectRows = selectedTeamProjectId
+    ? projectProgressRows.filter((row) => teamProjectIdFor(row.project) === selectedTeamProjectId || row.project.id === selectedTeamProjectId)
+    : projectProgressRows;
+  const taskCountByProject = analyticsProjectRows.map((row) => ({
     name: row.name,
     total: row.total,
     done: row.done,
@@ -1459,15 +1462,15 @@ function ProjectOverviewDemo({
     const y = 82 - (point[key] / maxTrendValue) * 64;
     return `${x.toFixed(2)},${y.toFixed(2)}`;
   }).join(" ");
-  const healthNormal = projectProgressRows.filter((row) => row.health === "正常").length;
-  const healthRisk = projectProgressRows.filter((row) => row.health === "有风险").length;
-  const healthBlocked = projectProgressRows.filter((row) => row.health === "阻塞").length;
+  const healthNormal = analyticsProjectRows.filter((row) => row.health === "正常").length;
+  const healthRisk = analyticsProjectRows.filter((row) => row.health === "有风险").length;
+  const healthBlocked = analyticsProjectRows.filter((row) => row.health === "阻塞").length;
   const healthGroups = [
-    { label: "正常", rows: projectProgressRows.filter((row) => row.health === "正常"), tone: "normal" },
-    { label: "风险", rows: projectProgressRows.filter((row) => row.health === "有风险"), tone: "risk" },
-    { label: "阻塞", rows: projectProgressRows.filter((row) => row.health === "阻塞"), tone: "blocked" },
+    { label: "正常", rows: analyticsProjectRows.filter((row) => row.health === "正常"), tone: "normal" },
+    { label: "风险", rows: analyticsProjectRows.filter((row) => row.health === "有风险"), tone: "risk" },
+    { label: "阻塞", rows: analyticsProjectRows.filter((row) => row.health === "阻塞"), tone: "blocked" },
   ];
-  const totalHealth = Math.max(1, projectProgressRows.length);
+  const totalHealth = Math.max(1, analyticsProjectRows.length);
   const normalDegrees = Math.round((healthNormal / totalHealth) * 360);
   const riskDegrees = Math.round((healthRisk / totalHealth) * 360);
   const backlogProjects = taskCountByProject
@@ -1581,12 +1584,27 @@ function ProjectOverviewDemo({
       <div className="progress-card-head">
         <div>
           <h2 id="standalone-analytics-title">统计分析</h2>
-          <p>分析趋势、积压、负载不均和风险洞察，不重复项目总览的静态总数。</p>
+          <p>{selectedProjectName} · 分析趋势、积压、负载不均和风险洞察。</p>
         </div>
-        <div className="progress-range-switch" aria-label="统计时间范围">
-          {[3, 7, 30].map((range) => (
-            <button className={analyticsRange === range ? "is-active" : ""} type="button" key={range} onClick={() => setAnalyticsRange(range as 3 | 7 | 30)}>近 {range === 30 ? "30" : range} 天</button>
-          ))}
+        <div className="progress-analytics-controls">
+          <label className="progress-project-select">
+            <span>项目</span>
+            <select
+              value={selectedTeamProjectId}
+              onChange={(event) => {
+                onOverviewProjectIdChange?.(event.target.value);
+                onViewChange("analytics");
+              }}
+            >
+              <option value="">全部项目</option>
+              {teamProjects.map((project) => <option value={teamProjectIdFor(project)} key={teamProjectIdFor(project)}>{project.name}</option>)}
+            </select>
+          </label>
+          <div className="progress-range-switch" aria-label="统计时间范围">
+            {[3, 7, 30].map((range) => (
+              <button className={analyticsRange === range ? "is-active" : ""} type="button" key={range} onClick={() => setAnalyticsRange(range as 3 | 7 | 30)}>近 {range === 30 ? "30" : range} 天</button>
+            ))}
+          </div>
         </div>
       </div>
       <div className="progress-analytics-grid">
@@ -1642,12 +1660,6 @@ function ProjectOverviewDemo({
               <div><span>{member.name}</span><strong>{member.total} 个任务 · {member.load}</strong></div>
               <i><b style={{ width: `${Math.round((member.total / Math.max(1, overloadedMembers[0]?.total ?? 1)) * 100)}%` }} /></i>
             </div>
-          ))}
-        </article>
-        <article className="progress-work-card progress-chart-card">
-          <h3>项目对比</h3>
-          {taskCountByProject.sort((a, b) => a.progress - b.progress).slice(0, 5).map((project) => (
-            <div className="progress-rank-row" key={project.name}><span>{project.name}</span><strong>{project.progress}% · {project.health}</strong></div>
           ))}
         </article>
       </div>
