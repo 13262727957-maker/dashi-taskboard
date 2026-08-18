@@ -139,7 +139,7 @@ Uninstall the local plugin, Codex plugin state, managed skill link, `dashi-taskb
 npm run uninstall:codex-plugin
 ```
 
-On macOS, the Codex plugin installer automatically reads `.data/sqlserver-identity.env` when present and injects the supported `TASKBOARD_SQLSERVER_*` values into the background LaunchAgent. The file is intentionally ignored by git. A complete file lets the panel connect to the SQL Server identity database on open; without it, the panel starts in local draft mode.
+On macOS, the Codex plugin installer automatically reads `.data/sqlserver-identity.env` when present and injects the supported `TASKBOARD_SQLSERVER_*` values into the background LaunchAgent. The file is intentionally ignored by git. A complete file lets the panel connect to the SQL Server identity database on open; without it, the panel starts in local draft mode. The one-line installer also runs `npm run identity:intranet-connect -- --quiet` before plugin installation: when the internal SQL Server is reachable, it can create `.data/sqlserver-identity.env` from `TASKBOARD_SQLSERVER_USER`/`TASKBOARD_SQLSERVER_PASSWORD`, `CJ_TASKBOARD_SQLSERVER_USER`/`CJ_TASKBOARD_SQLSERVER_PASSWORD`, or a macOS Keychain generic password with service `cj-task-dashboard-sqlserver` and account equal to the SQL Server user.
 
 Windows has the same standalone panel entry points. To start the local service automatically after the current user signs in, open PowerShell in the repository and run:
 

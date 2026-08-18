@@ -18,6 +18,14 @@ const shellInstallerSource = await readFile(
   new URL("../install.sh", import.meta.url),
   "utf8",
 );
+const intranetConnectSource = await readFile(
+  new URL("../scripts/taskboard-intranet-connect.mjs", import.meta.url),
+  "utf8",
+);
+const packageManifest = JSON.parse(await readFile(
+  new URL("../package.json", import.meta.url),
+  "utf8",
+));
 const launcherSource = await readFile(
   new URL("../scripts/dashi-taskboard.mjs", import.meta.url),
   "utf8",
@@ -93,6 +101,17 @@ test("the macOS installer injects bundled SQL Server identity configuration", ()
   assert.match(installerSource, /loadSqlServerIdentityEnvironment\(\)/);
   assert.match(installerSource, /\.\.\.sqlServerIdentityEnvironment/);
   assert.match(installerSource, /SQL Server identity environment will be injected/);
+});
+
+test("the one-line installer can prepare intranet SQL Server identity before plugin install", () => {
+  assert.equal(packageManifest.scripts["identity:intranet-connect"], "node scripts/taskboard-intranet-connect.mjs");
+  assert.match(shellInstallerSource, /npm run identity:intranet-connect -- --quiet/);
+  assert.match(shellInstallerSource, /Checking intranet SQL Server identity auto-connect/);
+  assert.match(intranetConnectSource, /192\.188\.106\.61/);
+  assert.match(intranetConnectSource, /canReach\(host, port\)/);
+  assert.match(intranetConnectSource, /cj-task-dashboard-sqlserver/);
+  assert.match(intranetConnectSource, /TASKBOARD_SQLSERVER_PASSWORD/);
+  assert.match(intranetConnectSource, /writeFile\(\s*envPath/);
 });
 
 test("the default installer keeps Codex sidebar injection optional", () => {

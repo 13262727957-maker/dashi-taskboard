@@ -80,6 +80,10 @@ fi
 
 cd "$INSTALL_DIR" || fail "Cannot enter install directory: $INSTALL_DIR"
 
+log "Checking intranet SQL Server identity auto-connect"
+npm run identity:intranet-connect -- --quiet \
+  || log "Intranet SQL Server identity auto-connect skipped. Continuing with local draft mode if no identity env exists."
+
 log "Installing Codex plugin, skill, CLI commands, and local server"
 npm run install:codex-plugin || fail "npm run install:codex-plugin failed. Check Node/npm version, permissions, and installer output."
 
