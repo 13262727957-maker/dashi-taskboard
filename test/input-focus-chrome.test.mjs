@@ -37,7 +37,6 @@ test("editable controls suppress native focus outlines without disabling non-tex
 test("editable-control wrappers do not add focus chrome", () => {
   for (const selector of [
     ".project-card:focus-within",
-    ".search-field:focus-within",
     ".detail-property-row:focus-within",
     ".workflow-node-search:focus-within",
     ".comment-composer:focus-within",

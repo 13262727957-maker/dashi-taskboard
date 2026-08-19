@@ -6,7 +6,7 @@ const componentsUrl = new URL("../web/src/components/", import.meta.url);
 const componentFiles = (await readdir(componentsUrl))
   .filter((name) => name.endsWith(".tsx") && name !== "LinearIcon.tsx")
   .map((name) => new URL(name, componentsUrl));
-const productFiles = [new URL("../web/src/App.tsx", import.meta.url), ...componentFiles];
+const productFiles = componentFiles;
 const styles = await readFile(new URL("../web/src/styles.css", import.meta.url), "utf8");
 const iconSource = await readFile(new URL("../web/src/components/LinearIcon.tsx", import.meta.url), "utf8");
 

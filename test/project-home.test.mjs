@@ -13,7 +13,7 @@ const labelsSource = await readFile(new URL("../web/src/labels.ts", import.meta.
 test("the project home merges live Codex projects with persisted Taskboard projects", () => {
   assert.match(appSource, /\.\.\.\(hostContext\?\.projects \?\? \[\]\), \.\.\.deviceProjects/);
   assert.match(appSource, /persistedById/);
-  assert.match(appSource, /project\.inCodex \? "Codex 项目" : "已保存的项目"/);
+  assert.match(appSource, /sourceProjectId: deviceProject\.sourceProjectId/);
   assert.match(appSource, /createProjectRequest/);
   assert.match(apiSource, /export async function createProject/);
 });
@@ -25,8 +25,8 @@ test("each device stores an independent workspace path for every project", () =>
   assert.match(appSource, /const \[nextProjects, metadata, deviceWorkspaceInfo\] = await Promise\.all\(\[/);
   assert.match(appSource, /listDeviceWorkspaces\(signal\)/);
   assert.match(appSource, /setDeviceProjects\(deviceWorkspaceInfo\.projects\)/);
-  assert.match(appSource, /placeholder="设置此设备的项目目录"/);
-  assert.match(appSource, /deviceWorkspacePaths\[selectedProjectId\]/);
+  assert.match(appSource, /const selectedDeviceWorkspacePath = deviceWorkspacePaths\[selectedProjectId\]/);
+  assert.match(appSource, /rememberDeviceWorkspacePath/);
   assert.match(apiSource, /query\.set\("workspacePath", workspacePath\)/);
   assert.match(apiSource, /\/api\/device-workspaces/);
   assert.match(styles, /\.project-card-directory \{/);
@@ -45,7 +45,6 @@ test("project selection is remembered until the user explicitly returns home", (
 test("the home uses the same restrained surface language as the issue board", () => {
   assert.match(appSource, /<section className="project-home project-overview-demo">/);
   assert.match(appSource, /<h1>\{viewTitles\[overviewView\]\}<\/h1>/);
-  assert.match(appSource, /候选任务收件箱/);
   assert.match(appSource, /关注事项/);
   assert.match(appSource, /Codex 执行中心/);
   assert.match(appSource, /活动日志/);
@@ -54,9 +53,9 @@ test("the home uses the same restrained surface language as the issue board", ()
   assert.match(appSource, /项目进度/);
   assert.match(appSource, /任务卡片进度/);
   assert.match(appSource, /成员负载/);
-  assert.match(appSource, /需要我处理/);
+  assert.match(appSource, /本地项目/);
   assert.match(appSource, /overview-project-table/);
-  assert.match(appSource, /overview-task-row/);
+  assert.match(appSource, /overview-project-row/);
   assert.match(styles, /\.overview-detail-page \{/);
   assert.match(styles, /\.overview-project-table \{/);
   assert.match(styles, /\.overview-member-row \{/);
@@ -64,7 +63,7 @@ test("the home uses the same restrained surface language as the issue board", ()
   assert.match(appSource, /风险项目/);
   assert.match(appSource, /待验收/);
   assert.match(appSource, /任务卡分布/);
-  assert.match(appSource, /下一步/);
+  assert.match(appSource, /风险洞察/);
   assert.match(styles, /\.overview-health-pill \{/);
   assert.match(styles, /\.overview-task-stack \{/);
   assert.match(styles, /\.project-grid \{[\s\S]*?grid-template-columns:/);
@@ -143,5 +142,5 @@ test("my tasks submission status uses the local project key consistently", () =>
   assert.match(appSource, /const localProjectId = localProjectKey\(sourceProject \?\? localProject\)/);
   assert.match(appSource, /importIdentityTasks\(targetProjectId, tasks, \{ localProjectId \}\)/);
   assert.match(appSource, /projectSyncStatuses\[localProjectId\] \?\? projectSyncStatuses\[project\.id\]/);
-  assert.match(appSource, /project\.persisted && Boolean\(project\.role \|\| project\.ownerName \|\| project\.teamProjectId\)/);
+  assert.match(appSource, /project\.persisted && \(Boolean\(project\.teamProjectId\) \|\| !project\.inCodex \|\| Boolean\(project\.role\) \|\| Boolean\(project\.ownerName\)\)/);
 });

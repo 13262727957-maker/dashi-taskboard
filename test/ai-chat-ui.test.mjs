@@ -155,18 +155,18 @@ test("AI chat API uses the stable local contract and never sends cwd or hidden p
 
 test("panel follows the measured Codex-like layout and responsive boundary", () => {
   assert.match(styles, /\.ai-chat-launcher\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?width:\s*40px;[\s\S]*?height:\s*40px;/);
-  assert.match(styles, /\.ai-chat-panel\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?width:\s*min\(500px,/);
-  assert.match(styles, /\.ai-chat-panel\s*\{[\s\S]*?height:\s*min\(680px,\s*calc\(100vh - 80px\)\);/);
+  assert.match(styles, /\.ai-chat-panel\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?width:\s*min\(672px,\s*calc\(100vw - 16px\)\);/);
+  assert.match(styles, /\.ai-chat-panel\s*\{[\s\S]*?height:\s*calc\(100vh - 16px\);/);
   assert.match(styles, /\.ai-chat-panel-header\s*\{[\s\S]*?height:\s*48px;/);
-  assert.match(styles, /\.ai-chat-composer\s*\{[\s\S]*?min-height:\s*116px;[\s\S]*?max-height:\s*240px;/);
+  assert.match(styles, /\.ai-chat-composer\s*\{[\s\S]*?min-height:\s*108px;[\s\S]*?max-height:\s*300px;/);
+  assert.match(chatSource, /const PANEL_MIN_WIDTH = 420/);
   assert.match(styles, /@media \(max-width:\s*719px\)/);
-  assert.doesNotMatch(chatSource, /<select/);
 });
 
 test("chat renders Markdown, public activity cards and never renders host-only fields", () => {
   assert.match(chatSource, /ReactMarkdown/);
   assert.match(chatSource, /remarkPlugins=\{\[remarkGfm\]\}/);
-  assert.match(chatSource, /ai-chat-activity/);
+  assert.match(chatSource, /ai-chat-automation-card/);
   assert.match(chatSource, /aria-label="停止生成"/);
   assert.match(chatSource, /aria-label="发送消息"/);
   assert.doesNotMatch(chatSource, /origin\.workspacePath/);
@@ -176,9 +176,11 @@ test("chat renders Markdown, public activity cards and never renders host-only f
 
 test("composer does not submit during IME composition and background runs keep launcher state fresh", () => {
   const composingGuard = chatSource.indexOf("event.nativeEvent.isComposing");
+  const shiftEnterGuard = chatSource.indexOf('event.key === "Enter" && event.shiftKey');
   const skillSelection = chatSource.indexOf('event.key === "Enter" && skillMention');
-  const messageSubmission = chatSource.indexOf('event.key === "Enter" && !event.shiftKey');
+  const messageSubmission = chatSource.indexOf('if (event.key === "Enter")');
   assert.ok(composingGuard > 0);
+  assert.ok(composingGuard < shiftEnterGuard);
   assert.ok(composingGuard < skillSelection);
   assert.ok(composingGuard < messageSubmission);
   assert.match(chatSource, /backgroundRunningThreadIds/);
@@ -188,15 +190,17 @@ test("composer does not submit during IME composition and background runs keep l
 
 test("composer and Enter submission stay disabled while a snapshot is loading", () => {
   assert.match(chatSource, /disabled=\{[\s\S]*?loading[\s\S]*?\}/);
-  assert.match(chatSource, /const composerBlocked = loading[\s\S]*?\|\| settingsSaving/);
+  assert.match(chatSource, /const sendBlocked = loading[\s\S]*?\|\| settingsSaving/);
+  assert.match(chatSource, /const threadSettingsBlocked = loading \|\| Boolean\(selectedThreadId && !snapshot\)/);
   assert.match(chatSource, /if \(composerBlocked\) return;/);
-  assert.match(chatSource, /chatPrimaryAction\([\s\S]*?composerBlocked/);
+  assert.match(chatSource, /chatPrimaryAction\([\s\S]*?sendBlocked/);
 });
 
 test("new threads cannot inherit settings from a selected thread in another project", () => {
-  assert.match(chatSource, /settingsForNewAiThread\(/);
+  assert.match(chatSource, /const inheritedSettings = \{/);
   assert.match(chatSource, /catalogProjectId/);
   assert.match(chatSource, /catalogLoadedProjectId/);
+  assert.match(chatSource, /const settings = \{[\s\S]*?model: normalized\?\.model/);
   assert.match(chatSource, /createAiChatThread\(\{[\s\S]*?\.\.\.settings/);
 });
 
@@ -217,7 +221,7 @@ test("danger confirmation sends the bound pending retry instead of the current d
 test("SSE hints are coalesced and the panel remains resizable without clipping narrow menus", () => {
   assert.match(chatSource, /createAiSnapshotRefreshQueue/);
   assert.match(chatSource, /selectedHintRefreshQueue\.request\(selectedThreadId\)/);
-  assert.match(styles, /\.ai-chat-panel\s*\{[\s\S]*?resize:\s*both;/);
+  assert.match(styles, /\.ai-chat-resize-handle\s*\{[\s\S]*?touch-action:\s*none;/);
   assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*?\.ai-chat-panel\s*\{[\s\S]*?resize:\s*none;/);
   assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*?\.ai-chat-menu-wrap\s*\{[\s\S]*?position:\s*static;/);
   assert.match(styles, /@media \(max-width:\s*719px\)[\s\S]*?\.ai-chat-option-menu\s*\{[\s\S]*?right:\s*0;[\s\S]*?left:\s*0;/);

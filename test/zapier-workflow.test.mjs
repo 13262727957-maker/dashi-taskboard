@@ -15,7 +15,7 @@ test("workflow editing is a constrained vertical execution sequence instead of a
   assert.match(board, /normalizeWorkflowSnapshot/);
   assert.match(board, /deriveWorkflowLayout/);
   assert.match(board, /insertWorkflowNode/);
-  assert.match(board, /moveWorkflowNode/);
+  assert.match(board, /reorderPlanItem/);
   assert.match(board, /edgeTypes=\{EDGE_TYPES\}/);
   assert.match(board, /nodeOrigin=\{TOP_CENTER_ORIGIN\}/);
   assert.match(board, /nodesConnectable=\{false\}/);
@@ -215,10 +215,7 @@ test("deleting a condition removes its subtree, while conditions move as one sub
     board,
     /source\.data\.kind === "condition"\) return/,
   );
-  assert.match(
-    board,
-    /moveWorkflowNode\([\s\S]*?session\.sequenceRef/,
-  );
+  assert.match(board, /commitFlow\(nextNodes, deleted\.flow\)/);
 });
 
 test("condition fields expose only meaningful operators and value controls", () => {
