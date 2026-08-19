@@ -38,7 +38,7 @@ export function IdentityGate({ children }: { children: React.ReactNode }) {
         if (restoreIdentitySession()) {
           setMode("local");
         } else {
-          setMode("login");
+          setMode("local");
         }
       })
       .catch(() => {
