@@ -2266,7 +2266,20 @@ export function createTaskboardServer(options = {}) {
         const body = await readJson(request);
         assertPlainObject(body);
         assertAllowedKeys(body, new Set(["sourceProjectIds"]));
-        const project = database.getProject(projectId);
+        let project = database.getProject(projectId);
+        if (!project) {
+          const deviceProjects = await readDeviceProjects(resolved);
+          const deviceProject = deviceProjects.projects.find((candidate) => (
+            candidate.id === projectId || candidate.sourceProjectId === projectId
+          ));
+          if (deviceProject) {
+            project = database.createProject({
+              id: projectId,
+              name: deviceProject.name,
+              workspacePath: deviceProject.workspacePath,
+            });
+          }
+        }
         if (!project) throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
         const actor = actorFromRequest(request);
         const sourceProjectIds = body.sourceProjectIds === undefined

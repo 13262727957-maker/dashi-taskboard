@@ -2066,7 +2066,7 @@ function AppWorkspace() {
   const panelOnly = standalonePanelView !== null;
   const undoShortcut = navigator.userAgent.includes("Macintosh") ? "⌘Z" : "Ctrl+Z";
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
-  const [projectHomeView, setProjectHomeView] = useState<ProjectOverviewView>(standalonePanelView ?? (getIdentityUser() ? "overview" : "mine"));
+  const [projectHomeView, setProjectHomeView] = useState<ProjectOverviewView>(standalonePanelView ?? "mine");
   const [hostContext, setHostContext] = useState<HostContext | null>(null);
   const [developmentScan, setDevelopmentScan] = useState<DevelopmentScan>({ workspacePath: null, contexts: [] });
   const [developmentScanLoading, setDevelopmentScanLoading] = useState(false);
@@ -2786,7 +2786,7 @@ function AppWorkspace() {
 
   const summarizeProjectWork = useCallback(async (project: ProjectChoice) => {
     try {
-      const localProjectId = project.code ?? project.id;
+      const localProjectId = project.sourceProjectId ?? project.id;
       const sourceProjectIds = [project.id, project.sourceProjectId]
         .filter((value): value is string => Boolean(value && value !== localProjectId));
       const result = await summarizeLocalProject(localProjectId, sourceProjectIds);
