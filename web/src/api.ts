@@ -31,6 +31,7 @@ const DEFAULT_USER_ACTOR: ActorIdentity = {
 
 const IDENTITY_SESSION_KEY = "taskboard.identity.session";
 const IDENTITY_USER_KEY = "taskboard.identity.user";
+const IDENTITY_REMEMBERED_USER_KEY = "taskboard.identity.rememberedUser";
 
 interface IdentityUser {
   id: string;
@@ -67,6 +68,23 @@ function identitySession(): string | null {
   return readStorage(IDENTITY_SESSION_KEY);
 }
 
+export function getRememberedIdentity(): { employeeNo: string; displayName: string } | null {
+  const raw = readStorage(IDENTITY_REMEMBERED_USER_KEY);
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as { employeeNo?: unknown; displayName?: unknown };
+    if (typeof value.employeeNo !== "string" || typeof value.displayName !== "string") return null;
+    if (!value.employeeNo.trim() || !value.displayName.trim()) return null;
+    return { employeeNo: value.employeeNo, displayName: value.displayName };
+  } catch {
+    return null;
+  }
+}
+
+export function clearRememberedIdentity(): void {
+  window.localStorage.removeItem(IDENTITY_REMEMBERED_USER_KEY);
+}
+
 export function getIdentityUser(): IdentityUser | null {
   const raw = readStorage(IDENTITY_USER_KEY);
   if (!raw) return null;
@@ -76,6 +94,10 @@ export function getIdentityUser(): IdentityUser | null {
 export function setIdentitySession(session: { token: string; user: IdentityUser }): void {
   window.localStorage.setItem(IDENTITY_SESSION_KEY, session.token);
   window.localStorage.setItem(IDENTITY_USER_KEY, JSON.stringify(session.user));
+  window.localStorage.setItem(IDENTITY_REMEMBERED_USER_KEY, JSON.stringify({
+    employeeNo: session.user.employeeNo,
+    displayName: session.user.displayName,
+  }));
   setCurrentUserActor({
     type: "user",
     id: session.user.id,

@@ -4,6 +4,7 @@ import {
   ApiError,
   clearIdentitySession,
   getIdentityStatus,
+  getRememberedIdentity,
   registerDeveloperIdentity,
   restoreIdentitySession,
   setIdentitySession,
@@ -28,7 +29,7 @@ export function IdentityGate({ children }: { children: React.ReactNode }) {
     if (embedded) return;
     let cancelled = false;
     void getIdentityStatus()
-      .then((status) => {
+      .then(async (status) => {
         if (cancelled) return;
         if (!status.configured) {
           clearIdentitySession();
@@ -38,6 +39,10 @@ export function IdentityGate({ children }: { children: React.ReactNode }) {
         if (restoreIdentitySession()) {
           setMode("local");
         } else {
+          const remembered = getRememberedIdentity();
+          if (remembered) {
+            setIdentitySession(await registerDeveloperIdentity(remembered.employeeNo, remembered.displayName));
+          }
           setMode("local");
         }
       })

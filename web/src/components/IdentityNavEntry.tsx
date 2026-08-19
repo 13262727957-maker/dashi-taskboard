@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 
 import {
   ApiError,
+  clearRememberedIdentity,
   clearIdentitySession,
   connectIdentityDatabase,
   getIdentityStatus,
   getIdentityUser,
+  getRememberedIdentity,
   registerDeveloperIdentity,
   setIdentitySession,
   type IdentityStatus,
@@ -18,8 +20,8 @@ function errorMessage(error: unknown): string {
 
 export function IdentityNavEntry() {
   const [open, setOpen] = useState(false);
-  const [employeeNo, setEmployeeNo] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [employeeNo, setEmployeeNo] = useState(() => getRememberedIdentity()?.employeeNo ?? "");
+  const [displayName, setDisplayName] = useState(() => getRememberedIdentity()?.displayName ?? "");
   const [identityStatus, setIdentityStatus] = useState<IdentityStatus | null>(null);
   const [statusBusy, setStatusBusy] = useState(false);
   const [host, setHost] = useState("192.188.106.61");
@@ -35,7 +37,7 @@ export function IdentityNavEntry() {
   const identityReady = Boolean(identityStatus?.configured && identityStatus.initialized);
 
   useEffect(() => {
-    if (!open || user) return;
+    if (!open) return;
     const controller = new AbortController();
     setStatusBusy(true);
     getIdentityStatus(controller.signal)
@@ -46,7 +48,7 @@ export function IdentityNavEntry() {
       })
       .finally(() => setStatusBusy(false));
     return () => controller.abort();
-  }, [open, user]);
+  }, [open]);
 
   const connectDatabase = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -64,6 +66,11 @@ export function IdentityNavEntry() {
       });
       setIdentityStatus(result.status);
       setDatabasePassword("");
+      const remembered = getRememberedIdentity() ?? user;
+      if (remembered) {
+        setIdentitySession(await registerDeveloperIdentity(remembered.employeeNo, remembered.displayName));
+        window.location.reload();
+      }
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -87,6 +94,7 @@ export function IdentityNavEntry() {
 
   const switchAccount = () => {
     clearIdentitySession();
+    clearRememberedIdentity();
     setOpen(true);
     setEmployeeNo("");
     setDisplayName("");
@@ -106,10 +114,10 @@ export function IdentityNavEntry() {
         <div className="identity-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
           <section className="identity-dialog" role="dialog" aria-modal="true" aria-labelledby="identity-dialog-title">
             <div className="identity-dialog-heading">
-              <div><h2 id="identity-dialog-title">{user ? "账号登记" : identityReady ? "账号登记" : "连接公司数据库"}</h2><p>{user ? "当前账号已绑定本地任务面板。" : identityReady ? "登记一次后，之后打开面板会自动进入。" : "先连接 SQL Server 公司库，连接成功后再登记账号。"}</p></div>
+              <div><h2 id="identity-dialog-title">{user && identityReady ? "账号登记" : identityReady ? "账号登记" : "连接公司数据库"}</h2><p>{user && identityReady ? "当前账号已绑定本地任务面板。" : identityReady ? "登记一次后，之后打开面板会自动进入。" : "先连接 SQL Server 公司库；已登记过账号会自动进入。"}</p></div>
               <button className="identity-dialog-close" type="button" aria-label="关闭" onClick={() => setOpen(false)}>×</button>
             </div>
-            {user ? (
+            {user && identityReady ? (
               <div className="identity-current-account">
                 <strong>{user.displayName}</strong>
                 <span>工号 {user.employeeNo}</span>
