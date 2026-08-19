@@ -418,6 +418,13 @@ export async function createIdentityProject(input: {
   return data.project;
 }
 
+export async function deleteIdentityProject(projectId: string): Promise<{ id: string; name: string }> {
+  const data = await request<{ project: { id: string; name: string } }>(`/api/identity/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+  return data.project;
+}
+
 export async function getTaskboardMetadata(signal?: AbortSignal): Promise<TaskboardMetadata> {
   return request<TaskboardMetadata>("/api/meta", { signal });
 }

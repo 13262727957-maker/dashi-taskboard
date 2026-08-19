@@ -1664,6 +1664,20 @@ export function createTaskboardServer(options = {}) {
         return methodNotAllowed(response, ["GET", "POST"]);
       }
 
+      const identityProjectRoute = pathname.match(/^\/api\/identity\/projects\/([^/]+)$/);
+      if (identityProjectRoute) {
+        const user = await identitySessionFromRequest(request, identity);
+        const projectId = decodeRouteSegment(identityProjectRoute[1], "Project id");
+        if (request.method === "DELETE") {
+          try {
+            return sendJson(response, 200, { project: await identity.archiveProject(user.id, projectId) });
+          } catch (error) {
+            throw new ApiError(400, "PROJECT_DELETE_FAILED", error.message);
+          }
+        }
+        return methodNotAllowed(response, ["DELETE"]);
+      }
+
       if (pathname === "/api/identity/task-sync-logs") {
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
         const user = await identitySessionFromRequest(request, identity);

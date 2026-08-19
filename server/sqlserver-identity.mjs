@@ -493,6 +493,51 @@ export class SqlServerIdentityStore {
     }
   }
 
+  async archiveProject(userId, projectId) {
+    const pool = await this.pool();
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    try {
+      const projectResult = await transaction.request()
+        .input("projectId", sql.UniqueIdentifier, projectId)
+        .input("userId", sql.UniqueIdentifier, userId)
+        .query(`
+          SELECT p.project_id, p.project_name
+          FROM taskboard.projects p
+          INNER JOIN taskboard.project_members pm
+            ON pm.project_id = p.project_id
+           AND pm.user_id = @userId
+           AND pm.project_role = N'owner'
+           AND pm.is_active = 1
+          WHERE p.project_id = @projectId
+            AND p.is_archived = 0;
+        `);
+      const project = projectResult.recordset[0];
+      if (!project) throw new Error("只有项目负责人可以删除项目，或项目不存在");
+
+      await transaction.request()
+        .input("projectId", sql.UniqueIdentifier, projectId)
+        .query(`
+          UPDATE taskboard.projects
+          SET is_archived = 1,
+              updated_at = SYSUTCDATETIME()
+          WHERE project_id = @projectId;
+
+          UPDATE taskboard.project_members
+          SET is_active = 0
+          WHERE project_id = @projectId;
+        `);
+      await transaction.commit();
+      return {
+        id: project.project_id,
+        name: project.project_name,
+      };
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  }
+
   async listProjectMembers(userId, projectId) {
     const pool = await this.pool();
     const result = await pool.request()

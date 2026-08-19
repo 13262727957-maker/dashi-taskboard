@@ -25,6 +25,7 @@ import {
   createProject as createProjectRequest,
   createTask as createTaskRequest,
   createIdentityProject,
+  deleteIdentityProject,
   addIdentityProjectMember,
   getTaskboardRevision,
   getWorkflowWorkspace,
@@ -183,7 +184,7 @@ function localProjectKey(project: Pick<ProjectChoice, "id" | "sourceProjectId">)
   return project.sourceProjectId ?? project.id;
 }
 
-type ProjectOverviewView = "overview" | "database-progress" | "team-board" | "tasks" | "members" | "analytics" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
+type ProjectOverviewView = "overview" | "database-progress" | "tasks" | "members" | "analytics" | "mine" | "member-config" | "sync-log" | "attention" | "codex" | "activity";
 type WorkspaceRole = "owner" | "developer" | "none";
 
 interface ProjectProgressRow {
@@ -920,6 +921,7 @@ function ProjectOverviewDemo({
   const [bindBusy, setBindBusy] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [summaryBusyProjectIds, setSummaryBusyProjectIds] = useState<Set<string>>(new Set());
+  const [deleteBusyProjectIds, setDeleteBusyProjectIds] = useState<Set<string>>(new Set());
   const [joinProjectId, setJoinProjectId] = useState("");
   const [joinBusy, setJoinBusy] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
@@ -1240,6 +1242,30 @@ function ProjectOverviewDemo({
       setBindBusy(false);
     }
   };
+  const deleteOwnedProject = async (project: ProjectChoice) => {
+    const projectId = teamProjectIdFor(project);
+    if (!projectId || deleteBusyProjectIds.has(projectId)) return;
+    if (!window.confirm(`删除项目“${project.name}”？\n\n只会将任务面板中的团队项目归档，并移除项目成员关系；不会删除公司员工源数据，也不会删除本地 Codex 项目。`)) return;
+    setDeleteBusyProjectIds((current) => new Set(current).add(projectId));
+    try {
+      await deleteIdentityProject(projectId);
+      onPreviewAction(`${project.name} 已删除。`);
+      if (configProjectId === projectId) {
+        setConfigProjectId("");
+        setConfigMembers([]);
+        setMemberDialogProjectId("");
+      }
+      await onRefreshProjects();
+    } catch (error) {
+      onPreviewAction(error instanceof Error ? error.message : "删除项目失败");
+    } finally {
+      setDeleteBusyProjectIds((current) => {
+        const next = new Set(current);
+        next.delete(projectId);
+        return next;
+      });
+    }
+  };
   const mappedProjects = projects.filter((project) => project.workspacePath || deviceWorkspacePaths[project.id]);
   const totalIssues = projects.reduce((sum, project) => sum + project.issueCount, 0);
   const automationReady = mappedProjects.filter((project) => project.inCodex).length;
@@ -1373,7 +1399,6 @@ function ProjectOverviewDemo({
   const viewTitles: Record<ProjectOverviewView, string> = {
     overview: "项目进度总览",
     "database-progress": "公司项目进度",
-    "team-board": "团队项目看板",
     tasks: "任务卡片",
     members: "成员负载",
     analytics: "统计分析",
@@ -1387,7 +1412,6 @@ function ProjectOverviewDemo({
   const viewDescriptions: Record<ProjectOverviewView, string> = {
     overview: "查看项目健康状态、任务卡片进度和需要关注的项目。",
     "database-progress": "只展示公司数据库中已经创建出来的项目和任务推进状态。",
-    "team-board": "只展示公司库中已经创建的团队项目及其任务推进状态。",
     tasks: "按项目、负责人和任务状态查看跨项目进度。",
     members: "查看当前项目每位成员的任务数量和当前队列。",
     analytics: "按近 3 天、近 7 天和近 30 天分析趋势、积压、负载和风险洞察。",
@@ -1834,19 +1858,6 @@ function ProjectOverviewDemo({
           onOpenProject={onOpenProject}
           onRefresh={onRefreshProjects}
         />
-      ) : overviewView === "team-board" ? (
-        <div className="overview-layout overview-team-board-layout">
-          <div className="overview-main">
-            {teamProjects.length > 0 ? (
-              <TeamProjectBoard rows={projectProgressRows} onOpenProject={onOpenProject} />
-            ) : (
-              <div className="project-home-empty">
-                <h2>还没有团队项目</h2>
-                <p>在配置中心创建团队项目后，这里会单独展示它们的进度。</p>
-              </div>
-            )}
-          </div>
-        </div>
       ) : teamProjects.length > 0 && overviewView !== "overview" ? (
         <section className={`overview-detail-page${overviewView === "member-config" ? " overview-config-detail-page" : ""}`} aria-labelledby={hideDetailHeader ? undefined : "overview-detail-title"} aria-label={hideDetailHeader ? viewTitles[overviewView] : undefined}>
           {!hideDetailHeader && (
@@ -1913,7 +1924,11 @@ function ProjectOverviewDemo({
                 <section className="overview-panel overview-config-section">
                   <div className="overview-panel-heading"><div><h2>我负责的项目</h2><p>从本地项目创建团队项目，并在项目内配置负责人和成员。</p></div><button className="overview-panel-open-button" type="button" onClick={() => setCreateDialogOpen(true)}>创建团队项目</button></div>
                   <div className="overview-config-project-list">
-                    {projects.filter((project) => project.role === "owner").map((project) => <div className="overview-config-project-card" key={project.id}><div><strong>{project.name}</strong><small>负责人项目 · {project.issueCount} 张任务卡</small></div><div className="overview-mine-project-actions"><button className="overview-project-summary-button" type="button" onClick={() => { setConfigProjectId(teamProjectIdFor(project)); setMemberDialogProjectId(teamProjectIdFor(project)); setConfigMembers([]); }}>配置人员</button><button className="overview-project-summary-button" type="button" onClick={() => onOpenProject({ ...project, inCodex: false, persisted: true })}>查看项目</button></div></div>)}
+                    {projects.filter((project) => project.role === "owner").map((project) => {
+                      const projectId = teamProjectIdFor(project);
+                      const deleteBusy = deleteBusyProjectIds.has(projectId);
+                      return <div className="overview-config-project-card" key={project.id}><div><strong>{project.name}</strong><small>负责人项目 · {project.issueCount} 张任务卡</small></div><div className="overview-mine-project-actions"><button className="overview-project-summary-button" type="button" onClick={() => { setConfigProjectId(projectId); setMemberDialogProjectId(projectId); setConfigMembers([]); }}>配置人员</button><button className="overview-project-summary-button" type="button" onClick={() => onOpenProject({ ...project, inCodex: false, persisted: true })}>查看项目</button><button className="overview-project-summary-button is-danger" type="button" disabled={deleteBusy} onClick={() => void deleteOwnedProject(project)}>{deleteBusy ? "删除中…" : "删除项目"}</button></div></div>;
+                    })}
                     {projects.filter((project) => project.role === "owner").length === 0 && <div className="overview-inline-empty">暂时没有我负责的项目，请点击“创建团队项目”。</div>}
                   </div>
                   {(createDialogOpen || memberDialogProjectId) && <div className="overview-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setCreateDialogOpen(false); setMemberDialogProjectId(""); } }}><section className="overview-dialog overview-dialog-wide" role="dialog" aria-modal="true"><div className="overview-dialog-heading"><h3>{createDialogOpen ? "创建团队项目" : "配置项目人员"}</h3><button type="button" onClick={() => { setCreateDialogOpen(false); setMemberDialogProjectId(""); }} aria-label="关闭">×</button></div>{createDialogOpen ? <><p>选择 Codex 项目后创建团队项目，你会自动成为第一位负责人。</p><select value={selectedLocalProjectId} onChange={(event) => setSelectedLocalProjectId(event.target.value)} aria-label="选择 Codex 项目"><option value="">选择 Codex 项目</option>{deviceProjects.map((project) => <option value={project.id} key={project.id}>{project.name} · Codex</option>)}</select><div className="overview-dialog-actions"><button type="button" onClick={() => setCreateDialogOpen(false)}>取消</button><button className="overview-panel-open-button overview-claim-project-button" type="button" disabled={bindBusy || !selectedLocalProjectId} onClick={() => void becomeOwner()}>{bindBusy ? "创建中…" : "确认创建"}</button></div></> : <><p>项目负责人已经确定，只需选择并添加开发成员。</p><div className="overview-config-add-row"><select value={selectedEmployeeNo} onChange={(event) => setSelectedEmployeeNo(event.target.value)} aria-label="选择开发成员">{employeeDirectory.map((employee) => <option value={employee.employeeNo} key={employee.employeeNo}>{employee.displayName}</option>)}</select><button className="overview-panel-open-button" type="button" disabled={configBusy || !selectedEmployeeNo} onClick={() => void addMemberFromDirectory()}>{configBusy ? "添加中…" : "添加成员"}</button></div><div className="overview-config-list">{configMembers.map((member) => <div className="overview-config-row" key={member.userId}><span className="overview-config-avatar">{member.displayName.slice(0, 1)}</span><div><strong>{member.displayName}</strong><small>{member.projectRole === "owner" ? "项目负责人（固定）" : "开发成员"}</small></div>{member.projectRole === "developer" && <button className="overview-member-remove-button" type="button" disabled={configBusy} onClick={() => void removeMember(member)}>移除</button>}</div>)}</div></>}</section></div>}
@@ -3536,22 +3551,6 @@ function AppWorkspace() {
             <button className={`nav-item${!selectedProjectId && projectHomeView === "sync-log" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("sync-log"); }}>
               <span className="nav-glyph" aria-hidden="true"><LinearIcon name="recurrence" /></span>
               同步日志
-            </button>
-          </div>
-
-          <div className="overview-sidebar-nav" aria-label="公司项目进度导航">
-            <span className="nav-label">看板</span>
-            <button className={`nav-item${!selectedProjectId && projectHomeView === "database-progress" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("database-progress"); }}>
-              <span className="nav-glyph" aria-hidden="true"><LinearIcon name="project" /></span>
-              公司项目进度
-            </button>
-          </div>
-
-          <div className="overview-sidebar-nav" aria-label="团队项目导航">
-            <span className="nav-label">团队</span>
-            <button className={`nav-item${!selectedProjectId && projectHomeView === "team-board" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("team-board"); }}>
-              <span className="nav-glyph" aria-hidden="true"><LinearIcon name="project" /></span>
-              团队看板
             </button>
           </div>
 
