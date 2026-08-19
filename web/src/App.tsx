@@ -2066,7 +2066,7 @@ function AppWorkspace() {
   const panelOnly = standalonePanelView !== null;
   const undoShortcut = navigator.userAgent.includes("Macintosh") ? "⌘Z" : "Ctrl+Z";
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
-  const [projectHomeView, setProjectHomeView] = useState<ProjectOverviewView>(standalonePanelView ?? "overview");
+  const [projectHomeView, setProjectHomeView] = useState<ProjectOverviewView>(standalonePanelView ?? (getIdentityUser() ? "overview" : "mine"));
   const [hostContext, setHostContext] = useState<HostContext | null>(null);
   const [developmentScan, setDevelopmentScan] = useState<DevelopmentScan>({ workspacePath: null, contexts: [] });
   const [developmentScanLoading, setDevelopmentScanLoading] = useState(false);
