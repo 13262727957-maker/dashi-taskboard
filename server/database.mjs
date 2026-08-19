@@ -203,6 +203,18 @@ function projectPrefix(projectId) {
   return (prefix || "TASK").slice(0, 12);
 }
 
+const LOCAL_TASK_STATUSES = new Set(["backlog", "todo", "in_progress", "in_review", "blocked", "done", "canceled"]);
+const LOCAL_TASK_PRIORITIES = new Set(["none", "urgent", "high", "medium", "low"]);
+
+function normalizeMirrorStatus(value) {
+  return LOCAL_TASK_STATUSES.has(value) ? value : "todo";
+}
+
+function normalizeMirrorPriority(value) {
+  if (value === "normal") return "medium";
+  return LOCAL_TASK_PRIORITIES.has(value) ? value : "medium";
+}
+
 export class TaskboardDatabase {
   constructor(filename) {
     mkdirSync(path.dirname(filename), { recursive: true });
@@ -429,6 +441,16 @@ export class TaskboardDatabase {
         error TEXT,
         submitted_by TEXT,
         submitted_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS task_remote_mirrors (
+        local_task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        local_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        team_project_id TEXT NOT NULL,
+        remote_task_id TEXT NOT NULL,
+        remote_updated_at TEXT,
+        mirrored_at TEXT NOT NULL,
+        UNIQUE(team_project_id, remote_task_id)
       );
 
     `);
@@ -727,6 +749,119 @@ export class TaskboardDatabase {
       throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${id}' does not exist`);
     }
     return this.getProject(id);
+  }
+
+  mirrorRemoteProjectTasks(localProject, teamProjectId, remoteTasks) {
+    const timestamp = now();
+    const projectId = localProject.id;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      let project = this.database.prepare("SELECT id FROM projects WHERE id = ?").get(projectId);
+      if (!project) {
+        this.database.prepare(`
+          INSERT INTO projects (id, name, workspace_path, next_task_number, created_at, updated_at)
+          VALUES (?, ?, ?, 1, ?, ?)
+        `).run(projectId, localProject.name, localProject.workspacePath ?? null, timestamp, timestamp);
+      } else if (localProject.workspacePath) {
+        this.database.prepare(`
+          UPDATE projects
+          SET workspace_path = COALESCE(workspace_path, ?), updated_at = ?
+          WHERE id = ?
+        `).run(localProject.workspacePath, timestamp, projectId);
+      }
+
+      let mirrored = 0;
+      let updated = 0;
+      for (const remoteTask of remoteTasks) {
+        const taskId = String(remoteTask.id);
+        const existing = this.database.prepare("SELECT id, updated_at FROM tasks WHERE id = ?").get(taskId);
+        const identifier = `${projectPrefix(projectId)}-${String(remoteTask.taskKey ?? taskId).replace(/[^A-Za-z0-9-]+/g, "").slice(0, 48) || taskId.slice(0, 8)}`;
+        const status = normalizeMirrorStatus(remoteTask.status);
+        const priority = normalizeMirrorPriority(remoteTask.priority);
+        const createdAt = remoteTask.createdAt ?? timestamp;
+        const updatedAt = remoteTask.updatedAt ?? timestamp;
+        const creator = remoteTask.createdBy ?? { id: "company", name: "公司库" };
+        const assignee = remoteTask.assignee ?? { id: "unassigned", name: "未分配" };
+        if (existing) {
+          this.database.prepare(`
+            UPDATE tasks
+            SET title = ?, description = ?, status = ?, priority = ?,
+                creator_id = ?, creator_name = ?,
+                assignee_id = ?, assignee_name = ?,
+                version = MAX(version, ?),
+                updated_at = ?
+            WHERE id = ?
+          `).run(
+            remoteTask.title,
+            remoteTask.description ?? "",
+            status,
+            priority,
+            String(creator.id ?? "company"),
+            String(creator.name ?? creator.id ?? "公司库"),
+            String(assignee.id ?? "unassigned"),
+            String(assignee.name ?? assignee.id ?? "未分配"),
+            Number(remoteTask.version ?? 1),
+            updatedAt,
+            taskId,
+          );
+          updated += 1;
+        } else {
+          this.database.prepare(`
+            INSERT INTO tasks (
+              id, identifier, project_id, title, description, status, priority, labels,
+              sort_order, thread_id, creator_type, creator_id, creator_name, creator_avatar_url,
+              assignee_type, assignee_id, assignee_name, assignee_avatar_url,
+              workflow_id, git_branch, worktree_path, worktree_branch,
+              due_date, recurrence_interval, recurrence_unit,
+              archived_at, version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, NULL, 'user', ?, ?, NULL, 'user', ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)
+          `).run(
+            taskId,
+            identifier,
+            projectId,
+            remoteTask.title,
+            remoteTask.description ?? "",
+            status,
+            priority,
+            mirrored + updated + 1000,
+            String(creator.id ?? "company"),
+            String(creator.name ?? creator.id ?? "公司库"),
+            String(assignee.id ?? "unassigned"),
+            String(assignee.name ?? assignee.id ?? "未分配"),
+            Number(remoteTask.version ?? 1),
+            createdAt,
+            updatedAt,
+          );
+          mirrored += 1;
+        }
+        this.database.prepare(`
+          INSERT INTO task_remote_mirrors (
+            local_task_id, local_project_id, team_project_id, remote_task_id, remote_updated_at, mirrored_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(local_task_id) DO UPDATE SET
+            local_project_id = excluded.local_project_id,
+            team_project_id = excluded.team_project_id,
+            remote_task_id = excluded.remote_task_id,
+            remote_updated_at = excluded.remote_updated_at,
+            mirrored_at = excluded.mirrored_at
+        `).run(taskId, projectId, teamProjectId, taskId, updatedAt, timestamp);
+      }
+      this.database.prepare("UPDATE projects SET updated_at = ? WHERE id = ?").run(timestamp, projectId);
+      this.database.exec("COMMIT");
+      return { mirrored, updated, total: remoteTasks.length, project: this.getProject(projectId) };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  excludeMirroredTasks(localProjectId, tasks) {
+    if (!localProjectId || tasks.length === 0) return tasks;
+    const rows = this.database.prepare(`
+      SELECT local_task_id FROM task_remote_mirrors WHERE local_project_id = ?
+    `).all(localProjectId);
+    const mirroredIds = new Set(rows.map((row) => row.local_task_id));
+    return tasks.filter((task) => !mirroredIds.has(task.sourceId ?? task.id));
   }
 
   saveProjectTeamBinding(input) {

@@ -35,6 +35,7 @@ import {
   getProjectTeamBinding,
   importIdentityTasks,
   joinIdentityProject,
+  mirrorIdentityTasksToLocal,
   removeIdentityProjectMember,
   saveProjectTeamBinding,
   listIdentityProjects,
@@ -953,6 +954,15 @@ function ProjectOverviewDemo({
     let cancelled = false;
     const codexProjects = projects.filter((project) => project.inCodex);
     void Promise.all(codexProjects.map(async (project) => {
+      const teamProjectId = project.teamProjectId;
+      const localProjectId = localProjectKey(project);
+      if (identityMode && teamProjectId) {
+        await mirrorIdentityTasksToLocal(teamProjectId, {
+          id: localProjectId,
+          name: project.name,
+          workspacePath: project.workspacePath,
+        }).catch(() => null);
+      }
       for (const projectId of localTaskProjectIds(project, projects, deviceProjects)) {
         const tasks = await listTasks(projectId).catch(() => []);
         if (tasks.length > 0) return tasks;
@@ -972,7 +982,7 @@ function ProjectOverviewDemo({
         }
       });
     return () => { cancelled = true; };
-  }, [deviceProjects, projects]);
+  }, [deviceProjects, identityMode, projects]);
   useEffect(() => {
     if (!getIdentityUser()) {
       setOverviewMembers([]);

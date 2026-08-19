@@ -287,6 +287,16 @@ export async function saveProjectTeamBinding(input: {
   });
 }
 
+export async function mirrorIdentityTasksToLocal(
+  projectId: string,
+  localProject: { id: string; name: string; workspacePath: string | null },
+): Promise<{ mirrored: number; updated: number; total: number }> {
+  return request(`/api/identity/projects/${encodeURIComponent(projectId)}/tasks/mirror-local`, {
+    method: "POST",
+    body: JSON.stringify({ localProject }),
+  });
+}
+
 export async function summarizeLocalProject(projectId: string, sourceProjectIds: string[] = []): Promise<{ created: number; message: string }> {
   return request(`/api/projects/${encodeURIComponent(projectId)}/summaries`, {
     method: "POST",

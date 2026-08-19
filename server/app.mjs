@@ -1785,13 +1785,14 @@ export function createTaskboardServer(options = {}) {
           };
         });
         try {
-          const result = await identity.importProjectTasks(user.id, projectId, tasks, { localProjectId });
+          const tasksToUpload = localProjectId ? database.excludeMirroredTasks(localProjectId, tasks) : tasks;
+          const result = await identity.importProjectTasks(user.id, projectId, tasksToUpload, { localProjectId });
           if (localProjectId) {
             database.recordProjectSyncStatus({
               localProjectId,
               teamProjectId: projectId,
               status: "success",
-              taskCount: tasks.length,
+              taskCount: tasksToUpload.length,
               imported: result.imported,
               updated: result.updated + (result.deduped ?? 0),
               failed: 0,
@@ -1817,6 +1818,25 @@ export function createTaskboardServer(options = {}) {
           }
           throw new ApiError(400, "TASK_IMPORT_FAILED", error.message);
         }
+      }
+
+      const identityTaskMirrorRoute = pathname.match(/^\/api\/identity\/projects\/([^/]+)\/tasks\/mirror-local$/);
+      if (identityTaskMirrorRoute) {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const user = await identitySessionFromRequest(request, identity);
+        const projectId = decodeRouteSegment(identityTaskMirrorRoute[1], "Project id");
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["localProject"]));
+        assertPlainObject(body.localProject);
+        assertAllowedKeys(body.localProject, new Set(["id", "name", "workspacePath"]));
+        const localProject = {
+          id: validateProjectId(body.localProject.id),
+          name: stringField(body.localProject.name, "localProject.name", { required: true, maxLength: 120 }),
+          workspacePath: stringField(body.localProject.workspacePath ?? null, "localProject.workspacePath", { nullable: true, maxLength: 4096 }),
+        };
+        const tasks = await identity.listProjectTasks(user.id, projectId);
+        return sendJson(response, 200, database.mirrorRemoteProjectTasks(localProject, projectId, tasks));
       }
 
       const localProjectBindingRoute = pathname.match(/^\/api\/local\/project-bindings\/([^/]+)$/);
