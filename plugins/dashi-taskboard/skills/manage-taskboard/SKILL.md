@@ -86,16 +86,25 @@ Only execute implementation work when the user clearly asks to start/fix/impleme
 When the user asks to scan previous, prior, or historical project conversations and turn them into task cards, run a standard scan before creating or updating issues:
 
 1. Gather relevant prior project conversations and group repeated discussion into coherent work items.
-2. For each candidate work item, run a lightweight repository evidence scan using likely feature, route, component, migration, test, config, and API keywords. Prefer `rg`/`rg --files`; do not read broad unrelated files unless the scan points to them.
-3. Classify status from the strongest evidence, not conversation alone:
-   - `backlog`: only an idea/request is present, with no clear commitment or repository evidence.
-   - `todo`: the work is committed or partially present, but gaps, acceptance criteria, or verification remain unclear.
-   - `in_progress`: recent implementation is active and not yet self-verified.
-   - `in_review`: implementation evidence plus self-verification exists, but the user has not accepted it.
-   - `done`: the user explicitly confirms acceptance or asks to mark complete.
-   - `blocked`: progress cannot continue because required environment, credentials, data, dependency, or decision is missing.
-4. Record evidence in each issue description or a comment using compact tags such as `evidence:conversation`, `evidence:code`, `evidence:test`, `evidence:runtime`, `acceptance:pending`, and `confidence:low|medium|high`.
-5. If evidence conflicts, choose the less-final status and describe the uncertainty. Prefer `todo` for "implemented but possibly incomplete"; use `in_review` only when self-verification evidence is present.
+2. Treat old work as already-resolved until evidence says otherwise. Historical scans should not pile completed work into `todo` just because the user never said "done"; real users often move to the next topic silently after accepting a delivered result.
+3. For each candidate work item, run a lightweight repository evidence scan using likely feature, route, component, migration, test, config, and API keywords. Prefer `rg`/`rg --files`; do not read broad unrelated files unless the scan points to them. When code exists, classify from code/runtime evidence first and use conversation only to find requirement origin, later rejection, replacement, or acceptance.
+4. When there is no repository code for the project or the requested area, classify from the conversation evidence chain in this order: explicit user acceptance, implicit acceptance, assistant delivery, active work, committed request, idea only.
+5. Classify status from the strongest current evidence:
+   - `done`: explicit user acceptance exists; OR repository/runtime evidence shows the requested behavior exists and no later user rejection/rollback appears; OR in conversation-only scans, the assistant delivered the work and the user then switched to a new unrelated topic without later rejecting the delivered result. Record implicit cases with `evidence:implicit-acceptance`.
+   - `in_review`: delivery or implementation evidence exists, but the user continues discussing the same feature with unresolved adjustments, asks "why is it still...", says it is not right yet, or the scan cannot tell whether a later related comment was satisfied.
+   - `todo`: the user clearly requested the work, but no delivery/code/runtime evidence exists; OR implementation is only partial and a concrete remaining gap is still present. Do not use `todo` for delivered work merely because there is no explicit user acceptance.
+   - `in_progress`: the conversation shows active work in progress and no delivery outcome, or repo evidence shows recent local changes without verification.
+   - `blocked`: progress cannot continue because required environment, credentials, data, permission, network access, or a user decision is missing.
+   - `canceled`: the user explicitly withdrew the request, replaced it with a different direction, said "撤回/不要/说错了/不是这个", or later work superseded the original requirement.
+   - `backlog`: only an idea, question, or possible direction is present, with no clear user decision to do it.
+6. Decide whether a later user message is a new topic or same-topic rework:
+   - Treat as a new topic when the subject area changes, such as UI polish -> installer, project overview -> database connection, statistics -> uninstall/reinstall, or skill packaging -> panel design. If assistant delivery happened before this switch and there is no later rejection, mark the earlier work `done` with `evidence:implicit-acceptance`.
+   - Treat as same-topic rework when the user says the same feature is wrong, ugly, too wide, not scrolling, still old, missing data, not the requested direction, or asks for another adjustment to the same surface. Keep that work `in_review` or split a new child `todo` for the adjustment.
+7. Preserve hierarchy instead of reopening whole features:
+   - If the main feature was delivered and later comments are polish or refinements, keep the parent `done`/`in_review` based on acceptance evidence and create/update child cards for the specific refinements.
+   - If a delivered approach is replaced, mark the old child `canceled` or `superseded` in the description and create/update the new child.
+8. Record compact evidence in each issue description or comment, such as `evidence:conversation`, `evidence:code`, `evidence:test`, `evidence:runtime`, `evidence:delivery`, `evidence:implicit-acceptance`, `acceptance:explicit|implicit|pending`, and `confidence:low|medium|high`.
+9. If evidence conflicts, avoid dumping the item into `todo`. Prefer `in_review` for delivered-but-questionable work, `canceled` for replaced work, and `todo` only when a concrete unimplemented gap remains.
 
 ## Workflow
 
