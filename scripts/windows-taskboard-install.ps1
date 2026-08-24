@@ -31,7 +31,12 @@ $escapedRunnerPath = $RunnerPath.Replace("'", "''")
 $hiddenCommand = "& { & '$escapedRunnerPath' }"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$hiddenCommand`"" -WorkingDirectory $ProjectRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances Ignore -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+$settings = New-ScheduledTaskSettingsSet `
+  -MultipleInstances Ignore `
+  -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+  -RestartCount 3 `
+  -RestartInterval (New-TimeSpan -Minutes 1) `
+  -StartWhenAvailable
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Starts the local Dashi Taskboard service after Windows sign-in." -RunLevel Limited -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
 

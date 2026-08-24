@@ -402,6 +402,57 @@ export class SqlServerIdentityStore {
     }));
   }
 
+  async listPublicProjectProgress() {
+    const pool = await this.pool();
+    const result = await pool.request().query(`
+      WITH ranked_tasks AS (
+        SELECT
+          t.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY t.project_id,
+              COALESCE(t.source_fingerprint, CONVERT(VARCHAR(64), HASHBYTES('SHA2_256', CONCAT(LTRIM(RTRIM(t.title)), N'\n', LTRIM(RTRIM(COALESCE(t.description, N''))))), 2))
+            ORDER BY t.updated_at DESC, t.task_id
+          ) AS dedupe_rank
+        FROM taskboard.task_cards t
+      )
+      SELECT
+        p.project_id,
+        p.project_code,
+        p.project_name,
+        p.workspace_path,
+        owner.display_name AS owner_name,
+        COUNT(t.task_id) AS total_count,
+        SUM(CASE WHEN t.status = N'done' THEN 1 ELSE 0 END) AS done_count,
+        SUM(CASE WHEN t.status = N'in_progress' THEN 1 ELSE 0 END) AS active_count,
+        SUM(CASE WHEN t.status = N'in_review' THEN 1 ELSE 0 END) AS review_count,
+        SUM(CASE WHEN t.status = N'blocked' THEN 1 ELSE 0 END) AS blocked_count,
+        MAX(t.updated_at) AS task_updated_at,
+        p.updated_at
+      FROM taskboard.projects p
+      INNER JOIN taskboard.users owner ON owner.user_id = p.owner_user_id
+      LEFT JOIN ranked_tasks t
+        ON t.project_id = p.project_id
+       AND t.dedupe_rank = 1
+       AND t.status <> N'canceled'
+      WHERE p.is_archived = 0
+      GROUP BY p.project_id, p.project_code, p.project_name, p.workspace_path, owner.display_name, p.updated_at
+      ORDER BY p.updated_at DESC, p.project_name;
+    `);
+    return result.recordset.map((row) => ({
+      id: row.project_id,
+      code: row.project_code,
+      name: row.project_name,
+      workspacePath: row.workspace_path,
+      ownerName: row.owner_name,
+      total: Number(row.total_count ?? 0),
+      done: Number(row.done_count ?? 0),
+      active: Number(row.active_count ?? 0),
+      review: Number(row.review_count ?? 0),
+      blocked: Number(row.blocked_count ?? 0),
+      updatedAt: row.task_updated_at ?? row.updated_at ?? null,
+    }));
+  }
+
   async listTaskSyncLogs(userId, limit = 100) {
     const pool = await this.pool();
     const result = await pool.request()

@@ -500,7 +500,7 @@ kbd {
   flex-direction: column;
   height: 100vh;
   padding: 10px 8px 8px;
-  overflow: auto;
+  overflow: hidden;
   background: var(--sidebar-bg);
   border-right: var(--border-hairline) solid var(--border);
 }
@@ -538,7 +538,16 @@ kbd {
 }
 
 .project-nav {
+  flex: 1 1 auto;
+  min-height: 0;
   margin-top: 18px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.project-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .nav-label {
@@ -581,9 +590,7 @@ kbd {
 .overview-sidebar-nav {
   display: grid;
   gap: 1px;
-  margin-top: 18px;
-  padding-top: 12px;
-  border-top: var(--border-hairline) solid var(--border);
+  margin-top: 20px;
 }
 
 .overview-sidebar-role {
@@ -2963,6 +2970,23 @@ kbd {
 .overview-dialog > p { margin: 8px 0 14px; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
 .overview-dialog > select { width: 100%; min-height: 34px; padding: 6px 8px; border: var(--border-hairline) solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text-primary); }
 
+.overview-submit-dialog-info {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.overview-submit-dialog-info strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
 .overview-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -3299,6 +3323,30 @@ kbd {
   width: 100%;
   margin-top: 18px;
   padding-inline: 0;
+}
+
+.overview-mine-team-group {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.overview-mine-team-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  color: var(--text-primary);
+}
+
+.overview-mine-team-heading strong {
+  font-size: 14px;
+}
+
+.overview-mine-team-heading span {
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
 
 .overview-mine-project-row {

@@ -43,6 +43,8 @@ import {
   listAvailableIdentityDevelopers,
   listIdentityProjectMembers,
   listIdentityTaskSyncLogs,
+  listSubmittedTasks,
+  listPublicProjectProgress,
   summarizeLocalProject,
   listDevelopmentContexts,
   listDeviceWorkspaces,
@@ -52,6 +54,7 @@ import {
   removeTaskRelation,
   restoreTask as restoreTaskRequest,
   setCurrentUserActor,
+  type SubmittedTaskState,
   uploadAttachment,
   updateTask as updateTaskRequest,
 } from "./api";
@@ -99,7 +102,7 @@ import {
   type TaskStatus,
   type WorkflowOption,
 } from "./types";
-import type { IdentityProjectMember, IdentityTaskSyncLog, ProjectSyncStatus, ProjectTeamBinding } from "./api";
+import type { IdentityProjectMember, IdentityTaskSyncLog, ProjectSyncStatus, ProjectTeamBinding, PublicProjectProgress } from "./api";
 import {
   DEFAULT_WORKFLOW_OPTIONS,
   readLegacyWorkflowWorkspace,
@@ -719,6 +722,7 @@ function DatabaseProgressPanel({
   onOpenProject,
   onRefresh,
   embedded = false,
+  readOnly = false,
 }: {
   rows: ProjectProgressRow[];
   identityMode: boolean;
@@ -726,6 +730,7 @@ function DatabaseProgressPanel({
   onOpenProject: (project: ProjectChoice) => void;
   onRefresh: () => Promise<void>;
   embedded?: boolean;
+  readOnly?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [healthFilter, setHealthFilter] = useState<"all" | "normal" | "risk" | "blocked">("all");
@@ -835,7 +840,7 @@ function DatabaseProgressPanel({
                 <span>整体进度</span>
                 <span>任务分布</span>
                 <span>更新时间</span>
-                <span>操作</span>
+                {!readOnly && <span>操作</span>}
               </div>
               {filteredRows.map((row) => (
                 <div className="database-ant-table-row" role="row" key={row.id}>
@@ -858,7 +863,7 @@ function DatabaseProgressPanel({
                     <small>待办 {row.todo} · 进行 {row.active} · 验收 {row.review} · 阻塞 {row.blocked}</small>
                   </div>
                   <time dateTime={row.updated === "暂无更新" ? undefined : row.updated}>{row.updated}</time>
-                  <button className="database-link-button" type="button" onClick={() => onOpenProject(row.project)}>查看</button>
+                  {!readOnly && <button className="database-link-button" type="button" onClick={() => onOpenProject(row.project)}>查看</button>}
                 </div>
               ))}
             </div>
@@ -888,6 +893,8 @@ function ProjectOverviewDemo({
   standalonePanel = false,
   onOverviewProjectIdChange,
   teamProjects,
+  publicOverview = false,
+  publicProgress = [],
 }: {
   projects: ProjectChoice[];
   loading: boolean;
@@ -907,8 +914,10 @@ function ProjectOverviewDemo({
   standalonePanel?: boolean;
   onOverviewProjectIdChange?: (projectId: string) => void;
   teamProjects: ProjectChoice[];
+  publicOverview?: boolean;
+  publicProgress?: PublicProjectProgress[];
 }) {
-  const identityMode = getIdentityUser() !== null;
+  const identityMode = publicOverview || getIdentityUser() !== null;
   const [overviewTasks, setOverviewTasks] = useState<Task[]>([]);
   const [localProjects, setLocalProjects] = useState<ProjectChoice[]>([]);
   const [localTasks, setLocalTasks] = useState<Task[]>([]);
@@ -921,6 +930,13 @@ function ProjectOverviewDemo({
   const [selectedLocalProjectId, setSelectedLocalProjectId] = useState("");
   const [bindBusy, setBindBusy] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [submitDialog, setSubmitDialog] = useState<null | {
+    localProject: ProjectChoice;
+    localProjectId: string;
+    localProjectName: string;
+    taskCount: number;
+    teamProjectId: string;
+  }>(null);
   const [summaryBusyProjectIds, setSummaryBusyProjectIds] = useState<Set<string>>(new Set());
   const [deleteBusyProjectIds, setDeleteBusyProjectIds] = useState<Set<string>>(new Set());
   const [joinProjectId, setJoinProjectId] = useState("");
@@ -932,9 +948,18 @@ function ProjectOverviewDemo({
   const [syncLogsLoading, setSyncLogsLoading] = useState(false);
   const [projectBindings, setProjectBindings] = useState<Record<string, ProjectTeamBinding | null>>({});
   const [projectSyncStatuses, setProjectSyncStatuses] = useState<Record<string, ProjectSyncStatus | null>>({});
+  const [submittedTasksByProject, setSubmittedTasksByProject] = useState<Record<string, SubmittedTaskState[]>>({});
   const [analyticsRange, setAnalyticsRange] = useState<3 | 7 | 30>(7);
   const teamProjectIdFor = (project: ProjectChoice) => project.teamProjectId ?? project.id;
+  const publicProgressByProject = useMemo(
+    () => new Map(publicProgress.map((project) => [project.id, project])),
+    [publicProgress],
+  );
   useEffect(() => {
+    if (publicOverview) {
+      setOverviewTasks([]);
+      return;
+    }
     let cancelled = false;
     void Promise.all(teamProjects.filter((project) => {
       const teamProjectId = project.teamProjectId ?? project.id;
@@ -949,8 +974,12 @@ function ProjectOverviewDemo({
         if (!cancelled) setOverviewTasks([]);
       });
     return () => { cancelled = true; };
-  }, [identityMode, overviewProjectId, teamProjects]);
+  }, [identityMode, overviewProjectId, publicOverview, teamProjects]);
   useEffect(() => {
+    if (publicOverview || !getIdentityUser()) {
+      setOverviewMembers([]);
+      return;
+    }
     let cancelled = false;
     const codexProjects = projects.filter((project) => project.inCodex);
     void Promise.all(codexProjects.map(async (project) => {
@@ -984,7 +1013,7 @@ function ProjectOverviewDemo({
     return () => { cancelled = true; };
   }, [deviceProjects, identityMode, projects]);
   useEffect(() => {
-    if (!getIdentityUser()) {
+    if (publicOverview || !getIdentityUser()) {
       setOverviewMembers([]);
       return;
     }
@@ -1003,7 +1032,7 @@ function ProjectOverviewDemo({
         if (!cancelled) setOverviewMembers([]);
       });
     return () => { cancelled = true; };
-  }, [overviewProjectId, teamProjects]);
+  }, [overviewProjectId, publicOverview, teamProjects]);
   useEffect(() => {
     if (activeView !== "member-config" || !getIdentityUser()) return;
     const manageableProjects = projects.filter((project) => project.role === "owner");
@@ -1033,6 +1062,7 @@ function ProjectOverviewDemo({
     if (localProjectIds.length === 0) {
       setProjectBindings({});
       setProjectSyncStatuses({});
+      setSubmittedTasksByProject({});
       return;
     }
     const controller = new AbortController();
@@ -1057,19 +1087,36 @@ function ProjectOverviewDemo({
             teamProjectName: matchedProject.name,
           }).catch(() => undefined);
           const savedBinding = await getProjectTeamBinding(projectId, controller.signal).catch(() => null);
-          return { projectId, binding: savedBinding, syncStatus };
+          return {
+            projectId,
+            binding: savedBinding,
+            syncStatus,
+            submittedTasks: savedBinding?.teamProjectId
+              ? await listSubmittedTasks(projectId, savedBinding.teamProjectId, controller.signal).catch(() => [])
+              : [],
+          };
         }
       }
-      return { projectId, binding, syncStatus };
+      return {
+        projectId,
+        binding,
+        syncStatus,
+        submittedTasks: binding?.teamProjectId
+          ? await listSubmittedTasks(projectId, binding.teamProjectId, controller.signal).catch(() => [])
+          : [],
+      };
     })).then((records) => {
       const nextBindings: Record<string, ProjectTeamBinding | null> = {};
       const nextStatuses: Record<string, ProjectSyncStatus | null> = {};
+      const nextSubmittedTasks: Record<string, SubmittedTaskState[]> = {};
       records.forEach((record) => {
         nextBindings[record.projectId] = record.binding;
         nextStatuses[record.projectId] = record.syncStatus;
+        nextSubmittedTasks[record.projectId] = record.submittedTasks;
       });
       setProjectBindings(nextBindings);
       setProjectSyncStatuses(nextStatuses);
+      setSubmittedTasksByProject(nextSubmittedTasks);
     }).catch(() => {});
     return () => controller.abort();
   }, [localProjects, projects]);
@@ -1148,6 +1195,11 @@ function ProjectOverviewDemo({
     ]);
     setProjectBindings((current) => ({ ...current, [localProjectId]: binding }));
     setProjectSyncStatuses((current) => ({ ...current, [localProjectId]: syncStatus }));
+    const teamProjectId = binding?.teamProjectId;
+    const submittedTasks = teamProjectId
+      ? await listSubmittedTasks(localProjectId, teamProjectId).catch(() => [])
+      : [];
+    setSubmittedTasksByProject((current) => ({ ...current, [localProjectId]: submittedTasks }));
   };
   const refreshIdentitySyncLogs = async () => {
     if (!getIdentityUser()) return;
@@ -1167,6 +1219,7 @@ function ProjectOverviewDemo({
         tasks = await listTasks(projectId).catch(() => []);
         if (tasks.length > 0) break;
       }
+      const result = await importIdentityTasks(targetProjectId, tasks, { localProjectId });
       await saveProjectTeamBinding({
         localProjectId,
         teamProjectId: targetProjectId,
@@ -1182,7 +1235,6 @@ function ProjectOverviewDemo({
           updatedAt: new Date().toISOString(),
         },
       }));
-      const result = await importIdentityTasks(targetProjectId, tasks, { localProjectId });
       await refreshLocalProjectSyncMeta(localProjectId);
       await refreshIdentitySyncLogs();
       const dedupeSummary = result.deduped ? `，去重 ${result.deduped} 张重复任务` : "";
@@ -1292,14 +1344,17 @@ function ProjectOverviewDemo({
   const activityItems = ["自动化执行等待确认", "项目映射状态已同步", "项目任务状态已更新"];
   const projectProgressRows = teamProjects.map((project) => {
     const teamProjectId = project.teamProjectId ?? project.id;
+    const publicRow = publicProgressByProject.get(teamProjectId);
     const projectTasks = overviewTasks.filter((task) => task.projectId === teamProjectId);
-    const total = project.issueCount || projectTasks.length;
-    const done = projectTasks.filter((task) => task.status === "done").length;
-    const blocked = projectTasks.filter((task) => task.status === "blocked").length;
-    const active = projectTasks.filter((task) => task.status === "in_progress").length;
-    const review = projectTasks.filter((task) => task.status === "in_review").length;
+    const total = publicRow?.total ?? (project.issueCount || projectTasks.length);
+    const done = publicRow?.done ?? projectTasks.filter((task) => task.status === "done").length;
+    const blocked = publicRow?.blocked ?? projectTasks.filter((task) => task.status === "blocked").length;
+    const active = publicRow?.active ?? projectTasks.filter((task) => task.status === "in_progress").length;
+    const review = publicRow?.review ?? projectTasks.filter((task) => task.status === "in_review").length;
     const todo = Math.max(0, total - done - active - review - blocked);
-    const progress = taskProgressPercent(projectTasks, total);
+    const progress = publicRow
+      ? (total > 0 ? Math.round((done * 100 + active * 50 + review * 80) / total) : 0)
+      : taskProgressPercent(projectTasks, total);
     const health = blocked > 0 ? "阻塞" : review > 0 || total - done > 0 ? "有风险" : "正常";
     return {
       id: project.id,
@@ -1354,7 +1409,17 @@ function ProjectOverviewDemo({
     const health = blocked > 0 ? "阻塞" : review > 0 || total - done > 0 ? "有风险" : "正常";
     const latestTaskUpdatedAt = projectTasks.reduce((latest, task) => Math.max(latest, Date.parse(task.updatedAt) || 0), 0);
     const submittedAt = syncStatus ? Date.parse(syncStatus.submittedAt) || 0 : 0;
-    const isSubmittedCurrentBatch = syncStatus?.status === "success" && submittedAt >= latestTaskUpdatedAt;
+    const rawTeamProjectId = binding?.teamProjectId ?? (matchedProject ? teamProjectIdFor(matchedProject) : "");
+    const submittedTaskState = new Map(
+      (submittedTasksByProject[localProjectId] ?? []).map((item) => [item.localTaskId, item]),
+    );
+    const pendingTasks = projectTasks.filter((task) => {
+      const submitted = submittedTaskState.get(task.id);
+      if (!submitted) return true;
+      const taskUpdatedAt = Date.parse(task.updatedAt) || 0;
+      const submittedUpdatedAt = Date.parse(submitted.localUpdatedAt) || 0;
+      return taskUpdatedAt > submittedUpdatedAt;
+    });
     return {
       project,
       localProjectId,
@@ -1370,9 +1435,89 @@ function ProjectOverviewDemo({
       binding,
       matchedProject,
       syncStatus,
-      isSubmittedCurrentBatch,
+      rawTeamProjectId,
+      latestTaskUpdatedAt,
+      submittedAt,
+      pendingTasks,
     };
   });
+  type LocalProjectProgressRow = typeof localProjectProgressRows[number];
+  const teamProjectOptions = projects.filter((project) => Boolean(project.role) && (Boolean(project.teamProjectId) || !project.inCodex));
+  const activeTeamProjectIds = new Set(teamProjectOptions.map((project) => teamProjectIdFor(project)));
+  const resolveRowTeamProjectId = (row: LocalProjectProgressRow) => (
+    row.rawTeamProjectId && activeTeamProjectIds.has(row.rawTeamProjectId) ? row.rawTeamProjectId : ""
+  );
+  const isSubmittedToCurrentTeam = (row: LocalProjectProgressRow) => {
+    const teamProjectId = resolveRowTeamProjectId(row);
+    return Boolean(
+      teamProjectId
+      && row.pendingTasks.length === 0,
+    );
+  };
+  const mineProjectGroups = [
+    ...teamProjectOptions.map((project) => {
+      const teamProjectId = teamProjectIdFor(project);
+      return {
+        id: teamProjectId,
+        name: project.name,
+        rows: localProjectProgressRows.filter((row) => resolveRowTeamProjectId(row) === teamProjectId),
+        unclaimed: false,
+      };
+    }).filter((group) => group.rows.length > 0),
+    {
+      id: "unclaimed",
+      name: "未认领团队项目",
+      rows: localProjectProgressRows.filter((row) => !resolveRowTeamProjectId(row)),
+      unclaimed: true,
+    },
+  ].filter((group) => group.rows.length > 0);
+  const submitDialogSelectedProject = submitDialog
+    ? teamProjectOptions.find((project) => teamProjectIdFor(project) === submitDialog.teamProjectId) ?? null
+    : null;
+  const submitDialogOperator = getIdentityUser()?.displayName ?? currentUser.name ?? "当前登录人";
+  const openSubmitDialog = (row: LocalProjectProgressRow) => {
+    setSubmitDialog({
+      localProject: row.project,
+      localProjectId: row.localProjectId,
+      localProjectName: row.name,
+      taskCount: row.pendingTasks.length,
+      teamProjectId: resolveRowTeamProjectId(row),
+    });
+  };
+  const confirmSubmitDialog = async () => {
+    if (!submitDialogSelectedProject || !submitDialog) return;
+    await syncLocalProjectTasks(submitDialogSelectedProject, submitDialog.localProject);
+    setSubmitDialog(null);
+  };
+  const renderMineProjectRow = (row: LocalProjectProgressRow) => {
+    const activeTeamProjectId = resolveRowTeamProjectId(row);
+    const activeTeamProject = activeTeamProjectId
+      ? teamProjectOptions.find((project) => teamProjectIdFor(project) === activeTeamProjectId)
+      : null;
+    const submittedToCurrentTeam = isSubmittedToCurrentTeam(row);
+    const syncStatusForCurrentTeam = row.syncStatus?.teamProjectId === activeTeamProjectId ? row.syncStatus : null;
+    return (
+      <div className="overview-project-row overview-mine-project-row" key={row.project.id} role="row">
+        <button className="overview-project-name overview-project-name-button" type="button" onClick={() => onOpenTaskProject(row.project)}><strong>{row.name}</strong><small>{row.updated} 更新</small></button>
+        <span className={`overview-health-pill is-${row.health === "正常" ? "healthy" : row.health === "阻塞" ? "blocked" : "risk"}`}>{row.health}</span>
+        <span className="overview-task-mix"><span className="overview-task-stack" aria-hidden="true"><i className="is-done" style={{ width: `${row.total ? Math.round(row.done / row.total * 100) : 0}%` }} /><i className="is-active" style={{ width: `${row.total ? Math.round(row.active / row.total * 100) : 0}%` }} /><i className="is-review" style={{ width: `${row.total ? Math.round(row.review / row.total * 100) : 0}%` }} /><i className="is-blocked" style={{ width: `${row.total ? Math.round(row.blocked / row.total * 100) : 0}%` }} /></span><small>待办 {row.todo} · 进行 {row.active} · 验收 {row.review} · 阻塞 {row.blocked}</small></span>
+        <span className={`overview-binding-pill ${activeTeamProject ? "is-bound" : "is-unbound"}`} title={activeTeamProject?.name ?? undefined}>
+          {activeTeamProject?.name ?? "未绑定"}
+        </span>
+        <span className={`overview-sync-status-pill ${syncStatusForCurrentTeam?.status === "success" ? "is-success" : syncStatusForCurrentTeam?.status === "failed" ? "is-failed" : "is-pending"}`} title={syncStatusForCurrentTeam?.error ?? undefined}>
+          {syncStatusForCurrentTeam
+            ? syncStatusForCurrentTeam.status === "success"
+              ? `成功 ${new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(syncStatusForCurrentTeam.submittedAt))}`
+              : "提交失败"
+            : "未提交"}
+        </span>
+        <div className="overview-mine-project-actions">
+          <button className="overview-project-summary-button" type="button" disabled={syncBusy || !identityMode || !activeTeamProjectId || submittedToCurrentTeam || teamProjectOptions.length === 0} onClick={() => openSubmitDialog(row)}>{syncBusy ? "提交中…" : submittedToCurrentTeam ? "已提交" : "提交任务卡片"}</button>
+          <button className="overview-project-summary-button" type="button" disabled={summaryBusyProjectIds.has(row.project.id)} onClick={() => void summarizeProject({ ...row.project, issueCount: row.total })}>{summaryBusyProjectIds.has(row.project.id) ? "生成中…" : "生成卡片"}</button>
+        </div>
+      </div>
+    );
+  };
   const localDoneCount = localTasks.filter((task) => task.status === "done").length;
   const localBlockedCount = localTasks.filter((task) => task.status === "blocked").length;
   const localReviewCount = localTasks.filter((task) => task.status === "in_review").length;
@@ -1752,7 +1897,6 @@ function ProjectOverviewDemo({
             {standaloneHeaderStats.map((item) => <button className={`progress-status-pill is-${item.tone}`} type="button" key={item.label}><b>{item.value}</b>{item.label}</button>)}
           </div>
           <div className="progress-shell-actions">
-            <span className={`database-connection-tag ${identityMode ? "is-online" : "is-offline"}`}><i aria-hidden="true" />{identityMode ? "已连接公司库" : "未连接公司库"}</span>
             <button className="database-ant-button" type="button" onClick={() => void onRefreshProjects()}><LinearIcon name="recurrence" />刷新</button>
           </div>
         </header>
@@ -1760,7 +1904,7 @@ function ProjectOverviewDemo({
           {standaloneTabs.map((tab) => <button className={standaloneActiveView === tab.view ? "is-active" : ""} type="button" key={tab.view} onClick={() => onViewChange(tab.view)}>{tab.label}</button>)}
         </nav>
         <main className="progress-shell-main">
-          {standaloneActiveView === "database-progress" && <DatabaseProgressPanel rows={projectProgressRows} identityMode={identityMode} loading={loading} onOpenProject={onOpenProject} onRefresh={onRefreshProjects} embedded />}
+          {standaloneActiveView === "database-progress" && <DatabaseProgressPanel rows={projectProgressRows} identityMode={identityMode} loading={loading} onOpenProject={onOpenProject} onRefresh={onRefreshProjects} embedded readOnly={publicOverview} />}
           {standaloneActiveView === "members" && renderStandaloneMembers()}
           {standaloneActiveView === "analytics" && renderStandaloneAnalytics()}
           {standaloneActiveView === "sync-log" && renderStandaloneLogs()}
@@ -1832,30 +1976,41 @@ function ProjectOverviewDemo({
             <div className="overview-mine-page">
               <section className="overview-project-section overview-mine-project-section" aria-labelledby="mine-project-progress-title">
                 <div className="overview-panel-heading"><h2 id="mine-project-progress-title">我的项目进度</h2><span>{localProjectProgressRows.length} 个项目</span></div>
-                <div className="overview-project-table" role="table" aria-label="我的本地项目进度">
-                  <div className="overview-project-table-head overview-mine-project-table-head" role="row"><span>项目</span><span>健康</span><span>任务卡分布</span><span>团队绑定</span><span>提交状态</span><span>操作</span></div>
-                  {localProjectProgressRows.map((row) => (
-                    <div className="overview-project-row overview-mine-project-row" key={row.project.id} role="row">
-                      <button className="overview-project-name overview-project-name-button" type="button" onClick={() => onOpenTaskProject(row.project)}><strong>{row.name}</strong><small>{row.updated} 更新</small></button>
-                      <span className={`overview-health-pill is-${row.health === "正常" ? "healthy" : row.health === "阻塞" ? "blocked" : "risk"}`}>{row.health}</span>
-                      <span className="overview-task-mix"><span className="overview-task-stack" aria-hidden="true"><i className="is-done" style={{ width: `${row.total ? Math.round(row.done / row.total * 100) : 0}%` }} /><i className="is-active" style={{ width: `${row.total ? Math.round(row.active / row.total * 100) : 0}%` }} /><i className="is-review" style={{ width: `${row.total ? Math.round(row.review / row.total * 100) : 0}%` }} /><i className="is-blocked" style={{ width: `${row.total ? Math.round(row.blocked / row.total * 100) : 0}%` }} /></span><small>待办 {row.todo} · 进行 {row.active} · 验收 {row.review} · 阻塞 {row.blocked}</small></span>
-                      <span className={`overview-binding-pill ${row.binding || row.matchedProject ? "is-bound" : "is-unbound"}`} title={row.binding?.teamProjectName ?? row.matchedProject?.name ?? undefined}>
-                        {row.binding?.teamProjectName ?? row.matchedProject?.name ?? (row.binding ? "已绑定" : "未绑定")}
-                      </span>
-                      <span className={`overview-sync-status-pill ${row.syncStatus?.status === "success" ? "is-success" : row.syncStatus?.status === "failed" ? "is-failed" : "is-pending"}`} title={row.syncStatus?.error ?? undefined}>
-                        {row.syncStatus
-                          ? row.syncStatus.status === "success"
-                            ? `成功 ${new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(row.syncStatus.submittedAt))}`
-                            : "提交失败"
-                          : "未提交"}
-                      </span>
-                      <div className="overview-mine-project-actions">
-                        {row.matchedProject && <button className="overview-project-summary-button" type="button" disabled={syncBusy || !identityMode || row.isSubmittedCurrentBatch} onClick={() => { if (row.matchedProject) void syncLocalProjectTasks(row.matchedProject, row.project); }}>{syncBusy ? "提交中…" : row.isSubmittedCurrentBatch ? "已提交" : "提交任务卡片"}</button>}
-                        <button className="overview-project-summary-button" type="button" disabled={summaryBusyProjectIds.has(row.project.id)} onClick={() => void summarizeProject({ ...row.project, issueCount: row.total })}>{summaryBusyProjectIds.has(row.project.id) ? "生成中…" : "生成卡片"}</button>
-                      </div>
+                {mineProjectGroups.map((group) => (
+                  <div className="overview-mine-team-group" key={group.id}>
+                    <div className="overview-mine-team-heading">
+                      <strong>{group.name}</strong>
+                      <span>{group.unclaimed ? "尚未选择团队项目" : "团队项目"} · {group.rows.length} 个本地项目</span>
                     </div>
-                  ))}
-                </div>
+                    <div className="overview-project-table" role="table" aria-label={`${group.name} 下的本地项目进度`}>
+                      <div className="overview-project-table-head overview-mine-project-table-head" role="row"><span>项目</span><span>健康</span><span>任务卡分布</span><span>团队绑定</span><span>提交状态</span><span>操作</span></div>
+                      {group.rows.map(renderMineProjectRow)}
+                    </div>
+                  </div>
+                ))}
+                {submitDialog && <div className="overview-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSubmitDialog(null); }}>
+                  <section className="overview-dialog" role="dialog" aria-modal="true" aria-labelledby="submit-task-title">
+                    <div className="overview-dialog-heading"><h3 id="submit-task-title">提交任务卡片</h3><button type="button" onClick={() => setSubmitDialog(null)} aria-label="关闭">×</button></div>
+                    <p>选择这批本地任务卡要进入的团队项目。</p>
+                    <select value={submitDialog.teamProjectId} onChange={(event) => setSubmitDialog((current) => current ? { ...current, teamProjectId: event.target.value } : current)} aria-label="选择提交到的团队项目">
+                      <option value="">选择团队项目</option>
+                      {teamProjectOptions.map((project) => <option value={teamProjectIdFor(project)} key={teamProjectIdFor(project)}>{project.name}</option>)}
+                    </select>
+                    <div className="overview-submit-dialog-info">
+                      <strong>本次提交范围</strong>
+                      <span>本地项目：{submitDialog.localProjectName}</span>
+                      <span>待提交：{submitDialog.taskCount} 张任务卡</span>
+                      <span>不会重复提交公司库已同步卡片</span>
+                    </div>
+                    <div className="overview-submit-dialog-info">
+                      <strong>提交后效果</strong>
+                      <span>提交到：{submitDialogSelectedProject?.name ?? "请选择团队项目"}</span>
+                      <span>操作人：{submitDialogOperator}</span>
+                      <span>可在项目总览、成员负载、操作日志中查看</span>
+                    </div>
+                    <div className="overview-dialog-actions"><button type="button" onClick={() => setSubmitDialog(null)}>取消</button><button className="overview-panel-open-button" type="button" disabled={syncBusy || !submitDialogSelectedProject} onClick={() => void confirmSubmitDialog()}>{syncBusy ? "提交中…" : "确认提交"}</button></div>
+                  </section>
+                </div>}
               </section>
             </div>
           </div>
@@ -1867,6 +2022,7 @@ function ProjectOverviewDemo({
           loading={loading}
           onOpenProject={onOpenProject}
           onRefresh={onRefreshProjects}
+          readOnly={publicOverview}
         />
       ) : teamProjects.length > 0 && overviewView !== "overview" ? (
         <section className={`overview-detail-page${overviewView === "member-config" ? " overview-config-detail-page" : ""}`} aria-labelledby={hideDetailHeader ? undefined : "overview-detail-title"} aria-label={hideDetailHeader ? viewTitles[overviewView] : undefined}>
@@ -2066,10 +2222,11 @@ function ProjectOverviewDemo({
 }
 
 export function App() {
-  return <IdentityGate><AppWorkspace /></IdentityGate>;
+  const publicOverview = new URLSearchParams(window.location.search).get("panel") === "database-progress";
+  return publicOverview ? <AppWorkspace publicOverview /> : <IdentityGate><AppWorkspace /></IdentityGate>;
 }
 
-function AppWorkspace() {
+function AppWorkspace({ publicOverview = false }: { publicOverview?: boolean }) {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const embedded = query.get("host") === "codex";
   const standalonePanelView: ProjectOverviewView | null = query.get("panel") === "database-progress" ? "database-progress" : null;
@@ -2084,7 +2241,9 @@ function AppWorkspace() {
   const [taskboardMetadata, setTaskboardMetadata] = useState<TaskboardMetadata | null>(null);
   const [localAiChatAvailable, setLocalAiChatAvailable] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [publicProgress, setPublicProgress] = useState<PublicProjectProgress[]>([]);
   const [deviceProjects, setDeviceProjects] = useState<DeviceProject[]>([]);
+  const [identityDatabaseOnline, setIdentityDatabaseOnline] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [overviewProjectId, setOverviewProjectId] = useState("");
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -2158,14 +2317,34 @@ function AppWorkspace() {
     });
   }, []);
 
-  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const selectedDeviceProject = [...(hostContext?.projects ?? []), ...deviceProjects]
+    .find((project) => project.id === selectedProjectId) ?? null;
+  const selectedDeviceProjectWorkspace = selectedDeviceProject
+    && "workspacePath" in selectedDeviceProject
+    && typeof selectedDeviceProject.workspacePath === "string"
+    ? selectedDeviceProject.workspacePath
+    : null;
+  const selectedProject: Project | null = projects.find((project) => project.id === selectedProjectId)
+    ?? (selectedDeviceProject
+      ? {
+          id: selectedDeviceProject.id,
+          name: selectedDeviceProject.name,
+          workspacePath: selectedDeviceProjectWorkspace,
+          issueCount: 0,
+          createdAt: "",
+          updatedAt: "",
+        }
+      : null);
   const identityUser = getIdentityUser();
   const workspaceRole: WorkspaceRole = selectedProject?.role ?? "none";
   const canManageMembers = Boolean(selectedProject?.role === "owner" || (!selectedProjectId && projects.some((project) => project.role === "owner")));
   const currentUser = hostContext?.user ?? (identityUser
     ? { type: "user" as const, id: identityUser.id, name: identityUser.displayName, avatarUrl: null }
     : DEFAULT_USER_ACTOR);
-  const selectedDeviceWorkspacePath = deviceWorkspacePaths[selectedProjectId];
+  const selectedDeviceWorkspacePath = deviceWorkspacePaths[selectedProjectId]
+    ?? selectedDeviceProjectWorkspace
+    ?? selectedProject?.workspacePath
+    ?? null;
   const selectedProjectAutomation = projectAutomations[selectedProjectId];
   const automationProjectContext = useMemo(() => {
     if (!isLocalTaskboardOrigin(window.location.origin)) {
@@ -2290,10 +2469,10 @@ function AppWorkspace() {
     ));
   }, [deviceProjects, deviceWorkspacePaths, favoriteProjectIds, hostContext?.projects, projects]);
   const teamProjectChoices = useMemo(
-    () => getIdentityUser()
+    () => publicOverview || getIdentityUser()
       ? projectChoices.filter((project) => project.persisted && (Boolean(project.teamProjectId) || !project.inCodex || Boolean(project.role) || Boolean(project.ownerName)))
       : [],
-    [projectChoices],
+    [projectChoices, publicOverview],
   );
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
@@ -2730,17 +2909,54 @@ function AppWorkspace() {
     setProjectsLoading(true);
     setLoadError(null);
     try {
-      const projectRequest = getIdentityUser()
-        ? listIdentityProjects(signal).catch((error) => {
-          if ((error as Error).name === "AbortError") throw error;
-          return listProjects(signal);
-        })
-        : listProjects(signal);
+      if (publicOverview) {
+        const [metadata, publicProjects] = await Promise.all([
+          getTaskboardMetadata(signal),
+          listPublicProjectProgress(signal),
+        ]);
+        setTaskboardMetadata(metadata);
+        setManageTaskboardSkillPath(metadata.manageTaskboardSkillPath ?? "");
+        setLocalAiChatAvailable(metadata.capabilities?.localAiChat === true);
+        setProjects(publicProjects.map((project) => ({
+          id: project.id,
+          code: project.code,
+          name: project.name,
+          workspacePath: project.workspacePath,
+          issueCount: project.total,
+          createdAt: project.updatedAt ?? "",
+          updatedAt: project.updatedAt ?? "",
+          role: null,
+          ownerName: project.ownerName,
+        })));
+        setPublicProgress(publicProjects);
+        setDeviceProjects([]);
+        setProjectsLoading(false);
+        return;
+      }
       const [nextProjects, metadata, deviceWorkspaceInfo] = await Promise.all([
-        projectRequest,
+        listProjects(signal),
         getTaskboardMetadata(signal),
         listDeviceWorkspaces(signal),
       ]);
+      const localProjects = nextProjects;
+      let companyProjects: Project[] = [];
+      if (getIdentityUser()) {
+        try {
+          companyProjects = await listIdentityProjects(signal);
+          setIdentityDatabaseOnline(true);
+        } catch (error) {
+          if ((error as Error).name === "AbortError") throw error;
+          setIdentityDatabaseOnline(false);
+          setLoadError(`公司项目读取失败，当前仅展示本地项目：${errorMessage(error)}`);
+        }
+      } else {
+        setIdentityDatabaseOnline(false);
+      }
+      const projectById = new Map<string, Project>();
+      [...companyProjects, ...localProjects].forEach((project) => {
+        if (!projectById.has(project.id)) projectById.set(project.id, project);
+      });
+      const mergedProjects = [...projectById.values()];
       setTaskboardMetadata((current) => (
         current
         && current.mode === metadata.mode
@@ -2760,13 +2976,18 @@ function AppWorkspace() {
         window.localStorage.setItem(DEVICE_WORKSPACE_PATHS_KEY, JSON.stringify(next));
         return next;
       });
-      setProjects(nextProjects);
+      setProjects(mergedProjects);
+      const selectableProjectIds = new Set([
+        ...mergedProjects.map((project) => project.id),
+        ...deviceWorkspaceInfo.projects.map((project) => project.id),
+        ...deviceWorkspaceInfo.projects.flatMap((project) => project.sourceProjectId ? [project.sourceProjectId] : []),
+      ]);
       setSelectedProjectId((current) => {
         const fromQuery = new URLSearchParams(window.location.search).get("project");
         const remembered = window.localStorage.getItem(LAST_PROJECT_KEY);
-        if (fromQuery && nextProjects.some((project) => project.id === fromQuery)) return fromQuery;
-        if (current && nextProjects.some((project) => project.id === current)) return current;
-        if (remembered && nextProjects.some((project) => project.id === remembered)) return remembered;
+        if (fromQuery && selectableProjectIds.has(fromQuery)) return fromQuery;
+        if (current && selectableProjectIds.has(current)) return current;
+        if (remembered && selectableProjectIds.has(remembered)) return remembered;
         return "";
       });
     } catch (error) {
@@ -2774,7 +2995,7 @@ function AppWorkspace() {
     } finally {
       setProjectsLoading(false);
     }
-  }, []);
+  }, [publicOverview]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2784,15 +3005,42 @@ function AppWorkspace() {
 
   const refreshProjectList = useCallback(async () => {
     try {
+      if (publicOverview) {
+        const nextProjects = await listPublicProjectProgress();
+        setPublicProgress(nextProjects);
+        setProjects(nextProjects.map((project) => ({
+          id: project.id,
+          code: project.code,
+          name: project.name,
+          workspacePath: project.workspacePath,
+          issueCount: project.total,
+          createdAt: project.updatedAt ?? "",
+          updatedAt: project.updatedAt ?? "",
+          role: null,
+          ownerName: project.ownerName,
+        })));
+        return;
+      }
       if (!getIdentityUser()) {
+        setIdentityDatabaseOnline(false);
         setProjects(await listProjects());
         return;
       }
-      setProjects(await listIdentityProjects().catch(() => listProjects()));
+      const [localProjects, companyProjects] = await Promise.all([
+        listProjects(),
+        listIdentityProjects(),
+      ]);
+      setIdentityDatabaseOnline(true);
+      const projectById = new Map<string, Project>();
+      [...companyProjects, ...localProjects].forEach((project) => {
+        if (!projectById.has(project.id)) projectById.set(project.id, project);
+      });
+      setProjects([...projectById.values()]);
     } catch (error) {
+      if (getIdentityUser()) setIdentityDatabaseOnline(false);
       setLoadError(errorMessage(error));
     }
-  }, []);
+  }, [publicOverview]);
 
   const summarizeProjectWork = useCallback(async (project: ProjectChoice) => {
     try {
@@ -3533,19 +3781,8 @@ function AppWorkspace() {
             <span>CJ任务面板</span>
           </div>
 
-          <nav className="primary-nav" aria-label="Views">
-            <span className="nav-label">工作区</span>
-            <button className="nav-item active" type="button" aria-current="page">
-              <span className="nav-glyph" aria-hidden="true">
-                <LinearIcon name="myIssues" />
-              </span>
-              议题
-              <span className="nav-count">{tasks.length}</span>
-            </button>
-          </nav>
-
           <div className="overview-sidebar-nav" aria-label="项目总览导航">
-            <span className="nav-label">总览</span>
+            <span className="nav-label">工作区</span>
             <button className={`nav-item${!selectedProjectId && projectHomeView === "overview" ? " active" : ""}`} type="button" onClick={() => { returnToProjectHome(); setProjectHomeView("overview"); }}>
               <span className="nav-glyph" aria-hidden="true"><LinearIcon name="home" /></span>
               项目总览
@@ -3582,10 +3819,6 @@ function AppWorkspace() {
           <div className="nav-spacer" />
           <div className="nav-footer">
             <IdentityNavEntry />
-            <div className={`connection connection-${connection}`}>
-              <span aria-hidden="true" />
-              {connection === "live" ? "实时同步" : "正在重新连接…"}
-            </div>
             <button
               type="button"
               className="theme-toggle"
@@ -3823,6 +4056,8 @@ function AppWorkspace() {
             standalonePanel={panelOnly}
             onOverviewProjectIdChange={setOverviewProjectId}
             onOpenTaskProject={(project) => void selectProject(project)}
+            publicOverview={publicOverview}
+            publicProgress={publicProgress}
           />
         ) : detailTask && selectedProject ? (
           <TaskDetail

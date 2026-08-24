@@ -104,6 +104,10 @@ export function setIdentitySession(session: { token: string; user: IdentityUser 
     name: session.user.displayName,
     avatarUrl: null,
   });
+  void request("/api/local/task-sync-scheduler", {
+    method: "PUT",
+    body: JSON.stringify({ token: session.token }),
+  }).catch(() => undefined);
 }
 
 export function restoreIdentitySession(): boolean {
@@ -118,6 +122,7 @@ export function clearIdentitySession(): void {
   window.localStorage.removeItem(IDENTITY_SESSION_KEY);
   window.localStorage.removeItem(IDENTITY_USER_KEY);
   setCurrentUserActor();
+  void request("/api/local/task-sync-scheduler", { method: "DELETE" }).catch(() => undefined);
 }
 
 let currentUserActor = DEFAULT_USER_ACTOR;
@@ -227,6 +232,25 @@ export async function listIdentityProjects(signal?: AbortSignal): Promise<Projec
     issueCount: number;
   }> }>("/api/identity/projects", { signal });
   return data.projects.map((project) => ({ ...project }));
+}
+
+export interface PublicProjectProgress {
+  id: string;
+  code: string;
+  name: string;
+  workspacePath: string | null;
+  ownerName: string | null;
+  total: number;
+  done: number;
+  active: number;
+  review: number;
+  blocked: number;
+  updatedAt: string | null;
+}
+
+export async function listPublicProjectProgress(signal?: AbortSignal): Promise<PublicProjectProgress[]> {
+  const data = await request<{ projects: PublicProjectProgress[] }>('/api/public/project-progress', { signal });
+  return data.projects;
 }
 
 export async function listIdentityTasks(projectId: string, signal?: AbortSignal): Promise<Task[]> {
@@ -375,6 +399,12 @@ export interface ProjectSyncStatus {
   submittedAt: string;
 }
 
+export interface SubmittedTaskState {
+  localTaskId: string;
+  localUpdatedAt: string;
+  submittedAt: string;
+}
+
 export async function listIdentityTaskSyncLogs(signal?: AbortSignal): Promise<IdentityTaskSyncLog[]> {
   const data = await request<{ logs: IdentityTaskSyncLog[] }>("/api/identity/task-sync-logs", { signal });
   return data.logs;
@@ -394,6 +424,18 @@ export async function getProjectSyncStatus(localProjectId: string, signal?: Abor
     { signal },
   );
   return data.syncStatus;
+}
+
+export async function listSubmittedTasks(
+  localProjectId: string,
+  teamProjectId: string,
+  signal?: AbortSignal,
+): Promise<SubmittedTaskState[]> {
+  const data = await request<{ submittedTasks: SubmittedTaskState[] }>(
+    `/api/local/project-submitted-tasks/${encodeURIComponent(localProjectId)}?teamProjectId=${encodeURIComponent(teamProjectId)}`,
+    { signal },
+  );
+  return data.submittedTasks;
 }
 
 export async function listIdentityEmployees(): Promise<Array<{ employeeNo: string; displayName: string; isActive: boolean }>> {

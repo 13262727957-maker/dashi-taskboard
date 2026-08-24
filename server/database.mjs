@@ -453,6 +453,30 @@ export class TaskboardDatabase {
         UNIQUE(team_project_id, remote_task_id)
       );
 
+      CREATE TABLE IF NOT EXISTS task_sync_submissions (
+        local_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        local_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        team_project_id TEXT NOT NULL,
+        local_updated_at TEXT NOT NULL,
+        submitted_at TEXT NOT NULL,
+        PRIMARY KEY (local_task_id, team_project_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS task_sync_submissions_project
+        ON task_sync_submissions(local_project_id, team_project_id);
+
+      CREATE TABLE IF NOT EXISTS task_sync_scheduler_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS task_sync_locks (
+        lock_key TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      );
+
     `);
 
     const projectColumns = this.database.prepare("PRAGMA table_info(projects)").all();
@@ -864,8 +888,117 @@ export class TaskboardDatabase {
     return tasks.filter((task) => !mirroredIds.has(task.sourceId ?? task.id));
   }
 
+  excludeSubmittedTasks(localProjectId, teamProjectId, tasks) {
+    if (!localProjectId || !teamProjectId || tasks.length === 0) return tasks;
+    const rows = this.database.prepare(`
+      SELECT local_task_id, local_updated_at
+      FROM task_sync_submissions
+      WHERE local_project_id = ? AND team_project_id = ?
+    `).all(localProjectId, teamProjectId);
+    const submittedAtByTask = new Map(rows.map((row) => [row.local_task_id, Date.parse(row.local_updated_at) || 0]));
+    return tasks.filter((task) => {
+      const taskId = task.sourceId ?? task.id;
+      const submittedAt = submittedAtByTask.get(taskId);
+      const updatedAt = Date.parse(task.updatedAt ?? "") || 0;
+      return submittedAt === undefined || updatedAt > submittedAt;
+    });
+  }
+
+  recordSubmittedTasks(input) {
+    if (!input.localProjectId || !input.teamProjectId || input.tasks.length === 0) return;
+    const timestamp = now();
+    const statement = this.database.prepare(`
+      INSERT INTO task_sync_submissions (
+        local_task_id, local_project_id, team_project_id, local_updated_at, submitted_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(local_task_id, team_project_id) DO UPDATE SET
+        local_project_id = excluded.local_project_id,
+        local_updated_at = excluded.local_updated_at,
+        submitted_at = excluded.submitted_at
+    `);
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const task of input.tasks) {
+        statement.run(
+          task.sourceId ?? task.id,
+          input.localProjectId,
+          input.teamProjectId,
+          task.updatedAt ?? timestamp,
+          timestamp,
+        );
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listSubmittedTasks(localProjectId, teamProjectId) {
+    if (!localProjectId || !teamProjectId) return [];
+    return this.database.prepare(`
+      SELECT local_task_id, local_updated_at, submitted_at
+      FROM task_sync_submissions
+      WHERE local_project_id = ? AND team_project_id = ?
+    `).all(localProjectId, teamProjectId).map((row) => ({
+      localTaskId: row.local_task_id,
+      localUpdatedAt: row.local_updated_at,
+      submittedAt: row.submitted_at,
+    }));
+  }
+
+  getTaskSyncSchedulerState(key) {
+    const row = this.database.prepare(`
+      SELECT value FROM task_sync_scheduler_state WHERE key = ?
+    `).get(key);
+    return row?.value ?? null;
+  }
+
+  setTaskSyncSchedulerState(key, value) {
+    const timestamp = now();
+    this.database.prepare(`
+      INSERT INTO task_sync_scheduler_state (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(key, value, timestamp);
+  }
+
+  deleteTaskSyncSchedulerState(key) {
+    this.database.prepare("DELETE FROM task_sync_scheduler_state WHERE key = ?").run(key);
+  }
+
+  tryAcquireTaskSyncLock(lockKey, owner, ttlMs = 15 * 60_000) {
+    const timestamp = Date.now();
+    const expiresAt = new Date(timestamp + ttlMs).toISOString();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare("DELETE FROM task_sync_locks WHERE expires_at <= ?").run(new Date(timestamp).toISOString());
+      const existing = this.database.prepare("SELECT owner FROM task_sync_locks WHERE lock_key = ?").get(lockKey);
+      if (existing) {
+        this.database.exec("COMMIT");
+        return false;
+      }
+      this.database.prepare("INSERT INTO task_sync_locks (lock_key, owner, expires_at) VALUES (?, ?, ?)").run(lockKey, owner, expiresAt);
+      this.database.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  releaseTaskSyncLock(lockKey, owner) {
+    this.database.prepare("DELETE FROM task_sync_locks WHERE lock_key = ? AND owner = ?").run(lockKey, owner);
+  }
+
   saveProjectTeamBinding(input) {
     const timestamp = now();
+    const previous = this.getProjectTeamBinding(input.localProjectId);
+    if (previous && previous.teamProjectId !== input.teamProjectId) {
+      this.database.prepare(`
+        DELETE FROM task_sync_submissions WHERE local_project_id = ?
+      `).run(input.localProjectId);
+    }
     this.database.prepare(`
       INSERT INTO project_team_bindings (
         local_project_id, team_project_id, team_project_name, bound_at, updated_at

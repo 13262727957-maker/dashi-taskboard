@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AUTOMATION_MODELS,
@@ -107,16 +107,47 @@ export function ProjectAutomationMenu({
     wasPendingRef.current = pending;
   }, [automation, pending]);
 
-  useLayoutEffect(() => {
-    if (!open || !triggerRef.current || !menuRef.current) return;
+  const updateMenuPosition = useCallback(() => {
+    if (!triggerRef.current || !menuRef.current) return;
     const trigger = triggerRef.current.getBoundingClientRect();
     const menu = menuRef.current.getBoundingClientRect();
     const left = Math.max(8, Math.min(trigger.right - menu.width, window.innerWidth - menu.width - 8));
     const top = trigger.bottom + 8 + menu.height <= window.innerHeight
       ? trigger.bottom + 8
       : Math.max(8, trigger.top - menu.height - 8);
-    setPosition({ left, top, ready: true });
-  }, [open]);
+    setPosition((current) => (
+      current.ready
+      && Math.abs(current.left - left) < 0.5
+      && Math.abs(current.top - top) < 0.5
+        ? current
+        : { left, top, ready: true }
+    ));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+  }, [
+    open,
+    updateMenuPosition,
+    pending,
+    error,
+    unavailableReason,
+    stateLabel,
+    draft.quotaAware,
+    quota?.state,
+    quota?.resetsAt,
+    lastRun?.status,
+    lastRun?.error,
+  ]);
+
+  useLayoutEffect(() => {
+    if (!open || !menuRef.current || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateMenuPosition);
+    observer.observe(menuRef.current);
+    if (triggerRef.current) observer.observe(triggerRef.current);
+    return () => observer.disconnect();
+  }, [open, updateMenuPosition]);
 
   useEffect(() => {
     if (!open) return;

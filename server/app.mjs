@@ -23,6 +23,7 @@ import { createCloudConfigStore } from "./cloud-config.mjs";
 import { collectCodexProjectConversations } from "./codex-history.mjs";
 import { parseEmployeeWorkbook } from "./employee-import.mjs";
 import { SqlServerIdentityStore, sqlServerConfigFromEnv } from "./sqlserver-identity.mjs";
+import { TaskSyncScheduler } from "./task-sync-scheduler.mjs";
 import {
   CloudProxyError,
   createCloudProxy,
@@ -1528,6 +1529,10 @@ export function createTaskboardServer(options = {}) {
     codexExecutable: resolved.codexExecutable,
     events,
   });
+  const taskSyncScheduler = new TaskSyncScheduler({
+    database,
+    getIdentity: () => identity,
+  });
   const aiEventResponses = new Set();
 
   const server = createServer(async (request, response) => {
@@ -1572,6 +1577,12 @@ export function createTaskboardServer(options = {}) {
         }
       }
 
+      if (pathname === "/api/public/project-progress") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        if (!identity) throw new ApiError(503, "IDENTITY_NOT_CONFIGURED", "SQL Server identity is not configured");
+        return sendJson(response, 200, { projects: await identity.listPublicProjectProgress() });
+      }
+
       if (pathname === "/api/identity/connect") {
         assertLoopbackRequest(request);
         if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
@@ -1588,6 +1599,25 @@ export function createTaskboardServer(options = {}) {
         } catch (error) {
           throw new ApiError(400, "IDENTITY_CONNECT_FAILED", error.message);
         }
+      }
+
+      if (pathname === "/api/local/task-sync-scheduler") {
+        if (request.method === "PUT") {
+          const body = await readJson(request);
+          assertPlainObject(body);
+          assertAllowedKeys(body, new Set(["token"]));
+          const token = stringField(body.token, "token", { required: true, maxLength: 500 });
+          if (!identity || !(await identity.session(token))) {
+            throw new ApiError(401, "IDENTITY_REQUIRED", "任务提交会话已失效，请重新登录");
+          }
+          database.setTaskSyncSchedulerState("session_token", token);
+          return sendJson(response, 200, { enabled: true, hour: 17 });
+        }
+        if (request.method === "DELETE") {
+          database.deleteTaskSyncSchedulerState("session_token");
+          return sendJson(response, 200, { enabled: false, hour: 17 });
+        }
+        return methodNotAllowed(response, ["PUT", "DELETE"]);
       }
 
       if (pathname === "/api/identity/register") {
@@ -1784,10 +1814,23 @@ export function createTaskboardServer(options = {}) {
             updatedAt: stringField(task.updatedAt ?? null, "task.updatedAt", { nullable: true, maxLength: 40 }),
           };
         });
+        const syncLockKey = localProjectId ? `task-sync:${localProjectId}:${projectId}` : null;
+        const syncLockOwner = randomUUID();
+        if (syncLockKey && !database.tryAcquireTaskSyncLock(syncLockKey, syncLockOwner)) {
+          throw new ApiError(409, "TASK_SYNC_BUSY", "该项目正在提交任务卡片，请稍后重试");
+        }
         try {
-          const tasksToUpload = localProjectId ? database.excludeMirroredTasks(localProjectId, tasks) : tasks;
+          let tasksToUpload = localProjectId ? database.excludeMirroredTasks(localProjectId, tasks) : tasks;
+          tasksToUpload = localProjectId
+            ? database.excludeSubmittedTasks(localProjectId, projectId, tasksToUpload)
+            : tasksToUpload;
           const result = await identity.importProjectTasks(user.id, projectId, tasksToUpload, { localProjectId });
           if (localProjectId) {
+            database.recordSubmittedTasks({
+              localProjectId,
+              teamProjectId: projectId,
+              tasks: tasksToUpload,
+            });
             database.recordProjectSyncStatus({
               localProjectId,
               teamProjectId: projectId,
@@ -1817,6 +1860,8 @@ export function createTaskboardServer(options = {}) {
             } catch {}
           }
           throw new ApiError(400, "TASK_IMPORT_FAILED", error.message);
+        } finally {
+          if (syncLockKey) database.releaseTaskSyncLock(syncLockKey, syncLockOwner);
         }
       }
 
@@ -1863,6 +1908,16 @@ export function createTaskboardServer(options = {}) {
         const localProjectId = decodeRouteSegment(localProjectSyncStatusRoute[1], "Local project id");
         if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
         return sendJson(response, 200, { syncStatus: database.getProjectSyncStatus(localProjectId) });
+      }
+
+      const localProjectSubmittedTasksRoute = pathname.match(/^\/api\/local\/project-submitted-tasks\/([^/]+)$/);
+      if (localProjectSubmittedTasksRoute) {
+        const localProjectId = decodeRouteSegment(localProjectSubmittedTasksRoute[1], "Local project id");
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        const teamProjectId = stringField(new URL(request.url, "http://127.0.0.1").searchParams.get("teamProjectId"), "teamProjectId", { required: true, maxLength: 200 });
+        return sendJson(response, 200, {
+          submittedTasks: database.listSubmittedTasks(localProjectId, teamProjectId),
+        });
       }
 
       const identityTaskRoute = pathname.match(/^\/api\/identity\/projects\/([^/]+)\/tasks\/([^/]+)$/);
@@ -2716,6 +2771,7 @@ export function createTaskboardServer(options = {}) {
         : Promise.resolve();
       events.close();
       automation.close();
+      taskSyncScheduler.close();
       for (const response of aiEventResponses) response.end();
       aiEventResponses.clear();
       await aiChat.close();
