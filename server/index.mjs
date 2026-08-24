@@ -10,7 +10,7 @@ export { createTaskboardServer, resolveHost, resolvePort, resolveServerOptions }
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 async function loadLocalEnvironment() {
-  const filePath = path.join(PROJECT_ROOT, ".data", "sqlserver-identity.env");
+  const filePath = path.join(PROJECT_ROOT, "config", "sqlserver-identity.env.example");
   try {
     const source = await readFile(filePath, "utf8");
     for (const line of source.split(/\r?\n/)) {
