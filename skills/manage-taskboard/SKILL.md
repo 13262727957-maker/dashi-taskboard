@@ -1,11 +1,11 @@
 ---
 name: manage-taskboard
-description: 安装和使用 CJ Task Dashboard；配置每天 09:00 至 20:00 每半小时扫描 Codex 对话的定时任务，断网时共用面板 SQLite 整理卡片，联网后按 SQL Server 绑定核对并提交。
+description: 安装和使用 CJ Task Dashboard。
 ---
 
 # CJ Task Dashboard
 
-Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashboard panel. If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard from the GitLab repository first. If the user asks to install, reinstall, update, upgrade, fix an old version, or refresh the panel/skill, always run the update bootstrap even when `dashi-taskboard` already exists; an existing command can point at an old checkout. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Prefer `taskctl` for project, issue, and comment operations. Scheduled reconciliation uses the panel's local SQLite and verified company submission operations described in references/scheduled-scan.md; a local save is not proof of company submission. The installer provides these commands at `~/.local/bin/dashi-taskboard` and `~/.local/bin/taskctl`; if the shell cannot resolve them, call those paths directly. Read [references/cli.md](references/cli.md) before choosing a command or option.
+Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashboard panel. If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard from the GitLab repository first. If the user asks to install, reinstall, update, upgrade, fix an old version, or refresh the panel/skill, always run the update bootstrap even when `dashi-taskboard` already exists; an existing command can point at an old checkout. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Prefer `taskctl` for project, issue, and comment operations. The installer provides these commands at `~/.local/bin/dashi-taskboard` and `~/.local/bin/taskctl`; if the shell cannot resolve them, call those paths directly. Read [references/cli.md](references/cli.md) before choosing a command or option.
 
 ## Install Bootstrap
 
@@ -82,20 +82,6 @@ Required planning sequence:
 6. Stop and summarize the created or updated cards. Do not implement them in the same turn unless the user explicitly asked to create cards and then start a specific first card.
 
 Only execute implementation work when the user clearly asks to start/fix/implement a named issue, asks to continue after cards already exist, or makes a tiny request that does not benefit from durable tracking. If the user asks both to split work and execute it, create the cards first, then read and claim the named or first card with `--if-version` before implementing.
-
-## Prior Conversation Scans
-
-For historical scans, periodic conversation reconciliation, or evidence-based status assessment, read [references/scheduled-scan.md](references/scheduled-scan.md). Its Status Policy also governs issue delivery. Extract requirements from conversations, match existing cards, and verify task-specific delivery evidence. Never treat silence or a topic change as acceptance.
-
-## Scheduled Scanning and Submission
-
-For each authorized project, first reconcile its entire accessible conversation history, earliest to latest, in resumable batches through a fixed initial cutoff. Do not treat existing cards or a previously saved cursor as proof of full coverage. After full initial coverage, scan new messages incrementally while continuing unfinished-task follow-up. Read the First Full History Scan section of references/scheduled-scan.md before choosing the scan range.
-
-When asked to enable automatic conversation scanning and task submission, create or update a recurring task every 30 minutes within the daily active window, with the final round at 20:00 in the user's timezone, following [references/scheduled-scan.md](references/scheduled-scan.md). Complete the setup workflow rather than stopping after creating planning cards. Distinguish schedule setup from its per-run reconciliation; scheduled invocations must not create another schedule.
-
-Use the panel's existing SQLite through verified CLI/API operations for local cards, scan positions, source links, tracking, and submission records. Manual panel use and background scans share these records; do not create a separate skill database or JSON checkpoint. Continue verified local processing when SQL Server is unavailable, preserving bindings and pending submissions. On reconnection, refresh authoritative database bindings and remote changes before submitting with the existing local-to-remote card identities. Report missing capabilities for the affected stage only; do not claim local saves were submitted. The daily active window is 09:00-20:00 inclusive in Asia/Shanghai. Read references/scan-api.md for the implemented CLI/API contract.
-
-A request to edit this skill does not itself create an automation or change the panel. Discussion alone does not create cards. Ordinary implementation remains subject to explicit task authorization; scanning never grants permission to execute discovered tasks.
 
 ## Workflow
 
