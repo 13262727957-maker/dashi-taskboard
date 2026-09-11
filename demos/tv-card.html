@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>项目驾驶舱</title>
+<script defer src="cards-render.js"></script>
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}body{font-family:"PingFang SC","Microsoft YaHei",sans-serif;background:#f6f8fa;color:#15283a;overflow:hidden}.app{height:100vh;padding:26px 38px;display:grid;grid-template-rows:58px 148px minmax(0,1fr) 26px;gap:20px}header{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d8e1e8}.brand{display:flex;align-items:center;gap:14px}.logo{width:34px;height:34px;border-radius:7px;background:#15283a;color:white;display:grid;place-items:center;font-weight:800;font-size:19px}h1{font-size:28px;margin:0;font-weight:700}.sub{font-size:14px;color:#688095;margin-left:10px}.time{font-size:20px;color:#45647d}.kpis{display:grid;grid-template-columns:1.3fr repeat(5,1fr);gap:0;background:white;border:1px solid #dce5eb;border-radius:8px;overflow:hidden}.kpi{padding:20px 24px;border-right:1px solid #e1e8ed;display:flex;flex-direction:column;justify-content:space-between}.kpi:last-child{border:0}.kpi label{color:#647d91;font-size:15px}.kpi strong{font-size:42px;line-height:1;font-weight:700}.kpi small{font-size:15px;color:#7790a3;margin-left:5px}.kpi p{margin:0;font-size:13px;color:#7b8f9e}.up{color:#10a77c}.warn{color:#e59b27}.bad{color:#e76561}.main{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(360px,.8fr);gap:22px;min-height:0}.panel{background:white;border:1px solid #dce5eb;border-radius:8px;padding:20px 22px;min-height:0;overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}.panel h2{font-size:20px;margin:0}.panel-head span{font-size:13px;color:#71899d}.portfolio{display:grid;grid-template-rows:36px 1fr}.project{display:grid;grid-template-columns:1.45fr 90px 1.3fr 80px 100px;gap:15px;align-items:center;min-height:62px;border-top:1px solid #edf1f4}.project b{font-size:17px;display:block}.project small{font-size:13px;color:#7b91a2;display:block;margin-top:4px}.state{font-size:14px;white-space:nowrap}.state:before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor;margin-right:6px}.ok{color:#14a982}.risk{color:#e5a533}.stop{color:#eb6b67}.bar{height:7px;background:#e7edf1;border-radius:4px;overflow:hidden}.bar i{height:100%;display:block;background:#42b7d4;border-radius:4px}.pct{font-size:17px;text-align:right;font-weight:650}.date{font-size:14px;color:#59758b}.right{display:grid;grid-template-rows:1.1fr .9fr;gap:22px;min-height:0}.riskbox{display:grid;grid-template-rows:36px 1fr}.riskitem{padding:12px 0;border-top:1px solid #edf1f4;display:grid;grid-template-columns:8px 1fr auto;gap:10px;align-items:start}.riskitem i{width:8px;height:8px;border-radius:50%;background:#ed6c67;margin-top:6px}.riskitem h3{font-size:16px;margin:0 0 5px}.riskitem p{font-size:13px;color:#6f8596;margin:0;line-height:1.45}.riskitem em{font-style:normal;color:#e56b63;font-size:13px;white-space:nowrap}.milestone{display:grid;grid-template-rows:36px 1fr}.milestone-row{display:grid;grid-template-columns:82px 1fr 66px;gap:12px;align-items:center;border-top:1px solid #edf1f4;font-size:14px}.milestone-row time{color:#7890a2;font-size:12px}.milestone-row b{font-weight:550}.milestone-row span{font-size:13px;color:#71899d;text-align:right}.footer{color:#7890a2;font-size:12px;display:flex;justify-content:space-between;align-items:end}@media(min-width:1700px){.app{padding:34px 52px;gap:26px}h1{font-size:34px}.kpi{padding:25px 28px}.kpi label{font-size:18px}.kpi strong{font-size:50px}.kpi p{font-size:15px}.panel{padding:24px 28px}.project{min-height:72px}.project b{font-size:21px}.project small{font-size:15px}.state,.date{font-size:17px}.pct{font-size:21px}.panel h2{font-size:24px}.riskitem h3{font-size:19px}.riskitem p,.milestone-row{font-size:15px}}
+.kpis{grid-template-columns:repeat(6,minmax(0,1fr)) minmax(200px,1.45fr);grid-template-rows:148px}
+.kpi{min-width:0;padding:18px 16px}
+.kpi:last-child{background:#eaf5fc;border-left:2px solid #2687b5}
+.kpi:last-child strong{font-size:32px;color:#164c70;white-space:nowrap}
+.kpi:last-child p{font-size:14px;color:#254d69;line-height:1.5}
+@media(max-width:1200px){.kpi strong{font-size:30px}.kpi label{font-size:13px}.kpi p{font-size:11px}.kpi{padding:18px 10px}.kpis{grid-template-columns:repeat(6,minmax(0,1fr)) 185px}}
+.right{grid-template-rows:repeat(2,minmax(0,1fr))}
+.portfolio{grid-template-rows:36px 30px minmax(0,1fr)}
+.project,.project-head{grid-template-columns:minmax(130px,1.25fr) 65px minmax(60px,.65fr) 48px minmax(190px,1.5fr);gap:12px}
+.project-head{display:grid;align-items:center;color:#60778b;font-size:13px}
+.project{height:64px;min-height:64px}
+.project>div:first-child{min-width:0}.project b{font-size:17px;line-height:1.4}.project small{font-size:12px}
+.distribution{font-size:12px;line-height:1.8;color:#405b70}
+.blocked-item{padding:12px 0;border-top:1px solid #edf1f4}
+.blocked-item small{display:block;color:#718499;font-size:13px;line-height:1.5;margin-bottom:5px}
+.blocked-item b{display:block;color:#15283a;font-size:18px;line-height:1.4;font-weight:600}
+.activity{padding:12px 0;border-top:1px solid #edf1f4;display:grid;grid-template-columns:50px 1fr;gap:12px;font-size:15px;line-height:1.5}
+.activity time{font-size:13px;color:#718499}
+@media(max-height:800px) and (min-width:1000px){.app{padding:16px 24px;grid-template-rows:44px 116px minmax(0,1fr) 20px;gap:14px}.kpis{grid-template-rows:116px}.kpi{padding:10px 14px}.kpi strong{font-size:32px}.panel{padding:14px 18px}.project{height:52px;min-height:52px}.activity,.blocked-item{padding:8px 0}.blocked-item b{font-size:16px}}
+.milestone{grid-template-rows:36px minmax(0,1fr)}
+.milestone-row{min-height:72px;line-height:1.5;padding:14px 0}
+</style>
+</head>
+<body>
+<main class="app">
+<header>
+<div class="brand">
+<div class="logo">P</div>
+<h1>项目经营驾驶舱</h1>
+<span class="sub">全部项目统计 · 重点项目明细</span>
+</div>
+<div class="time">2026 / 09 / 10　09:41</div>
+</header>
+<section class="kpis">
+<article class="kpi">
+<label>整体完成率</label>
+<strong>68<small>%</small>
+</strong>
+<p>已完成 272 / 400 项任务</p>
+</article>
+<article class="kpi">
+<label>项目总数</label>
+<strong>23<small>个</small>
+</strong>
+<p>在建 8 · 已交付 15</p>
+</article>
+<article class="kpi">
+<label>正常项目</label>
+<strong class="up">19<small>个</small>
+</strong>
+<p>占全部项目 83%</p>
+</article>
+<article class="kpi">
+<label>风险项目</label>
+<strong class="warn">3<small>个</small>
+</strong>
+<p>较昨日减少 1 个</p>
+</article>
+<article class="kpi">
+<label>本周完成</label>
+<strong class="up">32<small>项</small>
+</strong>
+<p>最近 7 天完成任务</p>
+</article>
+<article class="kpi">
+<label>账号余量 · 示例</label>
+<strong class="warn">68<small>%</small></strong>
+<p>预计充值日期<br><b>2026.09.25</b></p>
+</article>
+</section>
+<section class="main">
+<section class="panel portfolio">
+<div class="panel-head">
+<h2>重点项目进展</h2>
+<span>全部 23 个项目 · 重点展示 6 个</span>
+</div>
+<div class="global-legend"><span><i class="todo"></i>待办</span><span><i class="doing"></i>进行中</span><span><i class="review"></i>待验收</span><span><i class="blocked"></i>阻塞</span><span><i class="done"></i>已完成</span></div>
+<div class="project-head"><span>项目名称</span><span>状态</span><span>完成进度</span><span></span><span>任务分布</span></div>
+<div>
+<div class="project">
+<div>
+<b>智能仓储 WMS</b>
+<small>已完成 31 / 50 项</small>
+</div>
+<span class="state stop">阻塞</span>
+<div class="bar">
+<i style="width:62%;background:#ed7772">
+</i>
+</div>
+<b class="pct">62%</b>
+<div class="task-visual"><div class="donut" style="--done:31;--total:31"></div><div class="task-legend"><span><i class="todo"></i>待办 5 <em>10%</em></span><span><i class="doing"></i>进行 6 <em>12%</em></span><span><i class="review"></i>验收 4 <em>8%</em></span><span><i class="blocked"></i>阻塞 4 <em>4%</em></span><span><i class="done"></i>完成 31 <em>66%</em></span></div></div><div class="owner">负责人：李明</div>
+</div>
+<div class="project">
+<div>
+<b>供应链协同平台</b>
+<small>已完成 27 / 60 项</small>
+</div>
+<span class="state stop">阻塞</span>
+<div class="bar">
+<i style="width:45%;background:#ed7772">
+</i>
+</div>
+<b class="pct">45%</b>
+<div class="task-visual"><div class="donut" style="--done:27;--total:27"></div><div class="task-legend"><span><i class="todo"></i>待办 15 <em>10%</em></span><span><i class="doing"></i>进行 10 <em>12%</em></span><span><i class="review"></i>验收 5 <em>8%</em></span><span><i class="blocked"></i>阻塞 3 <em>4%</em></span><span><i class="done"></i>完成 27 <em>66%</em></span></div></div><div class="owner">负责人：王晨</div>
+</div>
+<div class="project">
+<div>
+<b>设备预测性维护</b>
+<small>已完成 44 / 60 项</small>
+</div>
+<span class="state risk">有风险</span>
+<div class="bar">
+<i style="width:73%;background:#efb84e">
+</i>
+</div>
+<b class="pct">73%</b>
+<div class="task-visual"><div class="donut" style="--done:44;--total:44"></div><div class="task-legend"><span><i class="todo"></i>待办 4 <em>10%</em></span><span><i class="doing"></i>进行 6 <em>12%</em></span><span><i class="review"></i>验收 6 <em>8%</em></span><span><i class="blocked"></i>阻塞 0 <em>4%</em></span><span><i class="done"></i>完成 44 <em>66%</em></span></div></div><div class="owner">负责人：周宁</div>
+</div>
+<div class="project">
+<div>
+<b>质量管理 QMS</b>
+<small>已完成 40 / 50 项</small>
+</div>
+<span class="state ok">正常</span>
+<div class="bar">
+<i style="width:80%">
+</i>
+</div>
+<b class="pct">80%</b>
+<div class="task-visual"><div class="donut" style="--done:40;--total:40"></div><div class="task-legend"><span><i class="todo"></i>待办 2 <em>10%</em></span><span><i class="doing"></i>进行 5 <em>12%</em></span><span><i class="review"></i>验收 3 <em>8%</em></span><span><i class="blocked"></i>阻塞 0 <em>4%</em></span><span><i class="done"></i>完成 40 <em>66%</em></span></div></div><div class="owner">负责人：陈颖</div>
+</div>
+<div class="project">
+<div>
+<b>生产执行 MES</b>
+<small>已完成 27 / 50 项</small>
+</div>
+<span class="state ok">正常</span>
+<div class="bar">
+<i style="width:54%">
+</i>
+</div>
+<b class="pct">54%</b>
+<div class="task-visual"><div class="donut" style="--done:27;--total:27"></div><div class="task-legend"><span><i class="todo"></i>待办 12 <em>10%</em></span><span><i class="doing"></i>进行 9 <em>12%</em></span><span><i class="review"></i>验收 2 <em>8%</em></span><span><i class="blocked"></i>阻塞 0 <em>4%</em></span><span><i class="done"></i>完成 27 <em>66%</em></span></div></div><div class="owner">负责人：赵阳</div>
+</div>
+<div class="project">
+<div>
+<b>客户服务工作台</b>
+<small>已完成 13 / 40 项</small>
+</div>
+<span class="state ok">正常</span>
+<div class="bar">
+<i style="width:33%">
+</i>
+</div>
+<b class="pct">33%</b>
+<div class="task-visual"><div class="donut" style="--done:13;--total:13"></div><div class="task-legend"><span><i class="todo"></i>待办 14 <em>10%</em></span><span><i class="doing"></i>进行 12 <em>12%</em></span><span><i class="review"></i>验收 1 <em>8%</em></span><span><i class="blocked"></i>阻塞 0 <em>4%</em></span><span><i class="done"></i>完成 13 <em>66%</em></span></div></div><div class="owner">负责人：刘欣</div>
+</div>
+</div>
+</section>
+</section>
+<footer class="footer">
+<span>项目经营驾驶舱 · 示例数据</span>
+<span>统计范围：全部 23 个项目 · 重点明细展示 6 个</span>
+</footer>
+</main>
+</body>
+</html>
+<style>
+/* Keep all six cards in two complete rows. */
+.portfolio{grid-template-rows:36px minmax(0,1fr)}
+.portfolio .project-head{display:none}
+.portfolio>div:last-child{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;min-height:0;overflow:hidden}
+.portfolio .project{display:grid;grid-template-columns:1fr;gap:9px;padding:16px;height:150px;min-height:150px;border:1px solid #cfdce5;border-radius:8px;background:#fbfdff;align-content:start}
+.portfolio .project>div:first-child{display:block}
+.portfolio .project>div:first-child b{font-size:18px;line-height:1.35}
+.portfolio .project>div:first-child small{font-size:12px;color:#7890a2;display:block;margin-top:5px}
+.portfolio .project .state{order:2}
+.portfolio .project .bar{order:3;width:100%;margin-top:2px}
+.portfolio .project .pct{order:4;position:static;margin:0;text-align:left;font-weight:500}
+.portfolio .project .pct::before{content:"完成率 "}
+.portfolio .project .distribution{order:5;border-top:1px solid #e5edf2;padding-top:7px}
+.portfolio .project .date{order:6;font-size:12px;color:#7890a2}
+.portfolio .project .date{display:none}
+@media(min-width:1700px){.portfolio .project{height:170px;min-height:170px;padding:20px}.portfolio .project>div:first-child b{font-size:22px}.portfolio .project .distribution{font-size:14px}}
+</style>
+<style>
+body{background:#f4efdf;color:#37434a}.panel{background:transparent;border:0}.portfolio .panel-head h2{font-size:20px;font-weight:500}.portfolio .project{background:#f8f2df;border:1px dashed #879197;border-radius:0;box-shadow:none;height:100%;min-height:0;padding:10px;gap:5px;grid-template-rows:auto 20px 8px 20px auto;overflow:hidden}.portfolio .project>div:first-child b{font-size:15px;font-weight:500;color:#3d4b52;line-height:1.3}.portfolio .project>div:first-child small{font-size:12px;color:#69777d;margin-top:3px}.portfolio .project .state{font-size:13px}.portfolio .project .bar{height:6px;background:#d7d9d2}.portfolio .project .pct{font-size:13px;color:#425057;line-height:20px}.portfolio .project .distribution{border:0;padding-top:0;font-size:12px;color:#4e5b60;line-height:1.5}.right .panel{background:#f8f2df;border:1px dashed #879197;border-radius:0}.app{background:#f4efdf}
+@media(max-height:750px){.app{padding:12px 20px;grid-template-rows:40px 108px minmax(0,1fr) 18px;gap:12px}.kpis{grid-template-rows:108px}.panel{padding:10px 12px}.portfolio>div:last-child{gap:10px}.portfolio .project{padding:8px;gap:3px}.kpi{padding:10px}.kpi strong{font-size:30px}}
+</style>
+<style>
+/* Compact side panels and four-column project wall. */
+.portfolio>div:last-child{grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:9px}
+.portfolio .project{padding:8px;gap:4px}
+.portfolio .project>div:first-child b{font-size:14px}
+.portfolio .project>div:first-child small{font-size:11px}
+.portfolio .project .distribution{font-size:11px;line-height:1.35}
+.right{gap:12px;grid-template-rows:repeat(2,minmax(0,1fr))}
+.right .panel{padding:12px 16px}
+.right .panel-head{margin-bottom:6px}
+.right .panel h2{font-size:18px}
+.activity{padding:7px 0;font-size:13px;gap:8px}
+.blocked-item{padding:7px 0}
+.blocked-item small{font-size:11px;margin-bottom:2px}
+.blocked-item b{font-size:14px}
+</style>
+<style>
+.main{grid-template-columns:minmax(0,1fr) 280px;gap:14px}
+.right{grid-template-rows:150px 150px;align-content:start;gap:10px}
+.right .panel{padding:9px 12px}
+.right .panel-head{margin-bottom:3px}
+.right .panel h2{font-size:16px}
+.activity{padding:4px 0;font-size:12px;grid-template-columns:42px 1fr;gap:6px}
+.blocked-item{padding:5px 0}
+.blocked-item small{font-size:10px}
+.blocked-item b{font-size:13px}
+@media(min-width:1700px){.main{grid-template-columns:minmax(0,1fr) 320px}.right{grid-template-rows:170px 170px}}
+</style>
+<style>.task-visual{display:flex;align-items:center;gap:8px}.donut{width:52px;height:52px;flex:0 0 52px;border-radius:50%;background:conic-gradient(#4fc3e8 0 68%,#f3c56a 68% 80%,#ff8984 80% 88%,#d7d9d2 88%);position:relative}.donut:after{content:"";position:absolute;inset:13px;background:#f8f2df;border-radius:50%}.task-legend{display:grid;grid-template-columns:repeat(2,auto);gap:2px 7px;font-size:10px;color:#53636b}.task-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px}.todo{background:#d7d9d2}.doing{background:#4fc3e8}.review{background:#f3c56a}.blocked{background:#ff8984}.done{background:#5fe0c0}.owner{font-size:11px;color:#425057;border-top:1px solid #e1e2d8;padding-top:4px}</style><style>
+/* Final card layout: donut distribution replaces the legacy progress bar. */
+.portfolio .project{position:relative;display:grid;grid-template-rows:24px 18px 62px 20px;gap:5px;align-content:start;padding:10px}
+.portfolio .project>div:first-child{padding-right:70px}
+.portfolio .project>div:first-child b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.portfolio .project>div:first-child small{display:none}
+.portfolio .project .owner{position:absolute;top:11px;right:10px;border:0;padding:0;font-size:11px;color:#71818a;white-space:nowrap}
+.portfolio .project .bar{display:none}
+.portfolio .project .pct{order:4;font-size:13px;line-height:20px;margin:0;color:#425057}
+.portfolio .project .pct::before{content:"完成率 "}
+.portfolio .project .task-visual{order:3;height:62px;display:flex;align-items:center;gap:8px;border-top:1px solid #e1e2d8;padding-top:4px}
+.portfolio .project .donut{width:48px;height:48px;flex:0 0 48px}
+.portfolio .project .task-legend{font-size:10px;line-height:1.45}
+.portfolio .project .distribution{display:none}
+.portfolio .project .date{display:none}
+</style>
+<style>
+.global-legend{display:flex;gap:12px;font-size:11px;color:#53636b;margin:2px 0 5px}.global-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}.portfolio .project .donut{width:68px;height:68px;flex-basis:68px}.portfolio .project .donut:after{inset:17px}.portfolio .project .task-visual{height:78px;gap:14px}.portfolio .project .task-legend{font-size:11px;line-height:1.5}
+</style>
+<style>
+/* Use the available TV width for a denser project wall. */
+.main{grid-template-columns:minmax(0,1fr) 250px}
+.portfolio>div:last-child{grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr));gap:8px}
+.portfolio .project{padding:7px;gap:3px}
+.portfolio .project>div:first-child b{font-size:13px}
+.portfolio .project .donut{width:58px;height:58px;flex-basis:58px}
+.portfolio .project .donut:after{inset:14px}
+.portfolio .project .task-visual{height:66px;gap:8px}
+.portfolio .project .task-legend{font-size:10px}
+@media(max-width:1200px){.main{grid-template-columns:minmax(0,1fr) 220px}.portfolio>div:last-child{grid-template-columns:repeat(3,minmax(0,1fr))}}
+</style>
+<style>.portfolio>div:last-child{grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr));gap:8px}.portfolio .project{grid-template-rows:22px 18px 112px 20px;align-items:start}.portfolio .project .task-visual{height:112px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:6px}.portfolio .project .donut{width:76px;height:76px;flex-basis:76px}.portfolio .project .donut:after{inset:19px}.portfolio .project .task-legend{display:grid;grid-template-columns:repeat(3,auto);gap:2px 7px;font-size:10px;line-height:1.3}.portfolio .project .task-legend em{font-style:normal;color:#89959a;font-size:9px}.portfolio .project .pct{text-align:center;width:100%}@media(max-width:1200px){.portfolio>div:last-child{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(4,minmax(0,1fr))}}</style>

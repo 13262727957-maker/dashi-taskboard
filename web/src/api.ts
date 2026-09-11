@@ -248,6 +248,28 @@ export interface PublicProjectProgress {
   updatedAt: string | null;
 }
 
+export interface PublicMemberProgress {
+  id: string;
+  name: string;
+  total: number;
+  done: number;
+  active: number;
+  review: number;
+  blocked: number;
+}
+export interface AccountQuota {
+  remainingPercent: number;
+  accountCount: number;
+  remainingDays: number | null;
+}
+export function getAccountQuota(signal?: AbortSignal): Promise<AccountQuota> {
+  return request<AccountQuota>('/api/public/account-quota', {signal});
+}
+export async function listPublicMemberProgress(signal?: AbortSignal): Promise<PublicMemberProgress[]> {
+  const data = await request<{members: PublicMemberProgress[]}>('/api/public/member-progress', {signal});
+  return data.members;
+}
+
 export async function listPublicProjectProgress(signal?: AbortSignal): Promise<PublicProjectProgress[]> {
   const data = await request<{ projects: PublicProjectProgress[] }>('/api/public/project-progress', { signal });
   return data.projects;
@@ -345,6 +367,24 @@ export async function mirrorIdentityTasksToLocal(
 
 export async function summarizeLocalProject(projectId: string, sourceProjectIds: string[] = []): Promise<{ created: number; message: string }> {
   return request(`/api/projects/${encodeURIComponent(projectId)}/summaries`, {
+    method: "POST",
+    body: JSON.stringify(sourceProjectIds.length > 0 ? { sourceProjectIds } : {}),
+  });
+}
+
+export interface SummarizeAllProjectsResult {
+  projects?: number;
+  processed?: number;
+  created?: number;
+  updated?: number;
+  merged?: number;
+  pending?: number;
+  failed?: number;
+  results?: Array<{ projectId: string; status?: string; error?: string; created?: number; updated?: number; merged?: number }>;
+}
+
+export async function summarizeAllProjects(sourceProjectIds: string[] = []): Promise<SummarizeAllProjectsResult> {
+  return request("/api/projects/summaries", {
     method: "POST",
     body: JSON.stringify(sourceProjectIds.length > 0 ? { sourceProjectIds } : {}),
   });

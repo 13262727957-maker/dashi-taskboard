@@ -453,6 +453,36 @@ export class SqlServerIdentityStore {
     }));
   }
 
+  async listPublicMemberProgress() {
+    const pool = await this.pool();
+    const result = await pool.request().query(`
+      WITH ranked_tasks AS (
+        SELECT t.*, ROW_NUMBER() OVER (
+          PARTITION BY t.project_id, COALESCE(t.source_fingerprint,
+            CONVERT(VARCHAR(64), HASHBYTES('SHA2_256', CONCAT(LTRIM(RTRIM(t.title)), N'\n', LTRIM(RTRIM(COALESCE(t.description, N''))))), 2))
+          ORDER BY t.updated_at DESC, t.task_id
+        ) AS dedupe_rank
+        FROM taskboard.task_cards t
+        JOIN taskboard.projects p ON p.project_id = t.project_id AND p.is_archived = 0
+      )
+      SELECT u.user_id, u.display_name, COUNT(t.task_id) AS total,
+        SUM(CASE WHEN t.status = N'done' THEN 1 ELSE 0 END) AS done,
+        SUM(CASE WHEN t.status = N'in_progress' THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN t.status = N'in_review' THEN 1 ELSE 0 END) AS review,
+        SUM(CASE WHEN t.status = N'blocked' THEN 1 ELSE 0 END) AS blocked
+      FROM taskboard.users u
+      LEFT JOIN ranked_tasks t ON t.assignee_user_id = u.user_id AND t.dedupe_rank = 1 AND t.status <> N'canceled'
+      WHERE u.account_status = N'active' AND (
+        EXISTS (SELECT 1 FROM taskboard.project_members pm JOIN taskboard.projects p ON p.project_id = pm.project_id
+          WHERE pm.user_id = u.user_id AND pm.is_active = 1 AND p.is_archived = 0)
+        OR t.task_id IS NOT NULL)
+      GROUP BY u.user_id, u.display_name ORDER BY u.display_name, u.user_id;
+    `);
+    return result.recordset.map(row => ({id:row.user_id, name:row.display_name,
+      total:Number(row.total), done:Number(row.done), active:Number(row.active),
+      review:Number(row.review), blocked:Number(row.blocked)}));
+  }
+
   async listTaskSyncLogs(userId, limit = 100) {
     const pool = await this.pool();
     const result = await pool.request()
@@ -813,6 +843,10 @@ export class SqlServerIdentityStore {
       await transaction.rollback();
       throw error;
     }
+  }
+
+  taskSubmissionFingerprint(userId, localProjectId, taskId) {
+    return taskFingerprint({ sourceId: `${userId}:${taskId}` });
   }
 
   async importProjectTasks(userId, projectId, tasks, options = {}) {

@@ -483,6 +483,7 @@
         </div>
       </div>
       <nav class="toc" aria-label="目录">
+        <a href="#codex-standard">0. Codex 使用标准</a>
         <a href="#status">1. 面板状态</a>
         <a href="#identity">2. 账号和公司库</a>
         <a href="#mine">3. 我的任务</a>
@@ -506,7 +507,7 @@
         <div>
           <span class="eyebrow">CJ Task Dashboard</span>
           <h1>项目协同看板使用手册</h1>
-          <p class="hero-copy">这份说明只讲打开面板后的真实操作：怎么从对话生成任务卡片，本地草稿怎么变成团队项目任务，项目负责人怎么配置成员，以及团队成员怎么看进度、负载和同步结果。</p>
+          <p class="hero-copy">这份说明只讲打开面板后的真实操作：Codex 项目应该怎么对应团队项目，怎么从对话生成任务卡片，本地草稿怎么变成团队项目任务，以及团队成员怎么看进度、负载和同步结果。</p>
         </div>
         <div class="hero-panel" aria-label="版本摘要">
           <span><b>主要入口</b>我的任务 / 项目总览 / 配置中心</span>
@@ -517,6 +518,11 @@
       </header>
 
       <div class="quick-path" aria-label="快速路径">
+        <a class="path-card" href="#codex-standard">
+          <small>先建对项目</small>
+          <strong>一个 Codex 项目最好只对应一个团队项目</strong>
+          <p>团队项目通常就是一个 Git 仓库里的真实项目。</p>
+        </a>
         <a class="path-card" href="#mine">
           <small>本地到团队</small>
           <strong>生成卡片后，在“我的任务”提交到团队项目</strong>
@@ -544,6 +550,34 @@
         </a>
       </div>
 
+      <section id="codex-standard">
+        <div class="section-head">
+          <h2>0. Codex 使用标准</h2>
+          <span class="tag">推荐组织方式</span>
+        </div>
+        <p>使用任务面板前，建议先按项目边界组织 Codex 项目。最推荐的方式是：一个 Codex 项目只对应一个团队项目；这个团队项目通常就是一个 Git 仓库里的真实项目。</p>
+        <div class="two-col">
+          <div class="feature-card">
+            <strong>推荐做法</strong>
+            <ul>
+              <li>一个 Codex 项目只服务一个团队项目。</li>
+              <li>一个团队项目对应一个明确的 Git 仓库项目。</li>
+              <li>不要在同一个 Codex 项目里长期混做多个业务项目、多个仓库或多个团队项目。</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <strong>这样做的好处</strong>
+            <ul>
+              <li>“生成卡片”能准确读取当前项目相关的历史对话。</li>
+              <li>任务卡片更容易归到正确的团队项目。</li>
+              <li>提交任务和自动化执行时，不容易串到其他项目。</li>
+              <li>成员负载、同步日志和项目进度会更清楚。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="note">可以简单理解为：在 Codex 里建的项目，就是任务面板里的团队项目工作区；它背后最好对应一个明确的 Git 仓库项目。</div>
+      </section>
+
       <section id="status">
         <div class="section-head">
           <h2>1. 面板状态</h2>
@@ -558,7 +592,7 @@
           <div class="feature-card">
             <strong><span class="tag">公司库</span> 已连接公司库</strong>
             <p>仓库里的 <code>config/sqlserver-identity.env.example</code> 已带有可用公司库配置，或本机存在 <code>.data/sqlserver-identity.env</code> 覆盖配置，并且数据库可访问时，面板会自动连上公司库。登记姓名和工号后，可以使用团队项目、成员、提交、日志和自动化功能。</p>
-            <p>登记账号后，本地调度器还会在每天 17:00 自动提交已绑定团队项目的新增或变更卡片。</p>
+            <p>登记账号后，本地调度器还会每半小时自动提交已绑定团队项目的新增或变更卡片。</p>
           </div>
         </div>
       </section>
@@ -583,7 +617,7 @@
             <p>账号弹窗会提示“暂未连接公司数据库”。这时先确认仓库里的 <code>config/sqlserver-identity.env.example</code> 是否可用；如果需要覆盖默认配置，再确认本机 <code>.data/sqlserver-identity.env</code> 已配置，并重启任务面板。</p>
           </div>
         </div>
-        <div class="note warning">切换账号会清除当前账号、记住的姓名工号，并关闭当前账号用于每日自动提交的会话。</div>
+        <div class="note warning">切换账号会清除当前账号、记住的姓名工号，并关闭当前账号用于定时自动提交的会话。</div>
       </section>
 
       <section id="mine">
@@ -684,7 +718,7 @@
           <h2>7. 提交任务卡片</h2>
           <span class="tag">手动 + 自动</span>
         </div>
-        <p>本地生成的任务卡片不会自动进入公司库。用户可以手动提交，也可以在登记账号后让本地调度器每天自动提交一次。</p>
+        <p>本地生成的任务卡片需要提交后才会进入公司库。用户可以手动提交，也可以在登记账号后让本地调度器每半小时自动提交一次。</p>
         <h3>手动提交路径</h3>
         <div class="flow">
           <div class="flow-step"><b>1</b><p>确认已经连接公司库，并登记当前账号。</p></div>
@@ -698,8 +732,8 @@
         <div class="data-rule is-lock"><i></i><span>已经提交过且没有变化的本地卡片不会重复提交。</span></div>
         <div class="data-rule is-lock"><i></i><span>同一个本地项目提交时会被锁定，避免并发重复提交。</span></div>
         <div class="data-rule is-warn"><i></i><span>未连接公司库时生成的本地卡片不会丢，之后连接公司库仍可提交。</span></div>
-        <h3>每日自动提交</h3>
-        <p>登记账号后，面板会把当前会话交给本地调度器。每天 17:00 后，调度器会检查所有已绑定团队项目的本地项目，只提交新增或更新过、且还没有提交过的本地卡片。没有新卡片时不会产生重复提交。</p>
+        <h3>每半小时自动提交</h3>
+        <p>登记账号后，面板会把当前会话交给本地调度器。本地服务运行且登录会话有效时，调度器每个整点、半点后检查所有已绑定团队项目的本地项目，每半小时最多完成一轮提交；启动后会补跑当前时段。只提交新增或更新过、且还没有提交过的本地卡片。没有新卡片时不会产生重复提交。</p>
       </section>
 
       <section id="automation">

@@ -1,5 +1,9 @@
 # taskctl CLI
 
+For the implemented scan state, lease, apply and bound submission commands, read [scan-api.md](scan-api.md).
+
+For scheduled reconciliation, read [scheduled-scan.md](scheduled-scan.md) first. Use the panel's existing local SQLite for offline cards and scan records; these commands do not establish the complete cursor, lease, binding, or submission contract. Verify deployed capabilities before dependent writes. Company unavailability pauses submission, not verified local processing. Do not invent commands or create a separate skill database. A local write is not proof of SQL Server submission.
+
 ## CJ Task Dashboard panel command
 
 For install, reinstall, update, upgrade, or old-version repair requests, run the bootstrap even if `dashi-taskboard` is already installed. The command may point at an old checkout, while the bootstrap fetches `origin`, hard resets the checkout to the latest remote commit, and recopies the plugin skill. Local code changes in the install directory are overwritten; if the remote update cannot be verified, the installer stops instead of installing stale local code:
@@ -126,7 +130,7 @@ taskctl issue archive ID [--thread-id ID] [--if-version N] [--json]
 taskctl issue restore ID [--thread-id ID] [--if-version N] [--json]
 ```
 
-Use `issue move` to set `in_progress` before implementation and `in_review` after implementation and self-verification. Codex must not move work directly from `in_progress` to `done`; use `done` only after the user explicitly confirms acceptance or explicitly asks to mark the issue complete. Use `blocked` when work cannot continue and `canceled` when it will not continue. On a version conflict, fetch the issue again and reconcile before retrying.
+Use `issue move` with the Status Policy in [scheduled-scan.md](scheduled-scan.md). Set `in_progress` before authorized implementation; after delivery, choose `done` only when task-specific completion conditions are evidenced, or `in_review` when essential verification or subjective acceptance remains. Preserve newer human decisions; silence and an assistant delivery claim alone do not prove completion. On a version conflict, fetch and reconcile before retrying.
 
 Use either `--git-branch` or `--worktree-path`/`--worktree-branch`; an issue has only one development context. Issue JSON stores it as `developmentContext`, either `{ "type": "branch", "branch": "..." }` or `{ "type": "worktree", "path": "...", "branch": "..." }`. Its singular `threadId` is the Codex conversation that most recently created or changed the issue itself. Recurrence requires a due date.
 

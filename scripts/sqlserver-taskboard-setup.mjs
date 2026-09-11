@@ -10,6 +10,7 @@ const migrationPaths = [
   path.join(ROOT, "sqlserver", "003_task_source_fingerprint.sql"),
   path.join(ROOT, "sqlserver", "004_consistent_project_relations.sql"),
   path.join(ROOT, "sqlserver", "005_task_sync_logs.sql"),
+  path.join(ROOT, "sqlserver", "006_project_bindings.sql"),
 ];
 const DEFAULT_DATABASE = "dashi_taskboard_test";
 const TEST_IDS = {

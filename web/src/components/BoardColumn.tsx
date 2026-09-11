@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DragEvent } from "react";
 import type { Task, TaskStatus } from "../types";
 import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
 import { LinearIcon, LinearStatusIcon } from "./LinearIcon";
 import { TaskCard } from "./TaskCard";
+import "./CompletedHistory.css";
 
 export const STATUS_DETAILS: Record<
   TaskStatus,
@@ -66,6 +67,24 @@ export function BoardColumn({
   onHide,
 }: BoardColumnProps) {
   const details = STATUS_DETAILS[status];
+  const [completedExpanded, setCompletedExpanded] = useState(false);
+  const [completedDays, setCompletedDays] = useState("7");
+  const [completedSearch, setCompletedSearch] = useState("");
+  const [completedPage, setCompletedPage] = useState(0);
+  const completed = status === "done";
+  const completedMatches = useMemo(() => {
+    if (!completed) return tasks;
+    const since = completedDays === "all" ? 0 : Date.now() - Number(completedDays) * 86400000;
+    const query = completedSearch.trim().toLocaleLowerCase();
+    return tasks.filter(task => Date.parse(task.completedAt ?? task.updatedAt) >= since
+      && (!query || `${task.identifier} ${task.title} ${task.description}`.toLocaleLowerCase().includes(query)))
+      .sort((a, b) => Date.parse(b.completedAt ?? b.updatedAt) - Date.parse(a.completedAt ?? a.updatedAt) || a.id.localeCompare(b.id));
+  }, [completed, completedDays, completedSearch, tasks]);
+  const completedPages = Math.max(1, Math.ceil(completedMatches.length / 20));
+  const currentPage = Math.min(completedPage, completedPages - 1);
+  const displayedTasks = completed
+    ? completedExpanded ? completedMatches.slice(currentPage * 20, (currentPage + 1) * 20) : []
+    : tasks;
   const [dropBeforeTaskId, setDropBeforeTaskId] = useState<string | null | undefined>();
   const taskIndexes = new Map(tasks.map((task, index) => [task.id, index]));
   const remainingTasks = tasks.filter((task) => task.id !== draggedTaskId);
@@ -110,7 +129,7 @@ export function BoardColumn({
 
   return (
     <section
-      className={`board-column status-${status}${isDropTarget ? " is-drop-target" : ""}`}
+      className={`board-column status-${status}${completed ? " completed-history-column" : ""}${isDropTarget ? " is-drop-target" : ""}`}
       aria-labelledby={`column-${status}`}
       onDragEnter={() => onDragEnter(status)}
       onDragOver={(event) => {
@@ -128,10 +147,13 @@ export function BoardColumn({
     >
       <header className="column-header">
         <div className="column-heading">
+          {completed && <button type="button" className="icon-button" aria-label={completedExpanded ? "收起已完成任务" : "展开已完成任务"} title={completedExpanded ? "收起已完成任务" : "展开已完成任务"} aria-expanded={completedExpanded} aria-controls="completed-history-list" onClick={() => setCompletedExpanded(value => !value)}>
+            <LinearIcon name={completedExpanded ? "chevronDown" : "chevronRight"} />
+          </button>}
           <span className={`status-icon status-icon-${details.tone}`}>
             <StatusIcon status={status} />
           </span>
-          <h2 id={`column-${status}`}>{details.label}</h2>
+          <h2 id={`column-${status}`}>{completed ? "已完成" : details.label}</h2>
           <span className="task-count" aria-label={`${tasks.length} 个议题`}>{tasks.length}</span>
         </div>
         <div className="column-actions">
@@ -155,8 +177,15 @@ export function BoardColumn({
         </div>
       </header>
 
-      <div className="column-list">
-        {tasks.map((task) => {
+      {completed && completedExpanded && <div className="completed-history-controls">
+        <select aria-label="已完成任务时间范围" value={completedDays} onChange={event => { setCompletedDays(event.target.value); setCompletedPage(0); }}>
+          <option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="all">全部</option>
+        </select>
+        <label className="completed-history-search"><LinearIcon name="search" /><input type="search" aria-label="搜索已完成任务" placeholder="搜索已完成任务" value={completedSearch} onChange={event => { setCompletedSearch(event.target.value); setCompletedPage(0); }} /></label>
+      </div>}
+      <div className="column-list" id={completed ? "completed-history-list" : undefined} hidden={completed && !completedExpanded}>
+        {completed && completedExpanded && completedMatches.length === 0 && <div className="completed-history-empty" role="status">暂无匹配的已完成任务</div>}
+        {displayedTasks.map((task) => {
           const dragShift = getTaskDragShift(task);
           return (
             <TaskCard
@@ -178,6 +207,11 @@ export function BoardColumn({
           );
         })}
       </div>
+      {completed && completedExpanded && <nav className="completed-history-pagination" aria-label="已完成任务分页">
+        <span aria-live="polite">{completedMatches.length} 条 · {currentPage + 1} / {completedPages}</span>
+        <button type="button" className="icon-button" aria-label="上一页已完成任务" title="上一页" disabled={currentPage === 0} onClick={() => setCompletedPage(currentPage - 1)}><LinearIcon name="chevronLeft" /></button>
+        <button type="button" className="icon-button" aria-label="下一页已完成任务" title="下一页" disabled={currentPage + 1 >= completedPages} onClick={() => setCompletedPage(currentPage + 1)}><LinearIcon name="chevronRight" /></button>
+      </nav>}
     </section>
   );
 }
