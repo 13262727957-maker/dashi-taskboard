@@ -100,7 +100,7 @@ Only execute implementation work when the user clearly asks to start/fix/impleme
 5. To claim a `todo` issue, move it to `in_progress` with `--if-version` from the latest read before starting implementation. If this claim reports a version conflict or a new read shows that its status changed, skip the issue and do not implement it.
 6. Include `--if-version <version>` on every concurrent update, using the version returned by the latest read.
 7. Before requesting review, verify the requested work and acceptance criteria.
-8. After implementation, record key changes, task-specific verification, delivery destination, and remaining work. Apply the Status Policy in references/scheduled-scan.md: use `done` only when the requested completion conditions have sufficient evidence, otherwise retain `in_progress` or use `in_review` as appropriate.
+8. After implementation, record key changes, task-specific verification, delivery destination, and remaining work.
 9. Preserve newer human status decisions. Explicit acceptance can complete an issue, but silence cannot. Scans may also complete an idle task with sufficient outcome evidence; the assistant's own delivery claim alone is insufficient.
 10. Move work that cannot continue to `blocked`, and work that will not continue to `canceled`.
 
