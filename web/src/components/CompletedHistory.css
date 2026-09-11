@@ -1,0 +1,88 @@
+/* Completed history keeps its column footprint while its body scrolls. */
+.board-column.completed-history-column {
+  overflow: hidden;
+}
+.completed-history-column .column-header {
+  flex: 0 0 48px;
+}
+.completed-history-column .column-heading {
+  min-width: 0;
+}
+.completed-history-column .column-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.completed-history-column .column-list[hidden] {
+  display: none;
+}
+.completed-history-column .task-card {
+  flex-shrink: 0;
+}
+.completed-history-controls {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 6px;
+  padding: 8px;
+  flex: 0 0 auto;
+}
+.completed-history-controls select,
+.completed-history-search {
+  height: 32px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+.completed-history-controls select {
+  padding-inline: 6px;
+  font: inherit;
+  font-size: 12px;
+}
+.completed-history-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 6px;
+}
+.completed-history-search svg {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+.completed-history-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+.completed-history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  height: 40px;
+  padding-inline: 8px;
+  border-top: 1px solid var(--border);
+  flex: 0 0 40px;
+}
+.completed-history-pagination span {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.completed-history-pagination button:disabled {
+  opacity: .35;
+  cursor: default;
+}
+.completed-history-empty {
+  padding: 20px 8px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+}

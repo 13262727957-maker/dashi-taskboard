@@ -1,3 +1,4 @@
+import PublicProjectBoard from './components/PublicProjectBoard';
 import {
   lazy,
   Suspense,
@@ -1278,6 +1279,7 @@ function ProjectOverviewDemo({
   const becomeOwner = async () => {
     const localProject = deviceProjects.find((project) => project.id === selectedLocalProjectId);
     if (!localProject || !getIdentityUser()) return;
+    const localProjectId = localProjectKey(localProject);
     setBindBusy(true);
     try {
       const project = await createIdentityProject({
@@ -1288,11 +1290,11 @@ function ProjectOverviewDemo({
       });
       onPreviewAction(`${project.name} 已创建为团队项目。任务卡片仍保存在本地，点击“提交任务卡片”后才会上传到公司数据库。`);
       await saveProjectTeamBinding({
-        localProjectId: localProject.id,
+        localProjectId,
         teamProjectId: project.id,
         teamProjectName: project.name,
       });
-      await refreshLocalProjectSyncMeta(localProject.id);
+      await refreshLocalProjectSyncMeta(localProjectId);
       await onRefreshProjects();
       setConfigProjectId(project.id);
       setConfigMembers([]);
@@ -1495,6 +1497,7 @@ function ProjectOverviewDemo({
       ? teamProjectOptions.find((project) => teamProjectIdFor(project) === activeTeamProjectId)
       : null;
     const submittedToCurrentTeam = isSubmittedToCurrentTeam(row);
+    const canOpenSubmitDialog = Boolean(identityMode && teamProjectOptions.length > 0);
     const syncStatusForCurrentTeam = row.syncStatus?.teamProjectId === activeTeamProjectId ? row.syncStatus : null;
     return (
       <div className="overview-project-row overview-mine-project-row" key={row.project.id} role="row">
@@ -1512,7 +1515,7 @@ function ProjectOverviewDemo({
             : "未提交"}
         </span>
         <div className="overview-mine-project-actions">
-          <button className="overview-project-summary-button" type="button" disabled={syncBusy || !identityMode || !activeTeamProjectId || submittedToCurrentTeam || teamProjectOptions.length === 0} onClick={() => openSubmitDialog(row)}>{syncBusy ? "提交中…" : submittedToCurrentTeam ? "已提交" : "提交任务卡片"}</button>
+          <button className="overview-project-summary-button" type="button" disabled={syncBusy || submittedToCurrentTeam || !canOpenSubmitDialog} onClick={() => openSubmitDialog(row)}>{syncBusy ? "提交中…" : submittedToCurrentTeam ? "已提交" : "提交任务卡片"}</button>
           <button className="overview-project-summary-button" type="button" disabled={summaryBusyProjectIds.has(row.project.id)} onClick={() => void summarizeProject({ ...row.project, issueCount: row.total })}>{summaryBusyProjectIds.has(row.project.id) ? "生成中…" : "生成卡片"}</button>
         </div>
       </div>
@@ -1885,6 +1888,8 @@ function ProjectOverviewDemo({
     </section>
   );
 
+  if (publicOverview) return <PublicProjectBoard projects={publicProgress} loading={loading} />;
+
   if (standalonePanel && standaloneViews.includes(standaloneActiveView)) {
     return (
       <section className="progress-shell" aria-label="公司项目进度中心">
@@ -2008,7 +2013,7 @@ function ProjectOverviewDemo({
                       <span>操作人：{submitDialogOperator}</span>
                       <span>可在项目总览、成员负载、操作日志中查看</span>
                     </div>
-                    <div className="overview-dialog-actions"><button type="button" onClick={() => setSubmitDialog(null)}>取消</button><button className="overview-panel-open-button" type="button" disabled={syncBusy || !submitDialogSelectedProject} onClick={() => void confirmSubmitDialog()}>{syncBusy ? "提交中…" : "确认提交"}</button></div>
+                    <div className="overview-dialog-actions"><button type="button" onClick={() => setSubmitDialog(null)}>取消</button><button className="overview-panel-open-button" type="button" disabled={syncBusy || !submitDialogSelectedProject || submitDialog.taskCount === 0} onClick={() => void confirmSubmitDialog()}>{syncBusy ? "提交中…" : "确认提交"}</button></div>
                   </section>
                 </div>}
               </section>
@@ -4127,7 +4132,7 @@ function AppWorkspace({ publicOverview = false }: { publicOverview?: boolean }) 
               )}
               {visibleStatuses.map((status) => (
                 <BoardColumn
-                  key={status}
+                  key={`${selectedProjectId}:${status}`}
                   status={status}
                   statusIndex={TASK_STATUSES.indexOf(status)}
                   tasks={tasksByStatus[status]}
@@ -4214,13 +4219,13 @@ function AppWorkspace({ publicOverview = false }: { publicOverview?: boolean }) 
         />
       )}
 
-      <AiChat
+      {!publicOverview && <AiChat
         available={localAiChatAvailable}
         projectId={selectedProjectId || null}
         projectOptions={projectChoices.filter((project) => project.inCodex).map((project) => ({ id: project.id, name: project.name }))}
         onProjectChange={changeProject}
         issueId={detailTaskId}
-      />
+      />}
 
       <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
       {undoNotice && (

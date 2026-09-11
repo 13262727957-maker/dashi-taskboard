@@ -1,11 +1,11 @@
 ---
 name: manage-taskboard
-description: Install and use CJ Task Dashboard through local CLI tools. Use when an AI agent needs to clone/install CJ Task Dashboard, open the standalone CJ task panel window, check the local service, split a requirement into task cards before implementation, track a new requirement, inspect project work, create or update issues, relate dependent work, add progress notes, begin work on an issue, record completion, coordinate concurrent updates, or scan prior project conversations into meaningful task cards.
+description: 安装和使用 CJ Task Dashboard；配置每天 09:00 至 20:00 每半小时扫描 Codex 对话的定时任务，断网时共用面板 SQLite 整理卡片，联网后按 SQL Server 绑定核对并提交。
 ---
 
 # CJ Task Dashboard
 
-Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashboard panel. If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard from the GitLab repository first. If the user asks to install, reinstall, update, upgrade, fix an old version, or refresh the panel/skill, always run the update bootstrap even when `dashi-taskboard` already exists; an existing command can point at an old checkout. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Use `taskctl` for every project, issue, and comment operation. The installer provides these commands at `~/.local/bin/dashi-taskboard` and `~/.local/bin/taskctl`; if the shell cannot resolve them, call those paths directly. Read [references/cli.md](references/cli.md) before choosing a command or option.
+Use `dashi-taskboard open` when the user asks to open or show the CJ Task Dashboard panel. If `dashi-taskboard` is not installed, bootstrap CJ Task Dashboard from the GitLab repository first. If the user asks to install, reinstall, update, upgrade, fix an old version, or refresh the panel/skill, always run the update bootstrap even when `dashi-taskboard` already exists; an existing command can point at an old checkout. Use `dashi-taskboard doctor` when the user asks to check the local panel/server state. Prefer `taskctl` for project, issue, and comment operations. Scheduled reconciliation uses the panel's local SQLite and verified company submission operations described in references/scheduled-scan.md; a local save is not proof of company submission. The installer provides these commands at `~/.local/bin/dashi-taskboard` and `~/.local/bin/taskctl`; if the shell cannot resolve them, call those paths directly. Read [references/cli.md](references/cli.md) before choosing a command or option.
 
 ## Install Bootstrap
 
@@ -66,6 +66,8 @@ dashi-taskboard doctor
 
 ## Planning First
 
+This section applies to explicit planning/card-creation requests, not pure discussion, skill editing, authorized schedule setup, or scheduled reconciliation. Those modes follow their own workflow and do not stop after creating planning cards.
+
 When the user is asking to plan, test, validate, review scope, adapt to a client, split requirements, organize work, or turn an idea into tasks, create or update task cards before doing implementation work. Do not start editing code, running a long implementation, or executing a task just because the request contains an action verb.
 
 Treat these as planning/card-creation requests unless the user explicitly says not to create cards: "拆解", "分成任务卡", "需求", "验收", "测试这个技能", "验证", "适配", "方案", "计划", "下一步", "roadmap", "todo", "backlog", "review what to do", or any multi-part feature request.
@@ -83,19 +85,17 @@ Only execute implementation work when the user clearly asks to start/fix/impleme
 
 ## Prior Conversation Scans
 
-When the user asks to scan previous, prior, or historical project conversations and turn them into task cards, run a standard scan before creating or updating issues:
+For historical scans, periodic conversation reconciliation, or evidence-based status assessment, read [references/scheduled-scan.md](references/scheduled-scan.md). Its Status Policy also governs issue delivery. Extract requirements from conversations, match existing cards, and verify task-specific delivery evidence. Never treat silence or a topic change as acceptance.
 
-1. Gather relevant prior project conversations and group repeated discussion into coherent work items.
-2. For each candidate work item, run a lightweight repository evidence scan using likely feature, route, component, migration, test, config, and API keywords. Prefer `rg`/`rg --files`; do not read broad unrelated files unless the scan points to them.
-3. Classify status from the strongest evidence, not conversation alone:
-   - `backlog`: only an idea/request is present, with no clear commitment or repository evidence.
-   - `todo`: the work is committed or partially present, but gaps, acceptance criteria, or verification remain unclear.
-   - `in_progress`: recent implementation is active and not yet self-verified.
-   - `in_review`: implementation evidence plus self-verification exists, but the user has not accepted it.
-   - `done`: the user explicitly confirms acceptance or asks to mark complete.
-   - `blocked`: progress cannot continue because required environment, credentials, data, dependency, or decision is missing.
-4. Record evidence in each issue description or a comment using compact tags such as `evidence:conversation`, `evidence:code`, `evidence:test`, `evidence:runtime`, `acceptance:pending`, and `confidence:low|medium|high`.
-5. If evidence conflicts, choose the less-final status and describe the uncertainty. Prefer `todo` for "implemented but possibly incomplete"; use `in_review` only when self-verification evidence is present.
+## Scheduled Scanning and Submission
+
+For each authorized project, first reconcile its entire accessible conversation history, earliest to latest, in resumable batches through a fixed initial cutoff. Do not treat existing cards or a previously saved cursor as proof of full coverage. After full initial coverage, scan new messages incrementally while continuing unfinished-task follow-up. Read the First Full History Scan section of references/scheduled-scan.md before choosing the scan range.
+
+When asked to enable automatic conversation scanning and task submission, create or update a recurring task every 30 minutes within the daily active window, with the final round at 20:00 in the user's timezone, following [references/scheduled-scan.md](references/scheduled-scan.md). Complete the setup workflow rather than stopping after creating planning cards. Distinguish schedule setup from its per-run reconciliation; scheduled invocations must not create another schedule.
+
+Use the panel's existing SQLite through verified CLI/API operations for local cards, scan positions, source links, tracking, and submission records. Manual panel use and background scans share these records; do not create a separate skill database or JSON checkpoint. Continue verified local processing when SQL Server is unavailable, preserving bindings and pending submissions. On reconnection, refresh authoritative database bindings and remote changes before submitting with the existing local-to-remote card identities. Report missing capabilities for the affected stage only; do not claim local saves were submitted. The daily active window is 09:00-20:00 inclusive in Asia/Shanghai. Read references/scan-api.md for the implemented CLI/API contract.
+
+A request to edit this skill does not itself create an automation or change the panel. Discussion alone does not create cards. Ordinary implementation remains subject to explicit task authorization; scanning never grants permission to execute discovered tasks.
 
 ## Workflow
 
@@ -114,8 +114,8 @@ When the user asks to scan previous, prior, or historical project conversations 
 5. To claim a `todo` issue, move it to `in_progress` with `--if-version` from the latest read before starting implementation. If this claim reports a version conflict or a new read shows that its status changed, skip the issue and do not implement it.
 6. Include `--if-version <version>` on every concurrent update, using the version returned by the latest read.
 7. Before requesting review, verify the requested work and acceptance criteria.
-8. After implementation and self-verification, add a comment summarizing the key changes, verification, result, and remaining risks; then move the issue to `in_review`. Never move it directly to `done`.
-9. Move an issue from `in_review` to `done` only when the user explicitly confirms acceptance or explicitly asks to mark it complete. Codex self-verification alone is not sufficient.
+8. After implementation, record key changes, task-specific verification, delivery destination, and remaining work. Apply the Status Policy in references/scheduled-scan.md: use `done` only when the requested completion conditions have sufficient evidence, otherwise retain `in_progress` or use `in_review` as appropriate.
+9. Preserve newer human status decisions. Explicit acceptance can complete an issue, but silence cannot. Scans may also complete an idle task with sufficient outcome evidence; the assistant's own delivery claim alone is insufficient.
 10. Move work that cannot continue to `blocked`, and work that will not continue to `canceled`.
 
 For version conflicts outside the initial claim, read the issue again, reconcile the newer state, and retry with its current version.

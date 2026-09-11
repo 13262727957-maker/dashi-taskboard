@@ -227,6 +227,7 @@ export interface TaskRelations {
 }
 
 export interface Task {
+  completedAt?: string | null;
   id: string;
   identifier: string;
   projectId: string;

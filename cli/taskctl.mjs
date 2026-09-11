@@ -19,6 +19,9 @@ export const DEFAULT_API_URL = "http://127.0.0.1:47824";
 const BOOLEAN_OPTIONS = new Set(["json"]);
 
 const COMMAND_OPTIONS = new Map([
+  ...["state", "conversations", "preview", "acquire", "renew", "release", "apply", "submit"].map(action => [
+    `scan ${action}`, new Set(["project", "body-file", "thread-id", "json"]),
+  ]),
   ["project list", new Set(["json"])],
   ["project create", new Set(["id", "name", "workspace-path", "json"])],
   ["project map", new Set(["workspace-path", "json"])],
@@ -185,12 +188,27 @@ async function execute(parsed, overrides) {
   validateOptions(parsed.options, allowedOptions);
 
   const env = overrides.env ?? process.env;
-  const usesCompanionControl = command.startsWith("cloud ") || command === "project map";
+  const usesCompanionControl = command.startsWith("cloud ") || command.startsWith("scan ") || command === "project map";
   const api = createApiClient(overrides, {
     baseUrl: usesCompanionControl || env.CODEX_TASKBOARD_COMPANION_URL !== undefined
       ? resolveCompanionUrl(env)
       : undefined,
   });
+  if (parsed.resource === "scan") {
+    expectOperandCount(parsed, 0);
+    const project = requiredOption(parsed.options, "project");
+    const action = parsed.action;
+    const operation = { acquire: "lease", renew: "lease", release: "lease" }[action] ?? action;
+    const method = ["state", "conversations", "preview"].includes(action) ? "GET"
+      : action === "renew" ? "PUT" : action === "release" ? "DELETE" : "POST";
+    let body;
+    if (method !== "GET") {
+      body = JSON.parse(await readFile(resolveInputPath(requiredOption(parsed.options, "body-file"), overrides), "utf8"));
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw usageError("Scan body must be a JSON object");
+      if (action === "apply") body.threadId = resolveThreadId(parsed.options, overrides);
+    }
+    return api.request(method, `/api/local/reconciliation/${encodeURIComponent(project)}/${operation}`, body);
+  }
   switch (command) {
     case "project list":
       expectOperandCount(parsed, 0);
@@ -317,6 +335,8 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl } = {}) {
           headers: {
             accept: "application/json",
             "x-taskboard-client": "taskctl",
+            ...(pathname.startsWith("/api/local/reconciliation/") && env.TASKBOARD_IDENTITY_SESSION
+              ? { "x-taskboard-session": env.TASKBOARD_IDENTITY_SESSION } : {}),
             ...(body === undefined ? {} : { "content-type": "application/json" }),
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),

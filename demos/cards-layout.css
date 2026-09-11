@@ -1,0 +1,77 @@
+.app { min-height: 670px; }
+.portfolio { grid-template-rows: 30px 26px minmax(0,1fr); }
+.portfolio > div:last-child { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); grid-template-rows:repeat(3,minmax(0,1fr)); gap:8px; }
+.project-card { min-width:0; min-height:0; padding:8px; border:1px dashed #939b99; background:#f8f2df; display:grid; grid-template-rows:24px minmax(0,1fr); }
+.card-title { display:flex; align-items:center; justify-content:space-between; gap:6px; }
+.card-title b { font-size:13px; line-height:1.3; }
+.card-title small { color:#65777e; font-size:10px; white-space:nowrap; }
+.chart-area { display:grid; grid-template-columns:minmax(0,1fr) 82px minmax(0,1fr); align-items:center; gap:4px; }
+.project-ring { width:82px; height:82px; border-radius:50%; position:relative; }
+.project-ring > span { position:absolute; inset:21px; background:#f8f2df; border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:8px; }
+.project-ring b { font-size:18px; }
+.slice-labels { display:flex; flex-direction:column; gap:5px; }
+.slice-labels:last-child { align-items:flex-end; }
+.slice-label { font-size:10px; line-height:1.3; white-space:nowrap; }
+.slice-label span { display:flex; align-items:center; gap:3px; }
+.slice-label b { font-size:11px; font-weight:600; }
+.slice-label i { width:7px; height:7px; border-radius:50%; }
+.global-legend { margin:0; align-items:center; }
+@media(min-width:1700px) { .chart-area { grid-template-columns:minmax(0,1fr) 100px minmax(0,1fr); } .project-ring { width:100px;height:100px; } .project-ring > span { inset:25px; } .card-title b {font-size:15px;} .slice-label,.slice-label b {font-size:12px;} }
+.project-card .chart-area{display:flex;align-items:center;justify-content:center;min-height:0;min-width:0}
+.chart-area svg{display:block;width:100%;height:100%;min-height:0}
+
+/* Breakpoints control the page skeleton; content never determines column widths. */
+html,body{width:100%;min-width:0;overflow:auto}
+.app{width:100%;min-width:0;min-height:0;height:100dvh;padding:18px 24px;grid-template-rows:48px 116px minmax(0,1fr) 24px;gap:14px}
+.app header,.brand,.main,.portfolio,.right,.panel-head{min-width:0}
+.brand{gap:10px}.brand h1{font-size:24px;white-space:nowrap}.sub{font-size:12px}.time{font-size:16px;white-space:nowrap}
+.kpis{grid-template-columns:repeat(5,minmax(0,1fr)) minmax(190px,1.35fr);grid-template-rows:116px;min-width:0}
+.kpi{padding:12px;gap:4px}.kpi label{font-size:14px}.kpi strong{font-size:34px}.kpi p{font-size:12px;line-height:1.4}
+.main{grid-template-columns:minmax(0,1fr);gap:14px}
+.portfolio{padding:0;grid-template-rows:32px 28px minmax(0,1fr)}
+.portfolio .panel-head{margin:0;gap:12px}.portfolio .panel-head h2{font-size:18px;white-space:nowrap}.portfolio .panel-head span{font-size:12px}
+.portfolio>div:last-child{grid-template-columns:repeat(5,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr));overflow:visible}
+.project-card{grid-template-rows:28px minmax(0,1fr)}.card-title b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card-title small{font-size:11px}
+.right{grid-template-rows:repeat(2,minmax(0,1fr));gap:12px;align-content:stretch}
+.right .panel{padding:12px;grid-template-rows:30px minmax(0,1fr)}
+.right .panel h2{font-size:18px}.right .panel-head{gap:8px}.right .panel-head span{font-size:11px;white-space:nowrap}
+.activity{font-size:13px;line-height:1.5;padding:9px 0;grid-template-columns:42px minmax(0,1fr)}
+.blocked-item{padding:9px 0}.blocked-item small{font-size:12px}.blocked-item b{font-size:14px;line-height:1.5}
+.global-legend{flex-wrap:wrap;gap:5px 12px;font-size:12px}.global-legend span{white-space:nowrap}
+.footer{font-size:12px;line-height:1.4;align-items:center}
+@media(min-width:2000px) and (min-height:900px){
+ .app{padding:28px 36px;grid-template-rows:64px 144px minmax(0,1fr) 30px;gap:20px}
+ .main{grid-template-columns:minmax(0,1fr);gap:20px}.kpis{grid-template-rows:144px}
+ .brand h1{font-size:32px}.kpi label{font-size:19px}.kpi strong{font-size:46px}.kpi p{font-size:16px}
+ .card-title b{font-size:18px}.card-title small{font-size:14px}.project-card{grid-template-rows:34px minmax(0,1fr)}
+ .activity,.blocked-item b{font-size:18px}.blocked-item small,.global-legend{font-size:15px}
+}
+/* Short and narrower displays use full-height cards in a scrolling document. */
+@media(max-width:1399px),(max-height:719px){
+ .app{height:auto;min-height:100dvh;grid-template-rows:48px auto auto auto}
+ .kpis{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,106px)}
+ .main{grid-template-columns:minmax(0,1fr);align-items:start}
+ .portfolio{grid-template-rows:34px 32px auto}
+ .portfolio>div:last-child{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:none;grid-auto-rows:190px}
+ .right{grid-template-rows:230px 230px}.sub{display:none}
+}
+@media(max-width:1099px){
+ .app{padding:16px}.main{grid-template-columns:minmax(0,1fr)}
+ .portfolio>div:last-child{grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:210px}
+ .right{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:230px}
+}
+@media(max-width:759px){
+ .app{padding:12px;gap:12px;grid-template-rows:44px auto auto auto}
+ .brand h1{font-size:20px}.logo{width:28px;height:28px}.time{display:none}
+ .kpis{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:none;grid-auto-rows:110px}
+ .kpi:last-child{grid-column:auto}.kpi label{font-size:14px}.kpi strong{font-size:32px}
+ .portfolio{grid-template-rows:54px 48px auto}.portfolio .panel-head{align-items:start;justify-content:center;flex-direction:column;gap:4px}
+ .portfolio>div:last-child{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:190px}
+ .card-title{align-items:start;flex-direction:column;gap:2px}.project-card{grid-template-rows:42px minmax(0,1fr)}
+ .right{grid-template-columns:minmax(0,1fr);grid-template-rows:230px 230px}
+}
+@media(max-width:519px){
+ .portfolio>div:last-child{grid-template-columns:minmax(0,1fr);grid-auto-rows:220px}
+ .card-title{flex-direction:row;align-items:center}.project-card{grid-template-rows:30px minmax(0,1fr)}
+ .card-title b{font-size:15px}.card-title small{font-size:12px}.footer{font-size:11px}
+}

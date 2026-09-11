@@ -221,7 +221,7 @@ export class AutomationService {
       projectId: policy.projectId,
       status: "todo",
       archived: "false",
-    })[0];
+    }).find(task => task.creatorId !== "conversation-scanner" || task.assignee?.type === "agent");
     if (!task) {
       return this.database.createAutomationRun({
         projectId: policy.projectId,

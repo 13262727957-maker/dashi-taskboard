@@ -3332,6 +3332,7 @@ kbd {
 }
 
 .overview-mine-team-heading {
+  padding-inline: 20px;
   display: flex;
   align-items: baseline;
   justify-content: space-between;

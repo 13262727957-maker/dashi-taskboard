@@ -34,6 +34,7 @@ function taskFromRow(row) {
     labels: JSON.parse(row.labels),
     sortOrder: row.sort_order,
     threadId: row.thread_id,
+    completedAt: row.completed_at ?? null,
     creatorType: row.creator_type,
     creatorId: row.creator_id,
     creatorName: row.creator_name,
@@ -485,6 +486,19 @@ export class TaskboardDatabase {
     }
 
     const taskColumns = this.database.prepare("PRAGMA table_info(tasks)").all();
+    if (!taskColumns.some(column => column.name === "completed_at")) {
+      this.database.exec("ALTER TABLE tasks ADD COLUMN completed_at TEXT");
+      this.database.exec("UPDATE tasks SET completed_at = updated_at WHERE status = 'done'");
+    }
+    this.database.exec(`
+      CREATE TRIGGER IF NOT EXISTS tasks_completion_insert AFTER INSERT ON tasks
+      WHEN NEW.status = 'done' AND NEW.completed_at IS NULL
+      BEGIN UPDATE tasks SET completed_at = NEW.updated_at WHERE id = NEW.id; END;
+      CREATE TRIGGER IF NOT EXISTS tasks_completion_change AFTER UPDATE OF status ON tasks
+      WHEN OLD.status <> NEW.status
+      BEGIN UPDATE tasks SET completed_at = CASE WHEN NEW.status = 'done'
+        THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END WHERE id = NEW.id; END;
+    `);
     const hasThreadId = taskColumns.some((column) => column.name === "thread_id");
     const hasLinkedThreadId = taskColumns.some((column) => column.name === "linked_thread_id");
     if (!hasThreadId) {
